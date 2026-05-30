@@ -1,0 +1,26 @@
+name: Refresh Projections
+
+on:
+  schedule:
+    - cron: "0 12 * * *"   # 8 AM ET — morning slate
+    - cron: "0 17 * * *"   # 1 PM ET — after lineups post
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r engine/requirements.txt
+
+      - name: Run projection pipeline
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python engine/project.py
