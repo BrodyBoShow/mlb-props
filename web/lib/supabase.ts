@@ -16,5 +16,11 @@ export function getSupabaseClient() {
     );
   }
 
-  return createClient(url, anonKey);
+  // Pass a custom fetch that forces `cache: 'no-store'` so Next.js never
+  // caches Supabase responses — the page must always reflect the latest slate.
+  return createClient(url, anonKey, {
+    global: {
+      fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }),
+    },
+  });
 }
