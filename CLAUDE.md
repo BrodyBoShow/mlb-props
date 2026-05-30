@@ -63,7 +63,7 @@ sources -> scheduled job (fetch, clean, train, project) -> database -> frontend 
     to the last good snapshot so their flakiness never touches the projections.
 
 ## Current status
-Steps 1-5 complete. Working pipeline runs end-to-end:
+Steps 1-7 built. Working pipeline + frontend:
 - engine/fetch.py — pure MLB Stats API layer. fetch_games(), fetch_starters()
   (probable pitchers linked to game_id, lru_cached), fetch_probable_pitchers()
   (players-table rows). No DB code.
@@ -73,9 +73,20 @@ Steps 1-5 complete. Working pipeline runs end-to-end:
 - engine/baseline.py — weighted rolling strikeout projection from last 30 days
   of pybaseball Statcast (last 5 starts weighted 2x). No DB writes.
 - engine/main.py — orchestrates fetch -> upsert -> baseline -> upsert. stdout only.
-Verified in Supabase: 15 games, 30 players, 29 strikeout projections.
-NOTE: engine/project.py from the roadmap was folded into main.py (orchestrator);
-refresh.yml currently calls project.py — point it at main.py in step 6.
+- web/ — Next.js 14 (App Router) + Tailwind. Single page (app/page.tsx) reads the
+  latest slate's strikeout projections from Supabase via the anon key (read-only,
+  lazy client in lib/supabase.ts), joins players + games, groups by game, renders.
+  force-dynamic so it always reads fresh. ZERO math in the frontend. Build passes.
+- db/policies.sql — public SELECT (anon) RLS policies on projections + players +
+  games (the join needs all three). MUST be applied in the Supabase SQL editor;
+  until then anon reads return 0 rows and the page shows its empty state.
+Verified in Supabase: 15 games, 30 players, 29 strikeout projections. engine/main.py
+is the orchestrator (roadmap's project.py folded into it); refresh.yml calls main.py.
+
+ACTION NEEDED to make the site show data:
+1. Run db/policies.sql in the Supabase SQL editor (one time).
+2. web/.env.local holds NEXT_PUBLIC_SUPABASE_URL + _ANON_KEY (gitignored). On
+   Vercel, set those two as env vars. Set Vercel root directory to web/.
 
 Known follow-ups:
 - statsapi.lookup_player is fuzzy and can resolve the wrong MLBAM id. Harden
@@ -85,8 +96,7 @@ Known follow-ups:
 - First pybaseball run is slow (cold cache, ~30 per-pitcher calls). Fine for a
   scheduled job; revisit if it bottlenecks.
 
-Next: step 6 — wire refresh.yml cron (stubbed) to main.py, put SUPABASE_URL +
-SUPABASE_KEY in Actions secrets. Then step 7 — Next.js frontend.
+Next: step 8 — engine/model.py (XGBoost, export model.pkl, ensemble with baseline).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
