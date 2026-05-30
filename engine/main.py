@@ -1,11 +1,12 @@
-"""Pipeline entrypoint: fetch the slate, then upsert it to Supabase.
+"""Pipeline entrypoint: fetch the slate, project, then upsert to Supabase.
 
 Logs to stdout only (GitHub Actions captures it). Never writes log rows
 to the database.
 """
 
-import fetch
+import baseline
 import db
+import fetch
 
 
 def main() -> None:
@@ -13,12 +14,12 @@ def main() -> None:
     games = fetch.fetch_games()
     print(f"  fetched {len(games)} games")
 
-    print("Fetching probable pitchers...")
+    print("Fetching probable starters...")
+    starters = fetch.fetch_starters()
     players = fetch.fetch_probable_pitchers()
-    print(f"  fetched {len(players)} players")
+    print(f"  fetched {len(starters)} starters")
 
-    # Players first — games reference nothing, but projections will reference
-    # both, so keep the reference tables populated together.
+    # Reference tables first — projections reference both games and players.
     print("Upserting players...")
     n_players = db.upsert_players(players)
     print(f"  upserted {n_players} players")
@@ -26,6 +27,13 @@ def main() -> None:
     print("Upserting games...")
     n_games = db.upsert_games(games)
     print(f"  upserted {n_games} games")
+
+    print("Building baseline strikeout projections...")
+    projections = baseline.build_strikeout_projections(starters)
+
+    print("Upserting projections...")
+    n_proj = db.upsert_projections(projections)
+    print(f"  upserted {n_proj} projections")
 
     print("Done.")
 

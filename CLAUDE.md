@@ -63,9 +63,30 @@ sources -> scheduled job (fetch, clean, train, project) -> database -> frontend 
     to the last good snapshot so their flakiness never touches the projections.
 
 ## Current status
-Steps 1-3 complete: repo foundation, db/schema.sql, Supabase project created
-with tables (RLS enabled). Next: step 4 — engine/fetch.py + engine/db.py to
-populate players and games from the MLB Stats API.
+Steps 1-5 complete. Working pipeline runs end-to-end:
+- engine/fetch.py — pure MLB Stats API layer. fetch_games(), fetch_starters()
+  (probable pitchers linked to game_id, lru_cached), fetch_probable_pitchers()
+  (players-table rows). No DB code.
+- engine/db.py — the ONLY writer. upsert_players/games/projections, idempotent
+  on each table's PK. Uses SUPABASE_KEY (service_role) to bypass RLS; falls back
+  to SUPABASE_ANON_KEY. service_role key lives in .env (gitignored).
+- engine/baseline.py — weighted rolling strikeout projection from last 30 days
+  of pybaseball Statcast (last 5 starts weighted 2x). No DB writes.
+- engine/main.py — orchestrates fetch -> upsert -> baseline -> upsert. stdout only.
+Verified in Supabase: 15 games, 30 players, 29 strikeout projections.
+NOTE: engine/project.py from the roadmap was folded into main.py (orchestrator);
+refresh.yml currently calls project.py — point it at main.py in step 6.
+
+Known follow-ups:
+- statsapi.lookup_player is fuzzy and can resolve the wrong MLBAM id. Harden
+  pitcher id resolution before trusting projections downstream.
+- Probable-pitcher bio fields (team/bats/throws) come back None from
+  lookup_player; enrich when the model needs them.
+- First pybaseball run is slow (cold cache, ~30 per-pitcher calls). Fine for a
+  scheduled job; revisit if it bottlenecks.
+
+Next: step 6 — wire refresh.yml cron (stubbed) to main.py, put SUPABASE_URL +
+SUPABASE_KEY in Actions secrets. Then step 7 — Next.js frontend.
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
