@@ -244,6 +244,25 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Team K% via MLB Stats API (engine/stats.py):
+- _team_k_pcts(year) now sources team batting K% from the MLB Stats API
+  teams_stats endpoint (group=hitting, stats=season). Same authoritative
+  source MLB.com publishes -- no scraping, no User-Agent shim, no 403,
+  no fallback warning on every Actions run.
+- Computes K% = strikeOuts / plateAppearances per team. Keys by
+  TEAM_NAME_MAP lookup so the FanGraphs abbr keyspace is preserved and
+  _opp_k_rate's resolution logic is unchanged.
+- _TEAM_K_PCT_2024 retained as a last-resort fallback: activates only if
+  the MLB API call throws or fewer than 20 of 30 teams resolve (e.g.
+  catastrophic name-mapping drift or very early-season runs with no
+  sample). Verified locally: 30 teams resolve, NYY=0.229 BAL=0.236
+  LAD=0.203 KC=0.216 ATH=0.222.
+- pybaseball + the FanGraphs UA shim + the 3x retry loop all removed
+  from stats.py. requests.Session UA monkey-patch retained at module
+  load -- harmless and benefits any other library that uses requests.
+- pybaseball stays in requirements.txt because baseline.py still uses
+  Statcast for per-pitcher histories.
+
 scikit-learn dependency (engine/requirements.txt):
 - XGBoost 3.x no longer bundles a fallback sklearn shim. Instantiating
   XGBRegressor raises "ImportError: sklearn needs to be installed in

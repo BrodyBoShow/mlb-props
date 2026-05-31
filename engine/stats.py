@@ -8,11 +8,9 @@ data-fetching utilities, not model logic. grade.py and model.py import from
 here so the logic lives in exactly one place.
 """
 
-import time
 from datetime import date, timedelta
 from functools import lru_cache
 
-import pybaseball
 import requests
 import statsapi
 
@@ -75,63 +73,68 @@ def _mlb_name_to_abbr() -> dict:
 
 @lru_cache(maxsize=4)
 def _team_k_pcts(year: int) -> dict:
-    """FanGraphs season team batting K%, keyed by FanGraphs abbreviation. Cached per year.
+    """Season team batting K%, keyed by FanGraphs abbreviation. Cached per year.
 
-    Three things can go wrong with FanGraphs on GitHub Actions:
-      1. 403 response (mitigated by the browser-UA monkey-patch above).
-      2. Transient failure (mitigated by 3 retries with 2-second backoff).
-      3. Success but with an unexpected keyspace -- e.g. FanGraphs returns
-         full team names ('Orioles'), trailing-whitespace abbrs, or a
-         different abbreviation scheme. Without validation every team
-         silently falls through to the league-average warning, which is
-         what was happening on the Actions runner.
+    Source: MLB Stats API teams_stats endpoint (statsapi.mlb.com), same
+    authoritative source MLB.com publishes. No scraping, no User-Agent
+    games, no 403s -- replaces the previous pybaseball/FanGraphs path
+    which Cloudflare-blocks every Actions runner.
 
-    We validate that the returned dict's keys overlap TEAM_NAME_MAP.values()
-    by at least HEALTHY_MATCH teams. If not, log what FanGraphs returned and
-    use the 2024 fallback table instead. opp_k_rate is therefore never
-    silently constant: FanGraphs (current-season real values) > 2024 table
-    (last-season real per-team values) > nothing.
+    Returns a dict like {'NYY': 0.229, 'BAL': 0.221, ...}. Keys are the
+    FanGraphs abbreviations from TEAM_NAME_MAP so _opp_k_rate's lookup
+    logic is unchanged.
+
+    Falls back to _TEAM_K_PCT_2024 if the API fails or fewer than 20 of
+    30 teams resolve -- belt-and-suspenders for early-season runs where
+    sample sizes are tiny and for unexpected name-mapping drift.
     """
     expected_abbrs = set(TEAM_NAME_MAP.values())
-    HEALTHY_MATCH = 20  # of 30 -- tolerates a few minor renames
+    HEALTHY_MATCH = 20
 
-    last_err: Exception | None = None
-    for attempt in range(1, 4):
-        try:
-            df = pybaseball.team_batting(year, qual=0)
-            if df is None or df.empty or "K%" not in df.columns:
-                last_err = RuntimeError("empty/invalid FanGraphs response")
-            else:
-                # FanGraphs returns fraction (0.22) or percent (22.0) -- normalise.
-                k_col = df["K%"]
-                scale = 1.0 if float(k_col.max()) <= 1.0 else 100.0
-                # Strip whitespace defensively on the way in.
-                result = {
-                    str(row["Team"]).strip(): float(row["K%"]) / scale
-                    for _, row in df.iterrows()
-                }
-                overlap = len(set(result.keys()) & expected_abbrs)
-                if overlap >= HEALTHY_MATCH:
-                    if attempt > 1:
-                        print(f"  FanGraphs team_batting({year}) succeeded on attempt {attempt}")
-                    return result
-                # FanGraphs answered but the keyspace doesn't match ours.
-                sample = sorted(result.keys())[:8]
-                print(
-                    f"  WARNING: FanGraphs team_batting({year}) returned an "
-                    f"unrecognized keyspace ({overlap}/30 matched our abbrs; "
-                    f"sample keys: {sample}); using 2024 fallback table"
-                )
-                return dict(_TEAM_K_PCT_2024)
-        except Exception as exc:
-            last_err = exc
-            print(f"  FanGraphs team_batting({year}) attempt {attempt}/3 failed: {exc}")
-        if attempt < 3:
-            time.sleep(2)
+    try:
+        resp = statsapi.get(
+            "teams_stats",
+            {
+                "season": year,
+                "sportIds": 1,
+                "group": "hitting",
+                "stats": "season",
+            },
+        )
+    except Exception as exc:
+        print(
+            f"  MLB Stats API teams_stats({year}) failed: {exc}; "
+            f"using 2024 fallback table"
+        )
+        return dict(_TEAM_K_PCT_2024)
+
+    result: dict[str, float] = {}
+    for entry in resp.get("stats", []):
+        if entry.get("group", {}).get("displayName") != "hitting":
+            continue
+        if entry.get("type", {}).get("displayName") != "season":
+            continue
+        for split in entry.get("splits", []):
+            team_name = (split.get("team") or {}).get("name") or ""
+            abbr = TEAM_NAME_MAP.get(team_name)
+            if not abbr:
+                continue
+            stat = split.get("stat") or {}
+            try:
+                so = float(stat.get("strikeOuts", 0) or 0)
+                pa = float(stat.get("plateAppearances", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if pa > 0:
+                result[abbr] = so / pa
+
+    overlap = len(set(result.keys()) & expected_abbrs)
+    if overlap >= HEALTHY_MATCH:
+        return result
 
     print(
-        f"  WARNING: FanGraphs team_batting({year}) failed 3x ({last_err}); "
-        f"falling back to hardcoded 2024 team K% table"
+        f"  WARNING: MLB Stats API teams_stats({year}) matched only "
+        f"{overlap}/30 teams; using 2024 fallback table"
     )
     return dict(_TEAM_K_PCT_2024)
 
