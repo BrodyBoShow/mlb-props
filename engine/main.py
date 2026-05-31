@@ -18,6 +18,7 @@ pybaseball.cache.enable()
 import baseline
 import db
 import fetch
+import grade
 import model as mlb_model
 
 MODEL_WEIGHT = 0.6
@@ -50,6 +51,12 @@ def _blend(base_rows: list[dict], model_rows: list[dict]) -> list[dict]:
 
 
 def main() -> None:
+    # ── grade yesterday before projecting today ───────────────────────────────
+    print("Grading yesterday's projections...")
+    game_logs = grade.grade_yesterday()
+    n_logs = db.upsert_game_logs(game_logs)
+    print(f"  upserted {n_logs} game log rows")
+
     print("Fetching today's games...")
     games = fetch.fetch_games()
     print(f"  fetched {len(games)} games")

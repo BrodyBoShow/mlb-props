@@ -41,6 +41,33 @@ def upsert_games(rows: list[dict]) -> int:
     return len(rows)
 
 
+def get_projections_for_date(date_str: str) -> list[dict]:
+    """Return strikeout projection rows for a given date (for grading)."""
+    try:
+        resp = (
+            _client()
+            .table("projections")
+            .select("game_id, player_id, projection")
+            .eq("prop_type", "strikeouts")
+            .eq("projection_date", date_str)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as exc:
+        print(f"  could not fetch projections for {date_str}: {exc}")
+        return []
+
+
+def upsert_game_logs(rows: list[dict]) -> int:
+    """Upsert graded game log rows on (player_id, game_id). Re-runs are safe."""
+    if not rows:
+        return 0
+    _client().table("player_game_logs").upsert(
+        rows, on_conflict="player_id,game_id"
+    ).execute()
+    return len(rows)
+
+
 def get_game_logs() -> list[dict] | None:
     """Read all rows from player_game_logs. Returns None if the table is missing."""
     try:
