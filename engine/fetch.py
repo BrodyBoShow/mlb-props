@@ -4,6 +4,7 @@ Every function returns plain Python dicts/lists shaped to match the column
 names in db/schema.sql, so db.py can upsert them without any reshaping.
 """
 
+from datetime import date
 from functools import lru_cache
 
 import statsapi
@@ -41,6 +42,7 @@ def _fetch_starters_today() -> tuple[dict, ...]:
     schedule = statsapi.schedule()
     records: list[dict] = []
     seen: set[int] = set()
+    current_year = date.today().year
 
     for g in schedule:
         game_id = g["game_id"]
@@ -48,15 +50,33 @@ def _fetch_starters_today() -> tuple[dict, ...]:
             name = (g.get(key) or "").strip()
             if not name:
                 continue
-            matches = statsapi.lookup_player(name)
+
+            matches = statsapi.lookup_player(name, season=current_year)
             if not matches:
                 continue
-            # lookup_player is fuzzy and can return loose extras; trust the
-            # best (first) match, preferring an exact full-name hit if present.
-            person = next(
-                (m for m in matches if m.get("fullName", "").lower() == name.lower()),
-                matches[0],
-            )
+
+            # Restrict to active MLB players when the API exposes the flag.
+            active = [m for m in matches if m.get("active") is True]
+            candidates = active if active else matches
+
+            # lookup_player is fuzzy. Prefer an exact full-name hit; otherwise
+            # only trust a sole result. Multiple fuzzy matches with no exact
+            # hit are ambiguous — skip rather than risk the wrong MLBAM id.
+            exact = [
+                m for m in candidates
+                if (m.get("fullName") or "").lower() == name.lower()
+            ]
+            if exact:
+                person = exact[0]
+            elif len(candidates) == 1:
+                person = candidates[0]
+            else:
+                print(
+                    f"  WARNING: ambiguous lookup for '{name}' "
+                    f"({len(candidates)} matches) — skipping"
+                )
+                continue
+
             pid = person["id"]
             if pid in seen:
                 continue

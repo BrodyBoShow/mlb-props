@@ -10,7 +10,7 @@ from datetime import date, timedelta
 import statsapi
 
 import db
-from constants import LEAGUE_AVG_K_PCT
+import model
 
 
 def _parse_innings(ip_str: str) -> int:
@@ -94,11 +94,22 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
         print(f"  no Final games for {yesterday_str} -- skipping")
         return []
 
+    # Collapse to one entry per (player_id, game_id). The query now returns all
+    # five prop types, but a game log row is per pitcher per game — prefer the
+    # strikeouts row so the stored `projection` keeps tracking K projections.
+    by_pitcher: dict[tuple[int, int], dict] = {}
+    for proj in projections:
+        key = (proj["player_id"], proj["game_id"])
+        if key not in by_pitcher or proj.get("prop_type") == "strikeouts":
+            by_pitcher[key] = proj
+
+    year = yesterday.year
+
     # Fetch each game's box score once, keyed by game_id
     box_cache: dict[int, dict] = {}
 
     rows: list[dict] = []
-    for proj in projections:
+    for proj in by_pitcher.values():
         game_id = proj["game_id"]
         player_id = proj["player_id"]
 
@@ -115,6 +126,23 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
             print(f"  player {player_id} not found in box score for game {game_id} -- skipped")
             continue
 
+        # Opposing (batting) team is the side the pitcher was NOT on. Use the
+        # box score's authoritative home_away to pick it.
+        side = result["home_away"]
+        opp_team = proj["away_team"] if side == "home" else proj["home_team"]
+        opp_k_rate = model._opp_k_rate(opp_team or "", year)
+
+        # Days rest: difference to this pitcher's most recent prior start in
+        # the logs, capped at 10. Defaults to 5 when there's no prior entry.
+        last_date = db.get_last_game_date(player_id, yesterday_str)
+        days_rest = 5
+        if last_date:
+            try:
+                prev = date.fromisoformat(last_date)
+                days_rest = min((yesterday - prev).days, 10)
+            except Exception:
+                days_rest = 5
+
         rows.append({
             "player_id":             player_id,
             "game_id":               game_id,
@@ -124,9 +152,9 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
             "actual_walks":          result["actual_walks"],
             "actual_earned_runs":    result["actual_earned_runs"],
             "actual_outs_recorded":  result["actual_outs_recorded"],
-            "home_away":             result["home_away"],
-            "opp_k_rate":            LEAGUE_AVG_K_PCT,   # enriched later
-            "days_rest":             5,                   # default; computed from logs later
+            "home_away":             side,
+            "opp_k_rate":            opp_k_rate,
+            "days_rest":             days_rest,
             "projection":            float(proj["projection"]),
         })
         print(
@@ -136,7 +164,8 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
             f" / {result['actual_walks']} BB"
             f" / {result['actual_earned_runs']} ER"
             f" / {result['actual_outs_recorded']} outs"
+            f"  (rest {days_rest}d, opp K% {opp_k_rate:.3f})"
         )
 
-    print(f"  graded {len(rows)} / {len(projections)} projected pitchers")
+    print(f"  graded {len(rows)} / {len(by_pitcher)} projected pitchers")
     return rows

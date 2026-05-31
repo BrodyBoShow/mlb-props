@@ -42,20 +42,79 @@ def upsert_games(rows: list[dict]) -> int:
 
 
 def get_projections_for_date(date_str: str) -> list[dict]:
-    """Return strikeout projection rows for a given date (for grading)."""
+    """Return projection rows for a given date (for grading), all prop types.
+
+    Joins games (home_team, away_team) and players (team) so the grader can
+    work out which team batted against each pitcher. home_away is derived from
+    the pitcher's team vs the game's home team; it may be None when the
+    player's team is unknown (lookup_player sometimes omits it).
+
+    Each row: game_id, player_id, projection, prop_type, home_team,
+    away_team, home_away ('home' | 'away' | None).
+    """
     try:
         resp = (
             _client()
             .table("projections")
-            .select("game_id, player_id, projection")
-            .eq("prop_type", "strikeouts")
+            .select(
+                "game_id, player_id, projection, prop_type, "
+                "games(home_team, away_team), players(team)"
+            )
             .eq("projection_date", date_str)
             .execute()
         )
-        return resp.data or []
     except Exception as exc:
         print(f"  could not fetch projections for {date_str}: {exc}")
         return []
+
+    rows: list[dict] = []
+    for r in resp.data or []:
+        game = r.get("games") or {}
+        player = r.get("players") or {}
+        home_team = game.get("home_team")
+        away_team = game.get("away_team")
+        team = player.get("team")
+
+        if team and team == home_team:
+            home_away = "home"
+        elif team and team == away_team:
+            home_away = "away"
+        else:
+            home_away = None
+
+        rows.append(
+            {
+                "game_id": r["game_id"],
+                "player_id": r["player_id"],
+                "projection": r["projection"],
+                "prop_type": r.get("prop_type"),
+                "home_team": home_team,
+                "away_team": away_team,
+                "home_away": home_away,
+            }
+        )
+    return rows
+
+
+def get_last_game_date(player_id: int, before_date: str) -> str | None:
+    """Most recent player_game_logs game_date for this pitcher strictly before
+    `before_date` ('YYYY-MM-DD'). Returns None if there's no prior entry."""
+    try:
+        resp = (
+            _client()
+            .table("player_game_logs")
+            .select("game_date")
+            .eq("player_id", player_id)
+            .lt("game_date", before_date)
+            .order("game_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        data = resp.data or []
+        return data[0]["game_date"] if data else None
+    except Exception as exc:
+        print(f"  could not fetch last game date for player {player_id}: {exc}")
+        return None
 
 
 def upsert_game_logs(rows: list[dict]) -> int:
