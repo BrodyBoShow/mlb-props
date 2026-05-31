@@ -244,6 +244,38 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Results page — bias detection, diagnostics, outs, by-game grouping:
+- MIN_LINE thresholds tightened where alternates were still leaking in:
+    strikeouts:     2.5 -> 3.5
+    hits_allowed:   2.5 -> 3.5
+  outs_recorded stays at 10.5 (column is actual_outs_recorded, verified
+  in grade.py). Outs now appears in the per-prop card + filter chips.
+- Excluded entirely (one-sided markets that reflect base rate, not
+  model signal): hitter_runs, hitter_rbis, hitter_home_runs. The
+  earlier 0.5-line hitter_runs/hitter_rbis rows were polluting the
+  hit rate without telling us anything actionable.
+- Lean-bias detection (ResultsBoard.tsx::isBiased): per prop, if >=5
+  evaluable rows AND one direction (over/under) holds >80% share, flag
+  the prop with an amber "⚠ lean bias" chip in the per-prop card and
+  dim its hit-rate percent to slate-500. The 94% on hitter_runs the
+  user saw was a 94% under-base-rate, not model accuracy; the chip
+  makes that legible at a glance.
+- earned_runs diagnostic: page.tsx now logs to the Next.js server log
+  (visible in Vercel function logs / dev terminal):
+    [results-diag] earned_runs window YYYY-MM-DD..YYYY-MM-DD:
+      proj=N lines=N logs=N
+    [results-diag] earned_runs join drop:
+      noLine=N belowMin=N noLog=N noActual=N survived=N
+      (threshold=1.5)
+  Pinpoints exactly which stage drops rows. Earned-runs string
+  verified consistent across baseline.py, grade.py, calibrate.py,
+  lines.py, and ACTUAL_COLUMN -- the wiring isn't the bug.
+- By-game grouping: results list now renders as game-card sections
+  (matchup + date header, per-game hit-rate badge) instead of a flat
+  table. Added a Game dropdown filter (separate from prop-type chips)
+  that lets the user drill into a single game's results. Both filters
+  compose; the OverallCard recomputes against the post-filter set.
+
 Results page — main-market filtering (web/app/results/page.tsx):
 - Added MIN_LINE thresholds so the hit rate reflects only main-market
   lines, not alternates that resolve as easy hits and inflate accuracy:

@@ -19,6 +19,8 @@ export type PropType =
 export type Verdict = "correct" | "wrong" | "skip";
 
 export type EvaluatedResult = {
+  gameId: number;
+  matchup: string;        // "Away @ Home"
   playerId: number;
   playerName: string;
   propType: PropType;
@@ -30,6 +32,13 @@ export type EvaluatedResult = {
   lean: "over" | "under" | "none";
   verdict: Verdict;
 };
+
+// Lean-bias detection. When the model leans one direction on more than
+// BIAS_THRESHOLD of evaluated rows for a prop, the hit rate is reflecting the
+// underlying base rate (e.g. "actual < line" hitting 75% of the time on
+// hitter_hits 1.5 lines) rather than model signal. We flag and de-emphasize.
+const BIAS_THRESHOLD = 0.8;
+const BIAS_MIN_SAMPLES = 5;
 
 export const PROP_LABELS: Record<PropType, string> = {
   strikeouts:         "Strikeouts",
@@ -52,6 +61,21 @@ const HITTER_PROPS: PropType[] = [
 ];
 
 type Filter = "all" | "pitcher" | "hitter" | PropType;
+
+// Per-prop lean tilt. Returns true when >= BIAS_MIN_SAMPLES rows exist for
+// the prop AND one direction holds > BIAS_THRESHOLD share.
+function isBiased(results: EvaluatedResult[], pt: PropType): boolean {
+  let over = 0;
+  let under = 0;
+  for (const r of results) {
+    if (r.propType !== pt) continue;
+    if (r.lean === "over") over++;
+    else if (r.lean === "under") under++;
+  }
+  const total = over + under;
+  if (total < BIAS_MIN_SAMPLES) return false;
+  return over / total > BIAS_THRESHOLD || under / total > BIAS_THRESHOLD;
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -121,7 +145,14 @@ function PerPropCard({ results }: { results: EvaluatedResult[] }) {
       const correct = sub.filter((r) => r.verdict === "correct").length;
       const wrong = sub.filter((r) => r.verdict === "wrong").length;
       const skip = sub.filter((r) => r.verdict === "skip").length;
-      return { propType: pt, correct, wrong, skip, evaluable: correct + wrong };
+      return {
+        propType: pt,
+        correct,
+        wrong,
+        skip,
+        evaluable: correct + wrong,
+        biased: isBiased(results, pt),
+      };
     })
     .filter((r) => r.evaluable + r.skip > 0);
 
@@ -135,25 +166,44 @@ function PerPropCard({ results }: { results: EvaluatedResult[] }) {
         </h2>
       </div>
       <ul className="divide-y divide-slate-800">
-        {rows.map((r) => (
-          <li
-            key={r.propType}
-            className="flex items-center justify-between px-5 py-2.5 text-sm"
-          >
-            <span className="text-slate-200">{PROP_LABELS[r.propType]}</span>
-            <div className="flex items-center gap-3 tabular-nums">
-              <span className="text-xs text-slate-500">
-                {r.correct}/{r.evaluable}
-                {r.skip > 0 && (
-                  <span className="ml-1 text-slate-600">({r.skip} skip)</span>
+        {rows.map((r) => {
+          // Biased rows: dim the percentage so it doesn't read as a clean
+          // model-quality signal, and append a warning chip beside the label.
+          const rateClass = r.biased
+            ? "text-slate-500"
+            : rateColor(r.correct, r.evaluable);
+          return (
+            <li
+              key={r.propType}
+              className="flex items-center justify-between px-5 py-2.5 text-sm"
+            >
+              <span className="flex items-center gap-2">
+                <span className={r.biased ? "text-slate-400" : "text-slate-200"}>
+                  {PROP_LABELS[r.propType]}
+                </span>
+                {r.biased && (
+                  <span
+                    className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400"
+                    title="Model leans one direction on >80% of rows for this prop — hit rate likely reflects base rate, not signal."
+                  >
+                    ⚠ lean bias
+                  </span>
                 )}
               </span>
-              <span className={`w-12 text-right font-semibold ${rateColor(r.correct, r.evaluable)}`}>
-                {pct(r.correct, r.evaluable)}
-              </span>
-            </div>
-          </li>
-        ))}
+              <div className="flex items-center gap-3 tabular-nums">
+                <span className="text-xs text-slate-500">
+                  {r.correct}/{r.evaluable}
+                  {r.skip > 0 && (
+                    <span className="ml-1 text-slate-600">({r.skip} skip)</span>
+                  )}
+                </span>
+                <span className={`w-12 text-right font-semibold ${rateClass}`}>
+                  {pct(r.correct, r.evaluable)}
+                </span>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -242,23 +292,97 @@ function ResultRow({ r }: { r: EvaluatedResult }) {
 
 // ── main component ───────────────────────────────────────────────────────────
 
-export default function ResultsBoard({ results }: { results: EvaluatedResult[] }) {
-  const [filter, setFilter] = useState<Filter>("all");
+// ── game filter ──────────────────────────────────────────────────────────────
+// "All games" plus one option per distinct game in the result set, labeled
+// "Away @ Home · Sun, May 30". Sorted newest-first so the freshest slate is
+// at the top of the dropdown.
 
+type GameKey = number | "all";
+
+function GameFilter({
+  active,
+  setActive,
+  results,
+}: {
+  active: GameKey;
+  setActive: (k: GameKey) => void;
+  results: EvaluatedResult[];
+}) {
+  // Preserve first-encounter order (results are already newest-first sorted
+  // upstream), so the most recent games appear first in the dropdown.
+  const seen = new Map<number, { matchup: string; date: string }>();
+  for (const r of results) {
+    if (!seen.has(r.gameId)) {
+      seen.set(r.gameId, { matchup: r.matchup, date: r.gameDate });
+    }
+  }
+
+  return (
+    <div className="mb-4">
+      <label className="block text-[10px] uppercase tracking-wider text-slate-500">
+        Game
+      </label>
+      <select
+        value={String(active)}
+        onChange={(e) =>
+          setActive(e.target.value === "all" ? "all" : Number(e.target.value))
+        }
+        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 focus:outline-none"
+      >
+        <option value="all">All games ({results.length} rows)</option>
+        {[...seen.entries()].map(([gid, info]) => (
+          <option key={gid} value={gid}>
+            {info.matchup} · {formatShortDate(info.date)}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// ── main component ───────────────────────────────────────────────────────────
+
+export default function ResultsBoard({ results }: { results: EvaluatedResult[] }) {
+  const [propFilter, setPropFilter] = useState<Filter>("all");
+  const [gameFilter, setGameFilter] = useState<GameKey>("all");
+
+  // Apply prop filter first, then game filter. Both are independent.
   const filtered = useMemo(() => {
-    if (filter === "all") return results;
-    if (filter === "pitcher") return results.filter((r) => PITCHER_PROPS.includes(r.propType));
-    if (filter === "hitter") return results.filter((r) => HITTER_PROPS.includes(r.propType));
-    return results.filter((r) => r.propType === filter);
-  }, [filter, results]);
+    let r = results;
+    if (propFilter === "pitcher") r = r.filter((x) => PITCHER_PROPS.includes(x.propType));
+    else if (propFilter === "hitter") r = r.filter((x) => HITTER_PROPS.includes(x.propType));
+    else if (propFilter !== "all") r = r.filter((x) => x.propType === propFilter);
+    if (gameFilter !== "all") r = r.filter((x) => x.gameId === gameFilter);
+    return r;
+  }, [propFilter, gameFilter, results]);
+
+  // Group filtered rows by game, preserving the newest-first iteration order.
+  const byGame = useMemo(() => {
+    const m = new Map<
+      number,
+      { matchup: string; date: string; rows: EvaluatedResult[] }
+    >();
+    for (const r of filtered) {
+      const g = m.get(r.gameId);
+      if (g) {
+        g.rows.push(r);
+      } else {
+        m.set(r.gameId, { matchup: r.matchup, date: r.gameDate, rows: [r] });
+      }
+    }
+    return [...m.entries()];
+  }, [filtered]);
 
   return (
     <>
       {/* summary uses the FILTERED set so the headline matches what's listed below */}
       <OverallCard results={filtered} />
-      <PerPropCard results={results /* always full breakdown so user sees per-prop even when filtered */} />
+      {/* per-prop breakdown always uses the FULL set so the user sees per-prop
+          coverage even while filtered */}
+      <PerPropCard results={results} />
 
-      <FilterBar active={filter} setActive={setFilter} results={results} />
+      <FilterBar active={propFilter} setActive={setPropFilter} results={results} />
+      <GameFilter active={gameFilter} setActive={setGameFilter} results={results} />
 
       {/* column legend */}
       <div className="mb-2 grid grid-cols-12 gap-2 px-4 text-[10px] uppercase tracking-wider text-slate-500">
@@ -276,11 +400,44 @@ export default function ResultsBoard({ results }: { results: EvaluatedResult[] }
           No results match this filter.
         </div>
       ) : (
-        <ul className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50">
-          {filtered.map((r, i) => (
-            <ResultRow key={`${r.playerId}-${r.propType}-${r.gameDate}-${i}`} r={r} />
-          ))}
-        </ul>
+        <div className="space-y-4">
+          {byGame.map(([gid, g]) => {
+            const correct = g.rows.filter((r) => r.verdict === "correct").length;
+            const wrong = g.rows.filter((r) => r.verdict === "wrong").length;
+            const evaluable = correct + wrong;
+            return (
+              <section
+                key={gid}
+                className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
+              >
+                <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-5 py-3">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold text-slate-200">
+                      {g.matchup}
+                    </h3>
+                    <p className="text-xs text-slate-500">{formatShortDate(g.date)}</p>
+                  </div>
+                  <span
+                    className={`shrink-0 text-sm font-semibold tabular-nums ${rateColor(correct, evaluable)}`}
+                  >
+                    {pct(correct, evaluable)}
+                    <span className="ml-1 text-xs font-normal text-slate-500">
+                      ({correct}/{evaluable})
+                    </span>
+                  </span>
+                </div>
+                <ul className="divide-y divide-slate-800">
+                  {g.rows.map((r, i) => (
+                    <ResultRow
+                      key={`${r.playerId}-${r.propType}-${r.gameDate}-${i}`}
+                      r={r}
+                    />
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
       )}
     </>
   );

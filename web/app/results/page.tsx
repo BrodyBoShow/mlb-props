@@ -44,19 +44,20 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
 // Minimum line value to count as a "main market" line. Anything below is an
 // alternate (e.g. 0.5 hits, 1.5 strikeouts) which lands as a hit so often it
 // inflates the hit rate without telling us anything about the model. Props
-// not listed in this map are excluded from results entirely — see hitter_home_runs.
+// not listed in this map are excluded from results entirely.
+//
+// EXCLUDED entirely:
+//   - hitter_home_runs: 0.5 line dominates and the model has no HR signal yet.
+//   - hitter_runs:      no real main market line above 0.5; rate is base-rate noise.
+//   - hitter_rbis:      same — most listed lines are 0.5 alternates.
 const MIN_LINE: Partial<Record<PropType, number>> = {
-  strikeouts:         2.5,
-  hits_allowed:       2.5,
+  strikeouts:         3.5,   // bumped from 2.5 — 2.5 was still alternate-ish
+  hits_allowed:       3.5,
   walks:              1.5,
   earned_runs:        1.5,
-  outs_recorded:      10.5,
-  hitter_hits:        1.5,   // drop 0.5 lines that hit ~70% baseline
+  outs_recorded:      10.5,  // pitchers going past 4 IP — filters short relievers
+  hitter_hits:        1.5,
   hitter_total_bases: 1.5,
-  hitter_rbis:        1.5,   // drop 0.5 lines
-  hitter_runs:        0.5,   // marginal but kept — there's no higher main market
-  // hitter_home_runs deliberately omitted. 0.5 line dominates and the model
-  // has no real HR signal yet, so any rate we report would be noise.
 };
 
 const ALL_PROP_TYPES = Object.keys(ACTUAL_COLUMN) as PropType[];
@@ -64,11 +65,13 @@ const ALL_PROP_TYPES = Object.keys(ACTUAL_COLUMN) as PropType[];
 // ── raw row shapes ───────────────────────────────────────────────────────────
 
 type ProjectionRow = {
+  game_id: number;
   player_id: number;
   prop_type: string;
   projection: number;
   projection_date: string;
   players: { full_name: string | null } | null;
+  games: { home_team: string; away_team: string } | null;
 };
 
 type LineRow = {
@@ -128,7 +131,8 @@ async function getResults(): Promise<{
       supabase
         .from("projections")
         .select(
-          "player_id, prop_type, projection, projection_date, players(full_name)"
+          "game_id, player_id, prop_type, projection, projection_date, " +
+            "players(full_name), games(home_team, away_team)"
         )
         .gte("projection_date", startDate)
         .lte("projection_date", endDate),
@@ -153,6 +157,20 @@ async function getResults(): Promise<{
   const lines = (lineData ?? []) as unknown as LineRow[];
   const logs = (logData ?? []) as unknown as LogRow[];
 
+  // earned_runs diagnostic — visible in Vercel function logs / dev terminal.
+  // The string match is the same across baseline.py / lines.py / grade.py /
+  // ACTUAL_COLUMN, so this isolates which stage drops the rows.
+  const erProj = projections.filter((r) => r.prop_type === "earned_runs").length;
+  const erLines = lines.filter((r) => r.prop_type === "earned_runs").length;
+  const erLogs = logs.filter(
+    (r) => (r as LogRow).actual_earned_runs !== null &&
+           (r as LogRow).actual_earned_runs !== undefined
+  ).length;
+  console.log(
+    `[results-diag] earned_runs window ${startDate}..${endDate}: ` +
+      `proj=${erProj} lines=${erLines} logs=${erLogs}`
+  );
+
   // ── reduce lines to one per (player, prop, date) by book preference ────
   const linesByKey = new Map<string, LineRow>();
   const bookRank = (b: string): number => {
@@ -174,34 +192,51 @@ async function getResults(): Promise<{
   }
 
   // ── join projections → lines → logs ────────────────────────────────────
+  // Track per-stage drop counts for earned_runs so the diagnostic above is
+  // actionable — we can see whether rows die at the line lookup, the
+  // threshold gate, the log lookup, or the actual-column extraction.
+  const erDrop = { noLine: 0, belowMin: 0, noLog: 0, noActual: 0, survived: 0 };
+
   const results: EvaluatedResult[] = [];
   for (const p of projections) {
     const propType = p.prop_type as PropType;
     const actualCol = ACTUAL_COLUMN[propType];
     if (!actualCol) continue;
 
-    // Main-market threshold. Props absent from MIN_LINE (currently just
-    // hitter_home_runs) are excluded entirely. Alternate lines below the
-    // threshold are dropped so the hit rate reflects real markets.
+    // Main-market threshold. Props absent from MIN_LINE (hitter_runs,
+    // hitter_rbis, hitter_home_runs) are excluded entirely. Alternate
+    // lines below the threshold are dropped so the hit rate reflects
+    // real markets.
     const minLine = MIN_LINE[propType];
     if (minLine === undefined) continue;
+
+    const isER = propType === "earned_runs";
 
     const line = linesByKey.get(
       `${p.player_id}|${p.prop_type}|${p.projection_date}`
     );
-    if (!line) continue;
-    if (line.line < minLine) continue;
+    if (!line) { if (isER) erDrop.noLine++; continue; }
+    if (line.line < minLine) { if (isER) erDrop.belowMin++; continue; }
 
     const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
-    if (!log) continue;
+    if (!log) { if (isER) erDrop.noLog++; continue; }
 
     const actualRaw = log[actualCol];
-    if (actualRaw === null || actualRaw === undefined) continue;
+    if (actualRaw === null || actualRaw === undefined) {
+      if (isER) erDrop.noActual++;
+      continue;
+    }
     const actual = Number(actualRaw);
     if (!Number.isFinite(actual)) continue;
+    if (isER) erDrop.survived++;
 
     const verdict = classify(p.projection, line.line, actual);
+    const matchup = p.games
+      ? `${p.games.away_team} @ ${p.games.home_team}`
+      : `Game ${p.game_id}`;
     results.push({
+      gameId: p.game_id,
+      matchup,
       playerId: p.player_id,
       playerName: p.players?.full_name ?? "Unknown player",
       propType,
@@ -214,6 +249,13 @@ async function getResults(): Promise<{
       verdict,
     });
   }
+
+  console.log(
+    `[results-diag] earned_runs join drop: noLine=${erDrop.noLine} ` +
+      `belowMin=${erDrop.belowMin} noLog=${erDrop.noLog} ` +
+      `noActual=${erDrop.noActual} survived=${erDrop.survived} ` +
+      `(threshold=${MIN_LINE.earned_runs})`
+  );
 
   // Newest first; stable secondary sort by player name.
   results.sort((a, b) => {
@@ -264,10 +306,11 @@ export default async function ResultsPage() {
         </div>
       )}
 
-      <footer className="mt-10 text-center text-xs text-slate-600">
+      <footer className="mt-10 text-center text-xs leading-relaxed text-slate-600">
         Hit = projection&apos;s lean direction matches actual vs. line. Props
         within {NO_LEAN_THRESHOLD} of the line are skipped (no lean). Main
-        market lines only — alternate lines and home run props excluded.
+        market lines only. Excluded entirely: home runs, runs, RBIs (one-sided
+        markets or no main line above 0.5).
       </footer>
     </main>
   );
