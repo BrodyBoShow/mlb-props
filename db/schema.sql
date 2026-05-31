@@ -41,6 +41,17 @@ create table if not exists player_game_logs (
     actual_rbis        integer,
     actual_runs        integer,
     actual_home_runs   integer,
+    -- hitter component columns (needed to recompute fantasy score from history
+    -- and to project hitter_fantasy_score from a hitter's recent games).
+    doubles            integer,
+    triples            integer,
+    hit_by_pitch       integer,
+    stolen_bases       integer,
+    -- pitcher decision needed for the W bonus in pitcher fantasy score.
+    actual_win                    boolean,
+    -- fantasy-score actuals — PrizePicks scoring, computed from components.
+    actual_hitter_fantasy_score   numeric,
+    actual_pitcher_fantasy_score  numeric,
     home_away         text,        -- 'home' | 'away'
     opp_k_rate        numeric,     -- opposing team K% as batters (0–1)
     days_rest         integer,

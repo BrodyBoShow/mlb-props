@@ -244,6 +244,30 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Fantasy Score props (PrizePicks-only) — Phase 1 (DB + constants):
+- New prop_types added end-to-end: pitcher_fantasy_score, hitter_fantasy_score.
+  PrizePicks is the SOLE book for both — never ingest or score from any
+  other book. Confirmed via Phase 0 probe: ParlayAPI market keys are
+  player_pitcher_fantasy_score and player_hitter_fantasy_score, both
+  returned only by 'prizepicks'.
+- engine/fantasy_score.py is the single source of truth for both PrizePicks
+  scoring formulas. ALL Python callers must import from here -- no weights
+  duplicated anywhere else. Mirror file at web/lib/fantasyScore.ts (Phase 5)
+  carries the same constants for live in-game frontend math.
+- Schema changes to player_game_logs. One-time migration SQL (run in
+  Supabase SQL editor before the next grading run):
+    alter table player_game_logs
+      add column if not exists doubles                       integer,
+      add column if not exists triples                       integer,
+      add column if not exists hit_by_pitch                  integer,
+      add column if not exists stolen_bases                  integer,
+      add column if not exists actual_win                    boolean,
+      add column if not exists actual_hitter_fantasy_score   numeric,
+      add column if not exists actual_pitcher_fantasy_score  numeric;
+  doubles/triples/hit_by_pitch/stolen_bases are component columns used to
+  recompute hitter fantasy score from history. actual_win is the pitcher's
+  W decision pulled from the boxscore decisions block.
+
 Results page — bias detection, diagnostics, outs, by-game grouping:
 - MIN_LINE thresholds tightened where alternates were still leaking in:
     strikeouts:     2.5 -> 3.5
