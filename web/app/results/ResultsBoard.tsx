@@ -582,19 +582,71 @@ function TrackerSection({
           No tracker rows for this prop.
         </div>
       ) : (
-        // Flat list, no game-card grouping. Alternating row backgrounds via
-        // the `zebra` prop so the eye can track wide rows without rules.
-        <ul className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50">
-          {filtered.map((r, i) => (
-            <TrackerRow
-              key={`${r.playerId}-${r.propType}-${r.gameDate}-${i}`}
-              r={r}
-              zebra={i % 2 === 1}
-            />
-          ))}
-        </ul>
+        <TrackerByGame results={filtered} />
       )}
     </>
+  );
+}
+
+// Group tracker results by gameId in newest-first iteration order, then
+// render each game as its own card. Mirrors the Betting Edge section's
+// game-card layout but with the tracker-specific row content and a muted
+// over/under tally instead of a hit-rate badge.
+function TrackerByGame({ results }: { results: TrackerResult[] }) {
+  const byGame = useMemo(() => {
+    const m = new Map<
+      number,
+      { matchup: string; date: string; rows: TrackerResult[] }
+    >();
+    for (const r of results) {
+      const g = m.get(r.gameId);
+      if (g) g.rows.push(r);
+      else m.set(r.gameId, { matchup: r.matchup, date: r.gameDate, rows: [r] });
+    }
+    return [...m.entries()];
+  }, [results]);
+
+  return (
+    <div className="space-y-4">
+      {byGame.map(([gid, g]) => {
+        const over = g.rows.filter((r) => r.direction === "over").length;
+        const under = g.rows.length - over;
+        const overPct = Math.round((over / g.rows.length) * 100);
+        const underPct = 100 - overPct;
+        return (
+          <section
+            key={gid}
+            className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-5 py-3">
+              <div className="min-w-0">
+                <h3 className="truncate font-semibold text-slate-200">
+                  {g.matchup}
+                </h3>
+                <p className="text-xs text-slate-500">{formatShortDate(g.date)}</p>
+              </div>
+              {/* Per-game over/under split, slate-only to keep the stat-tracker
+                  feel. No hit-rate badge -- this isn't a betting result. */}
+              <span className="shrink-0 text-xs tabular-nums text-slate-500">
+                <span className="text-slate-300">▲ {overPct}%</span>
+                <span className="mx-1 text-slate-600">/</span>
+                <span className="text-slate-400">▼ {underPct}%</span>
+                <span className="ml-1.5 text-slate-600">({g.rows.length})</span>
+              </span>
+            </div>
+            <ul>
+              {g.rows.map((r, i) => (
+                <TrackerRow
+                  key={`${r.playerId}-${r.propType}-${r.gameDate}-${i}`}
+                  r={r}
+                  zebra={i % 2 === 1}
+                />
+              ))}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
