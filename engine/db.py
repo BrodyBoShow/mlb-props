@@ -89,3 +89,21 @@ def upsert_projections(rows: list[dict]) -> int:
         rows, on_conflict="game_id,player_id,prop_type,projection_date"
     ).execute()
     return len(rows)
+
+
+def update_confidences(rows: list[dict]) -> int:
+    """Update the confidence column for existing projection rows.
+
+    Each row must contain: game_id, player_id, prop_type, projection_date,
+    confidence. PostgREST only sets the columns present in the payload, so
+    the projection value and updated_at are left untouched.
+
+    Re-runs are safe — the upsert resolves on the composite PK and only
+    writes the confidence value.
+    """
+    if not rows:
+        return 0
+    _client().table("projections").upsert(
+        rows, on_conflict="game_id,player_id,prop_type,projection_date"
+    ).execute()
+    return len(rows)

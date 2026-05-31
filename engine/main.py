@@ -16,6 +16,7 @@ import pybaseball
 pybaseball.cache.enable()
 
 import baseline
+import calibrate
 import db
 import fetch
 import grade
@@ -99,6 +100,7 @@ def main() -> None:
     print(f"  upserted {n_proj} strikeout projections")
 
     # ── additional prop types (MLB Stats API game-log baseline) ───────────────
+    other_prop_rows: list[dict] = []
     for builder, label in [
         (baseline.build_hits_allowed_projections, "hits_allowed"),
         (baseline.build_walks_projections, "walks"),
@@ -107,8 +109,17 @@ def main() -> None:
     ]:
         print(f"Building {label} projections...")
         rows = builder(starters)
+        other_prop_rows.extend(rows)
         n = db.upsert_projections(rows)
         print(f"  upserted {n} {label} projections")
+
+    # ── calibration confidence scores ─────────────────────────────────────────
+    print("Computing calibration confidence scores...")
+    logs = db.get_game_logs() or []
+    all_projections = projections + other_prop_rows
+    confidence_rows = calibrate.compute_confidences(all_projections, logs)
+    n_conf = db.update_confidences(confidence_rows)
+    print(f"  updated {n_conf} confidence scores")
 
     print("Done.")
 
