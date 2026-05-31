@@ -16,15 +16,16 @@ Positive edge = the model thinks the over is more likely than the book implies.
 
 from scipy.stats import norm
 
+from constants import MIN_STD, PROP_CV
+
 # Books we trust to form a fair-probability baseline when Pinnacle is absent.
 # DFS apps (PrizePicks/Underdog/etc.) carry no two-sided vig to remove, so
 # they never seed the baseline.
 CONSENSUS_BOOKS = ["draftkings", "fanduel", "caesars"]
 
-# Coefficient of variation for the normal approximation of pitcher prop
-# outcomes. Replace with calibrated probabilities once they exist.
-PROP_CV = 0.35
-MIN_STD = 0.5   # floor so a near-zero projection never gives scale=0
+# PROP_CV (coefficient of variation for the normal approximation) and MIN_STD
+# (scale floor) now live in engine/constants.py so the same values can be
+# referenced from the frontend math docs and any future calibration work.
 
 
 def _american_to_implied(price) -> float | None:

@@ -244,6 +244,47 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Engine refactor (Statcast bulk fetch, constants centralization, main.py shape):
+- engine/model.py — XGBoost predict() now does ONE bulk pybaseball.statcast()
+  call covering the whole STATCAST_LOOKBACK_DAYS window, then filters the
+  resulting DataFrame per-pitcher in memory. Before the change every starter
+  triggered its own statcast_pitcher() request (~30 round-trips per cron
+  run). New helpers:
+    _fetch_bulk_statcast(proj_date) -> DataFrame
+    _build_pitcher_features_from_df(player_id, bulk_df, home_away, opp, date)
+  The legacy _build_pitcher_features(player_id, ...) is kept as a defensive
+  fallback when the bulk fetch returns empty (Savant flake). Verified
+  locally on 2026-05-31: bulk fetch returned 117,320 pitches covering
+  550 pitchers in one call; pipeline produced 30 pitcher + 270 hitter
+  projections with no errors.
+- engine/constants.py — centralized magic numbers used across the engine
+  (existing constants kept as-is so baseline.py needs no change). Added:
+    MIN_TRAINING_ROWS = 25                (from model.py)
+    BLEND_MODEL_WEIGHT = 0.6              (from main.py MODEL_WEIGHT)
+    BLEND_BASELINE_WEIGHT = 0.4           (from main.py BASELINE_WEIGHT)
+    STATCAST_LOOKBACK_DAYS = 30           (from model.py local literal)
+    PROP_CV = 0.35                        (from edge.py)
+    MIN_STD = 0.5                         (from edge.py)
+    EDGE_THRESHOLD = 0.1                  (frontend-only today; declared
+                                           here for future Python use)
+    MIN_GRADED_STARTS = 5                 (from calibrate.py)
+    BASELINE_LOOKBACK_GAMES = RECENT_STARTS   (descriptive alias; baseline.py
+                                               still imports RECENT_STARTS)
+  model.py, main.py, edge.py, calibrate.py all import these from constants
+  now instead of defining locally. Values unchanged.
+- engine/main.py — single 150-line main() broken into semantic helpers
+  so main() reads as an executive summary:
+    _grade_previous_slate()
+    _setup_games_and_pitchers()    -> (games, starters)
+    _run_pitcher_pipeline(...)     -> (pitcher_projections, name_to_id, n)
+    _run_hitter_pipeline(name_to_id) -> (hitter_projections, lineup_count)
+    _run_lines_and_edges(name_to_id, all_projections)
+    _run_calibration(all_projections)
+  Logic inside each helper is identical to pre-refactor; the betting
+  layer's existing try/except is preserved. Outer try/except in main()
+  still surfaces failures with the PIPELINE FAILED traceback so a failed
+  Actions run continues to email automatically.
+
 Supabase 1000-row cap (root cause of months of phantom 'no data' on /results):
 - PostgREST (which powers supabase-js .select()) caps every response at
   1000 rows by default unless the caller passes an explicit .limit() or

@@ -19,9 +19,9 @@ starts, this returns [] and the caller leaves confidence NULL in the DB.
 
 from collections import defaultdict
 
-# Minimum graded starts required to emit a confidence score.
-MIN_GRADED_STARTS = 5
+from constants import MIN_GRADED_STARTS
 
+# MIN_GRADED_STARTS lives in engine/constants.py.
 # How many of the pitcher's most recent starts to use for the rate calculation.
 CONFIDENCE_WINDOW = 10
 
