@@ -11,6 +11,7 @@ import statsapi
 
 import db
 import stats
+from fantasy_score import hitter_fantasy_score, pitcher_fantasy_score
 
 
 def _parse_innings(ip_str: str) -> int:
@@ -33,6 +34,25 @@ def _boxscore(game_id: int) -> dict:
     except Exception as exc:
         print(f"  boxscore fetch failed for game {game_id}: {exc}")
         return {}
+
+
+def _decisions(game_id: int) -> tuple[int | None, int | None]:
+    """Return (winning_pitcher_id, losing_pitcher_id) for a finished game.
+
+    boxscore_data doesn't expose decisions, so we hit the live-feed endpoint
+    once per game. Returns (None, None) on any error or for games that
+    didn't reach an official decision — the caller treats both as "no W".
+    """
+    try:
+        feed = statsapi.get("game", {"gamePk": game_id})
+    except Exception as exc:
+        print(f"  decisions fetch failed for game {game_id}: {exc}")
+        return (None, None)
+
+    deci = (feed.get("liveData") or {}).get("decisions") or {}
+    winner = (deci.get("winner") or {}).get("id")
+    loser = (deci.get("loser") or {}).get("id")
+    return (winner, loser)
 
 
 def _pitcher_result(box: dict, player_id: int) -> dict | None:
@@ -105,8 +125,9 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
 
     year = yesterday.year
 
-    # Fetch each game's box score once, keyed by game_id
+    # Fetch each game's box score + W/L decision once, keyed by game_id.
     box_cache: dict[int, dict] = {}
+    decision_cache: dict[int, tuple[int | None, int | None]] = {}
 
     rows: list[dict] = []
     for proj in by_pitcher.values():
@@ -118,6 +139,8 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
 
         if game_id not in box_cache:
             box_cache[game_id] = _boxscore(game_id)
+        if game_id not in decision_cache:
+            decision_cache[game_id] = _decisions(game_id)
 
         result = _pitcher_result(box_cache[game_id], player_id)
 
@@ -143,6 +166,18 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
             except Exception:
                 days_rest = 5
 
+        # PrizePicks fantasy score: outs+K+ER (always graded) + W and QS
+        # bonuses (final, since the game is Final). Computed via the shared
+        # fantasy_score module so weights live in exactly one place.
+        winner_id, _loser_id = decision_cache[game_id]
+        actual_win = (winner_id == player_id)
+        actual_pitcher_fp = pitcher_fantasy_score(
+            outs=result["actual_outs_recorded"],
+            strikeouts=result["actual_strikeouts"],
+            earned_runs=result["actual_earned_runs"],
+            win=actual_win,
+        )
+
         rows.append({
             "player_id":             player_id,
             "game_id":               game_id,
@@ -153,11 +188,14 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
             "actual_walks":          result["actual_walks"],
             "actual_earned_runs":    result["actual_earned_runs"],
             "actual_outs_recorded":  result["actual_outs_recorded"],
+            "actual_win":            actual_win,
+            "actual_pitcher_fantasy_score": actual_pitcher_fp,
             "home_away":             side,
             "opp_k_rate":            opp_k_rate,
             "days_rest":             days_rest,
             "projection":            float(proj["projection"]),
         })
+        win_marker = "W" if actual_win else "—"
         print(
             f"  player {player_id}: projected {proj['projection']} K"
             f" -> actual {result['actual_strikeouts']} K"
@@ -165,7 +203,7 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
             f" / {result['actual_walks']} BB"
             f" / {result['actual_earned_runs']} ER"
             f" / {result['actual_outs_recorded']} outs"
-            f"  (rest {days_rest}d, opp K% {opp_k_rate:.3f})"
+            f"  ({win_marker}, FP {actual_pitcher_fp:.1f}, rest {days_rest}d, opp K% {opp_k_rate:.3f})"
         )
 
     print(f"  graded {len(rows)} / {len(by_pitcher)} projected pitchers")
@@ -187,6 +225,15 @@ def _hitter_result(box: dict, player_id: int) -> dict | None:
         actual_rbis        int
         actual_runs        int
         actual_home_runs   int
+        doubles            int   (component for fantasy score)
+        triples            int
+        walks              int
+        hit_by_pitch       int
+        stolen_bases       int
+
+    The five component fields below the five existing actuals are needed
+    to compute PrizePicks fantasy score from the same boxscore — see
+    fantasy_score.hitter_fantasy_score.
     """
     for side in ("home", "away"):
         players = box.get(side, {}).get("players", {})
@@ -197,6 +244,7 @@ def _hitter_result(box: dict, player_id: int) -> dict | None:
         if not batting:
             continue
 
+        # MLB API uses 'hitByPitch' (singular) for batting-side HBP.
         return {
             "home_away":          side,
             "actual_hits":        int(batting.get("hits", 0)),
@@ -204,6 +252,11 @@ def _hitter_result(box: dict, player_id: int) -> dict | None:
             "actual_rbis":        int(batting.get("rbi", 0)),
             "actual_runs":        int(batting.get("runs", 0)),
             "actual_home_runs":   int(batting.get("homeRuns", 0)),
+            "doubles":            int(batting.get("doubles", 0)),
+            "triples":            int(batting.get("triples", 0)),
+            "walks":              int(batting.get("baseOnBalls", 0)),
+            "hit_by_pitch":       int(batting.get("hitByPitch", 0)),
+            "stolen_bases":       int(batting.get("stolenBases", 0)),
         }
 
     return None
@@ -258,6 +311,20 @@ def grade_hitters_yesterday(grade_date: date | None = None) -> list[dict]:
             print(f"  hitter {player_id} did not bat in game {game_id} -- skipped")
             continue
 
+        # PrizePicks fantasy score from the same boxscore components,
+        # via the single source of truth in fantasy_score.py.
+        actual_hitter_fp = hitter_fantasy_score(
+            hits=result["actual_hits"],
+            doubles=result["doubles"],
+            triples=result["triples"],
+            home_runs=result["actual_home_runs"],
+            runs=result["actual_runs"],
+            rbis=result["actual_rbis"],
+            walks=result["walks"],
+            hit_by_pitch=result["hit_by_pitch"],
+            stolen_bases=result["stolen_bases"],
+        )
+
         rows.append({
             "player_id":          player_id,
             "game_id":            game_id,
@@ -268,6 +335,11 @@ def grade_hitters_yesterday(grade_date: date | None = None) -> list[dict]:
             "actual_rbis":        result["actual_rbis"],
             "actual_runs":        result["actual_runs"],
             "actual_home_runs":   result["actual_home_runs"],
+            "doubles":            result["doubles"],
+            "triples":            result["triples"],
+            "hit_by_pitch":       result["hit_by_pitch"],
+            "stolen_bases":       result["stolen_bases"],
+            "actual_hitter_fantasy_score": actual_hitter_fp,
             "home_away":          result["home_away"],
             "projection":         float(proj["projection"]),
         })
@@ -278,6 +350,7 @@ def grade_hitters_yesterday(grade_date: date | None = None) -> list[dict]:
             f" / {result['actual_rbis']} RBI"
             f" / {result['actual_runs']} R"
             f" / {result['actual_home_runs']} HR"
+            f"  (FP {actual_hitter_fp:.1f})"
         )
 
     print(f"  graded {len(rows)} / {len(by_hitter)} projected hitters")

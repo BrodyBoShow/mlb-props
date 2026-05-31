@@ -244,6 +244,23 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Fantasy Score props — Phase 2 (grading):
+- engine/grade.py imports from fantasy_score and computes both actuals
+  end-to-end on each grading pass:
+    * pitcher: outs + K + ER (already extracted) + W decision via new
+      _decisions(game_id) helper (one statsapi.get('game', ...) call per
+      finished game; boxscore_data does not expose decisions). QS is
+      derived from outs + earned_runs inside the helper. Persists
+      actual_win + actual_pitcher_fantasy_score.
+    * hitter: _hitter_result now also pulls doubles, triples, walks
+      (baseOnBalls), hit_by_pitch, stolen_bases from the same boxscore
+      pass. Persists those four components + actual_hitter_fantasy_score.
+- engine/calibrate.py _ACTUAL_COL gains both prop_types so per-prop
+  hit-rate calibration kicks in for fantasy score once each player has
+  5+ graded games. No other change there -- calibrate is generic.
+- Per-row log lines now print FP and a W/— marker for pitchers and FP
+  for hitters so the Actions log shows the new metric directly.
+
 Fantasy Score props (PrizePicks-only) — Phase 1 (DB + constants):
 - New prop_types added end-to-end: pitcher_fantasy_score, hitter_fantasy_score.
   PrizePicks is the SOLE book for both — never ingest or score from any

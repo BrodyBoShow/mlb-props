@@ -40,6 +40,9 @@ _ACTUAL_COL: dict[str, str] = {
     "hitter_rbis":        "actual_rbis",
     "hitter_runs":        "actual_runs",
     "hitter_home_runs":   "actual_home_runs",
+    # PrizePicks fantasy score — single book, scored via fantasy_score module.
+    "pitcher_fantasy_score": "actual_pitcher_fantasy_score",
+    "hitter_fantasy_score":  "actual_hitter_fantasy_score",
 }
 
 
