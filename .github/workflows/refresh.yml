@@ -2,8 +2,9 @@ name: Refresh Projections
 
 on:
   schedule:
-    - cron: "0 12 * * *"   # 8 AM ET — morning slate
-    - cron: "0 17 * * *"   # 1 PM ET — after lineups post
+    - cron: "0 1 * * *"    # 9 PM ET — tomorrow's pitcher props for night-before planning
+    - cron: "0 12 * * *"   # 8 AM ET — refresh pitcher props, late starter changes
+    - cron: "0 17 * * *"   # 1 PM ET — add hitter props once lineups post
   workflow_dispatch:        # allow manual trigger from GitHub UI
 
 jobs:

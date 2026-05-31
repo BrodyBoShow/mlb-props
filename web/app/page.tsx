@@ -185,6 +185,14 @@ async function getSlate(dateOverride?: string): Promise<{
   return { date: selectedDate, updatedAt, prevDate, nextDate, byProp };
 }
 
+function formatDate(iso: string): string {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 function formatUpdatedAt(iso: string): string {
   return new Date(iso).toLocaleString("en-US", {
     timeZone: "America/New_York",
@@ -209,6 +217,10 @@ export default async function Home({
   const { date, updatedAt, prevDate, nextDate, byProp } =
     await getSlate(dateOverride);
 
+  // Show a stale-data banner when the latest projection date isn't today in ET.
+  const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const isStale = date !== null && date < todayET;
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
       <header className="mb-6">
@@ -222,6 +234,12 @@ export default async function Home({
           </p>
         )}
       </header>
+
+      {isStale && (
+        <div className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
+          Showing {formatDate(date!)} projections — today&apos;s slate updates at 9 PM ET.
+        </div>
+      )}
 
       {date ? (
         <PropBoard
