@@ -22,6 +22,14 @@ from constants import (
     RECENT_WEIGHT,
     STRIKEOUT_EVENTS,
 )
+from fantasy_score import (
+    PITCHER_EARNED_RUN_PTS,
+    PITCHER_OUT_PTS,
+    PITCHER_QUALITY_START_PTS,
+    PITCHER_STRIKEOUT_PTS,
+    hitter_fantasy_score,
+    is_quality_start,
+)
 
 
 # ─── shared weighting logic ──────────────────────────────────────────────────
@@ -153,6 +161,66 @@ def build_outs_recorded_projections(
     return _build_from_starts(starters, "outs_recorded", "outs_recorded", "outs", projection_date)
 
 
+# ─── pitcher fantasy score (PrizePicks) ──────────────────────────────────────
+
+def build_pitcher_fantasy_score_projections(
+    starters: list[dict], projection_date: date | None = None
+) -> list[dict]:
+    """Weighted rolling projection for a pitcher's PrizePicks fantasy score.
+
+    Computes per-start FP from the components we already extract for every
+    other pitcher prop (outs, K, ER) PLUS the QS bonus derived from
+    outs + ER. The W bonus is NOT included historically -- stats.get_pitcher_
+    starts doesn't carry per-start W decisions and refetching the live feed
+    per historical start would balloon API calls. This makes the baseline
+    systematically low by ~2.4 FP (league-average W rate × 6 pts), but the
+    bias is uniform across pitchers so over/under leans vs the PrizePicks
+    line still reflect real model signal.
+
+    Once player_game_logs has sufficient graded fantasy-score rows, switch
+    to reading historical actual_pitcher_fantasy_score directly -- that
+    already includes the W bonus.
+    """
+    proj_date = projection_date or date.today()
+    proj_date_str = proj_date.strftime("%Y-%m-%d")
+
+    rows: list[dict] = []
+    for s in starters:
+        player_id = s["player_id"]
+        starts = stats.get_pitcher_starts(player_id, LOOKBACK_DAYS, proj_date)
+        if not starts:
+            print(f"  no recent game-log data for player {player_id}, skipping")
+            continue
+        per_start_fp: list[float] = []
+        for st in starts:
+            outs = st["outs_recorded"]
+            k = st["strikeouts"]
+            er = st["earned_runs"]
+            fp = (
+                outs * PITCHER_OUT_PTS
+                + k * PITCHER_STRIKEOUT_PTS
+                + er * PITCHER_EARNED_RUN_PTS
+            )
+            if is_quality_start(outs, er):
+                fp += PITCHER_QUALITY_START_PTS
+            per_start_fp.append(float(fp))
+        projection = _weighted_projection(per_start_fp)
+        rows.append(
+            {
+                "game_id": s["game_id"],
+                "player_id": player_id,
+                "prop_type": "pitcher_fantasy_score",
+                "projection": projection,
+                "projection_date": proj_date_str,
+            }
+        )
+        print(
+            f"  {s.get('full_name', player_id)}: "
+            f"{[round(v, 1) for v in per_start_fp[:5]]} -> {projection} FP"
+        )
+    return rows
+
+
 # ─── hitter builders (MLB Stats API game logs) ───────────────────────────────
 
 def _build_hitter_from_games(
@@ -229,6 +297,59 @@ def build_hitter_home_runs_projections(
 ) -> list[dict]:
     """Weighted rolling projection for a hitter's home runs per game."""
     return _build_hitter_from_games(lineup_players, "home_runs", "hitter_home_runs", "HR", projection_date)
+
+
+def build_hitter_fantasy_score_projections(
+    lineup_players: list[dict], projection_date: date | None = None
+) -> list[dict]:
+    """Weighted rolling projection for a hitter's PrizePicks fantasy score.
+
+    Computes per-game FP from each game's full component set (singles,
+    doubles, triples, HRs, runs, RBIs, walks, HBP, SBs) via the shared
+    fantasy_score.hitter_fantasy_score helper. get_hitter_games returns
+    all five extra components alongside the existing five, so there is
+    NO cold start -- the baseline works on day one without waiting for
+    player_game_logs to accumulate.
+    """
+    proj_date = projection_date or date.today()
+    proj_date_str = proj_date.strftime("%Y-%m-%d")
+
+    rows: list[dict] = []
+    for p in lineup_players:
+        player_id = p["player_id"]
+        games = stats.get_hitter_games(player_id, LOOKBACK_DAYS, proj_date)
+        if not games:
+            print(f"  no recent game-log data for hitter {player_id}, skipping")
+            continue
+        per_game_fp = [
+            hitter_fantasy_score(
+                hits=g["hits"],
+                doubles=g["doubles"],
+                triples=g["triples"],
+                home_runs=g["home_runs"],
+                runs=g["runs"],
+                rbis=g["rbis"],
+                walks=g["walks"],
+                hit_by_pitch=g["hit_by_pitch"],
+                stolen_bases=g["stolen_bases"],
+            )
+            for g in games
+        ]
+        projection = _weighted_projection(per_game_fp)
+        rows.append(
+            {
+                "game_id": p["game_id"],
+                "player_id": player_id,
+                "prop_type": "hitter_fantasy_score",
+                "projection": projection,
+                "projection_date": proj_date_str,
+            }
+        )
+        print(
+            f"  {p.get('full_name', player_id)}: "
+            f"{[round(v, 1) for v in per_game_fp[:5]]} -> {projection} FP"
+        )
+    return rows
 
 
 if __name__ == "__main__":

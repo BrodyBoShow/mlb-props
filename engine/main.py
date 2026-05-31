@@ -126,6 +126,7 @@ def main() -> None:
             (baseline.build_walks_projections, "walks"),
             (baseline.build_earned_runs_projections, "earned_runs"),
             (baseline.build_outs_recorded_projections, "outs_recorded"),
+            (baseline.build_pitcher_fantasy_score_projections, "pitcher_fantasy_score"),
         ]:
             print(f"Building {label} projections...")
             rows = builder(starters)
@@ -159,6 +160,7 @@ def main() -> None:
                 (baseline.build_hitter_rbis_projections,        "hitter_rbis"),
                 (baseline.build_hitter_runs_projections,        "hitter_runs"),
                 (baseline.build_hitter_home_runs_projections,   "hitter_home_runs"),
+                (baseline.build_hitter_fantasy_score_projections, "hitter_fantasy_score"),
             ]:
                 print(f"Building {label} projections...")
                 rows = builder(lineup_players)

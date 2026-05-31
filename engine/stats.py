@@ -307,6 +307,11 @@ def get_hitter_games(
         rbis         int
         runs         int
         home_runs    int
+        doubles      int   (component for fantasy score)
+        triples      int
+        walks        int
+        hit_by_pitch int
+        stolen_bases int
     """
     start_date = end_date - timedelta(days=lookback_days)
     season = end_date.year
@@ -340,14 +345,23 @@ def get_hitter_games(
             continue
 
         st = sp.get("stat", {})
+        # The hitting/gameLog endpoint sometimes uses 'hitByPitch' and
+        # sometimes 'hitByPitches'. Coalesce so the fantasy-score baseline
+        # gets the right number regardless.
+        hbp = int(st.get("hitByPitch", st.get("hitByPitches", 0)) or 0)
         results.append(
             {
-                "game_date": sp["date"],
-                "hits": int(st.get("hits", 0)),
-                "total_bases": int(st.get("totalBases", 0)),
-                "rbis": int(st.get("rbi", 0)),
-                "runs": int(st.get("runs", 0)),
-                "home_runs": int(st.get("homeRuns", 0)),
+                "game_date":    sp["date"],
+                "hits":         int(st.get("hits", 0)),
+                "total_bases":  int(st.get("totalBases", 0)),
+                "rbis":         int(st.get("rbi", 0)),
+                "runs":         int(st.get("runs", 0)),
+                "home_runs":    int(st.get("homeRuns", 0)),
+                "doubles":      int(st.get("doubles", 0)),
+                "triples":      int(st.get("triples", 0)),
+                "walks":        int(st.get("baseOnBalls", 0)),
+                "hit_by_pitch": hbp,
+                "stolen_bases": int(st.get("stolenBases", 0)),
             }
         )
 

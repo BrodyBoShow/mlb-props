@@ -244,6 +244,26 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Fantasy Score props — Phase 3 (baselines):
+- HITTER PATH (no cold start): extended stats.get_hitter_games to return
+  doubles, triples, walks, hit_by_pitch, stolen_bases alongside the
+  existing five fields, all sourced from the same MLB Stats API
+  person/gameLog response. Per-game FP is computed with the shared
+  fantasy_score.hitter_fantasy_score helper -- the baseline works on
+  day one without waiting for player_game_logs to accumulate.
+- PITCHER PATH (with documented bias): build_pitcher_fantasy_score_
+  projections computes per-start FP from outs + K + ER + QS only.
+  Historical W decisions are not exposed by get_pitcher_starts and
+  refetching the live feed for each historical start would balloon API
+  calls. The baseline is systematically low by ~2.4 FP (league-avg W
+  rate × 6 pts), but the bias is uniform across pitchers so leans vs
+  the PrizePicks line still reflect real model signal. Upgrade path:
+  once player_game_logs has enough graded actual_pitcher_fantasy_score
+  rows, switch to reading those directly -- they already include W.
+- engine/main.py now calls both new builders in the same loops as the
+  other pitcher + hitter props. They share the existing upsert
+  pipeline; no schema or DB changes needed beyond Phase 1.
+
 Fantasy Score props — Phase 2 (grading):
 - engine/grade.py imports from fantasy_score and computes both actuals
   end-to-end on each grading pass:
