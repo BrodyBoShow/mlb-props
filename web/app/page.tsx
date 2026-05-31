@@ -246,7 +246,7 @@ export default async function Home({
 
       {isStale && (
         <div className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
-          Showing {formatDate(date!)} projections — today&apos;s slate updates at 9 PM ET.
+          Showing {formatDate(date!)} projections — today&apos;s slate updates after 8 AM ET.
         </div>
       )}
 
