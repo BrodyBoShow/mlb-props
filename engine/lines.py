@@ -9,6 +9,7 @@ Reads PARLAY_API_KEY from the environment (via python-dotenv).
 """
 
 import os
+import unicodedata
 from datetime import date
 
 from dotenv import load_dotenv
@@ -46,6 +47,34 @@ MARKET_TO_PROP = {v: k for k, v in PROP_TO_MARKET.items()}
 BOOKMAKERS = ["pinnacle", "draftkings", "fanduel",
               "prizepicks", "underdog", "betr", "sleeper"]
 
+# Name suffixes to strip when normalizing. Lower-case with leading space.
+_SUFFIXES = (" jr.", " sr.", " ii", " iii", " iv")
+
+
+def _normalize(name: str) -> str:
+    """Canonical form for fuzzy player-name matching.
+
+    1. Lowercase.
+    2. Strip accents (NFD decomposition, drop combining characters).
+    3. Remove common name suffixes (Jr., Sr., II, III, IV).
+    4. Collapse extra whitespace.
+
+    Uses only the Python standard library (unicodedata is built-in).
+    """
+    # Lowercase first so suffix stripping is case-insensitive.
+    s = name.lower()
+    # Strip accents: decompose to NFD, drop combining (non-ASCII) chars.
+    s = "".join(
+        c for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) != "Mn"
+    )
+    # Remove suffixes in order (longest first to avoid partial matches).
+    for suffix in _SUFFIXES:
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+            break   # only strip one suffix per name
+    return " ".join(s.split())   # collapse extra whitespace
+
 
 def fetch_prop_lines(
     name_to_id: dict[str, int],   # full_name -> player_id (pitchers + hitters)
@@ -54,9 +83,10 @@ def fetch_prop_lines(
     """Fetch all pitcher + hitter prop markets in one ParlayAPI call.
 
     name_to_id covers both projected starters and confirmed lineup hitters.
-    Keeps only rows whose `player` exactly matches a player we projected,
-    maps the market key back to our prop_type, and shapes each row for the
-    `lines` table. On any API error, prints and returns [] so the pipeline
+    Tries an exact name match first, then a normalized fallback (strips
+    accents, suffixes, extra whitespace) before skipping a row. Maps the
+    market key back to our prop_type and shapes each row for the `lines`
+    table. On any API error, prints and returns [] so the pipeline
     continues (betting lines never break projections).
     """
     if ParlayAPI is None:
@@ -80,12 +110,27 @@ def fetch_prop_lines(
         return []
 
     game_date_str = game_date.strftime("%Y-%m-%d")
+
+    # Build a normalized lookup alongside the exact one so we only pay the
+    # normalization cost once per key in name_to_id, not once per API row.
+    normalized_to_id = {_normalize(k): v for k, v in name_to_id.items()}
+
     rows: list[dict] = []
     per_prop: dict[str, int] = {p: 0 for p in PROP_TO_MARKET}
+    normalized_matches = 0
 
     for r in raw or []:
         player_name = r.get("player")
+
+        # 1. Exact match (fast path — no allocation).
         player_id = name_to_id.get(player_name)
+
+        # 2. Normalized fallback: strips accents, suffixes, extra whitespace.
+        if player_id is None and player_name:
+            player_id = normalized_to_id.get(_normalize(player_name))
+            if player_id is not None:
+                normalized_matches += 1
+
         if player_id is None:
             continue   # not a player we projected today
 
@@ -121,6 +166,7 @@ def fetch_prop_lines(
             deduped.append(r)
     rows = deduped
 
+    norm_note = f" [{normalized_matches} via normalized match]" if normalized_matches else ""
     summary = ", ".join(f"{p}: {n}" for p, n in per_prop.items())
-    print(f"  fetched {len(rows)} lines ({summary})")
+    print(f"  fetched {len(rows)} lines ({summary}){norm_note}")
     return rows
