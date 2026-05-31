@@ -1,24 +1,24 @@
 """XGBoost strikeout projection layer — step 8.
 
 Feature engineering + optional training + inference. No DB writes here.
-model.pkl is committed to the repo so it persists between runs.
 
 Graceful degradation: if player_game_logs has fewer than MIN_TRAINING_ROWS
-rows (or the table doesn't exist yet), training is skipped and predict()
-returns [], signalling main.py to fall back to the baseline alone.
+rows (or the table doesn't exist yet), train() returns None and predict()
+is never called — main.py falls back to the baseline alone.
+
+The model object lives in memory for the duration of one pipeline run only.
+No pkl file is written or read; the model retrains on every Actions run.
 """
 
 from datetime import date, timedelta
 from functools import lru_cache
-from pathlib import Path
 
-import joblib
+import db
 import pandas as pd
 import pybaseball
 import statsapi
 from xgboost import XGBRegressor
 
-MODEL_PATH = Path(__file__).parent / "model.pkl"
 MIN_TRAINING_ROWS = 50
 PROP_TYPE = "strikeouts"
 STRIKEOUT_EVENTS = {"strikeout", "strikeout_double_play"}
@@ -121,24 +121,28 @@ def _build_pitcher_features(
 
 # ─── training ────────────────────────────────────────────────────────────────
 
-def train(db_client) -> bool:
-    """Try to train on player_game_logs; save model.pkl. Returns True if trained.
+def train() -> XGBRegressor | None:
+    """Try to train on player_game_logs; return the fitted model or None.
 
-    Skips gracefully if the table doesn't exist or has fewer than MIN_TRAINING_ROWS rows.
+    Returns None (and prints why) when:
+      - player_game_logs doesn't exist or isn't reachable
+      - fewer than MIN_TRAINING_ROWS rows are available
+      - insufficient rows remain after feature engineering
+
     Expected columns in player_game_logs:
-        player_id, game_date, actual_strikeouts, home_away, opp_k_rate (optional), days_rest (optional)
+        player_id, game_date, actual_strikeouts, home_away,
+        opp_k_rate (optional), days_rest (optional)
     """
     print("  checking player_game_logs for training data...")
-    try:
-        resp = db_client.table("player_game_logs").select("*").execute()
-        rows = resp.data or []
-    except Exception as exc:
-        print(f"  player_game_logs not accessible ({exc}) — skipping training")
-        return False
+    rows = db.get_game_logs()
+
+    if rows is None:
+        # get_game_logs already printed the reason
+        return None
 
     if len(rows) < MIN_TRAINING_ROWS:
         print(f"  {len(rows)} rows in player_game_logs (need ≥ {MIN_TRAINING_ROWS}) — skipping training")
-        return False
+        return None
 
     print(f"  {len(rows)} training rows found")
     df = pd.DataFrame(rows).sort_values(["player_id", "game_date"]).reset_index(drop=True)
@@ -161,7 +165,7 @@ def train(db_client) -> bool:
     df = df.dropna(subset=FEATURE_COLS + ["actual_strikeouts"])
     if len(df) < MIN_TRAINING_ROWS:
         print(f"  only {len(df)} usable rows after feature engineering — skipping training")
-        return False
+        return None
 
     X = df[FEATURE_COLS].values
     y = df["actual_strikeouts"].values
@@ -175,32 +179,26 @@ def train(db_client) -> bool:
         random_state=42,
     )
     model.fit(X, y)
-    joblib.dump(model, MODEL_PATH)
-    print(f"  XGBoost trained on {len(df)} rows → saved {MODEL_PATH.name}")
-    return True
+    print(f"  XGBoost trained on {len(df)} rows")
+    return model
 
 
 # ─── inference ───────────────────────────────────────────────────────────────
 
 def predict(
+    model: XGBRegressor,
     starters: list[dict],
     games: list[dict],
     projection_date: date | None = None,
 ) -> list[dict]:
-    """Load model.pkl and return projection rows shaped for the projections table.
+    """Run the trained model and return projection rows shaped for the projections table.
 
-    Returns [] when:
-      - model.pkl doesn't exist yet (caller falls back to baseline)
-      - a starter has insufficient recent data to compute features
-
+    model:    fitted XGBRegressor returned by train()
     starters: list of dicts with player_id, game_id, full_name, home_away
     games:    list of dicts with game_id, home_team, away_team
-    """
-    if not MODEL_PATH.exists():
-        print("  model.pkl not found — skipping XGBoost layer")
-        return []
 
-    model = joblib.load(MODEL_PATH)
+    Skips individual pitchers that don't have enough Statcast data for features.
+    """
     proj_date = projection_date or date.today()
     proj_date_str = proj_date.strftime("%Y-%m-%d")
 

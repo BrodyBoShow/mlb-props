@@ -1,12 +1,19 @@
 """Pipeline entrypoint: fetch the slate, project, then upsert to Supabase.
 
 Blend strategy:
-  - If model.pkl exists: 60% XGBoost + 40% baseline per pitcher.
-  - If model.pkl is absent or a pitcher has no model prediction: baseline only.
-Training attempt runs each time; it no-ops until player_game_logs has >= 50 rows.
+  - If player_game_logs has enough data: train XGBoost each run, blend
+    60% model + 40% baseline per pitcher.
+  - If train() returns None (insufficient data): baseline only.
+
+Pybaseball cache is enabled up front so baseline and model share cached
+Statcast responses for the same pitcher/date range — halves API calls.
 
 Logs to stdout only (GitHub Actions captures it). Never writes log rows to the DB.
 """
+
+import pybaseball
+
+pybaseball.cache.enable()
 
 import baseline
 import db
@@ -68,17 +75,15 @@ def main() -> None:
 
     # ── XGBoost layer ─────────────────────────────────────────────────────────
     print("Training XGBoost (no-ops if insufficient data)...")
-    mlb_model.train(db._client())
+    trained_model = mlb_model.train()
 
-    print("Running XGBoost predictions...")
-    model_projections = mlb_model.predict(starters, games)
-
-    # ── blend ─────────────────────────────────────────────────────────────────
-    if model_projections:
+    if trained_model is not None:
+        print("Running XGBoost predictions...")
+        model_projections = mlb_model.predict(trained_model, starters, games)
         print("Blending baseline + model projections...")
         projections = _blend(base_projections, model_projections)
     else:
-        print("  no model predictions available — using baseline only")
+        print("  no trained model — using baseline only")
         projections = base_projections
 
     # ── upsert ────────────────────────────────────────────────────────────────

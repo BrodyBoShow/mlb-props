@@ -41,6 +41,16 @@ def upsert_games(rows: list[dict]) -> int:
     return len(rows)
 
 
+def get_game_logs() -> list[dict] | None:
+    """Read all rows from player_game_logs. Returns None if the table is missing."""
+    try:
+        resp = _client().table("player_game_logs").select("*").execute()
+        return resp.data or []
+    except Exception as exc:
+        print(f"  player_game_logs not accessible ({exc}) — skipping training")
+        return None
+
+
 def upsert_projections(rows: list[dict]) -> int:
     """Upsert projection rows on the composite primary key.
 
