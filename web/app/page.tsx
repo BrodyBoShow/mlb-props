@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getSupabaseClient } from "@/lib/supabase";
 import PropBoard, { type ByProp, type GameGroup, type PropType } from "./PropBoard";
 
@@ -223,16 +224,24 @@ export default async function Home({
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
-      <header className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight">MLB Props</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Pitchers &amp; hitters
-        </p>
-        {updatedAt && (
-          <p className="mt-0.5 text-sm text-slate-400">
-            Last updated: {formatUpdatedAt(updatedAt)}
+      <header className="mb-8 flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">MLB Props</h1>
+          <p className="mt-1 text-sm text-slate-400">
+            Pitchers &amp; hitters
           </p>
-        )}
+          {updatedAt && (
+            <p className="mt-0.5 text-sm text-slate-400">
+              Last updated: {formatUpdatedAt(updatedAt)}
+            </p>
+          )}
+        </div>
+        <Link
+          href="/results"
+          className="mt-1 text-sm text-slate-400 transition-colors hover:text-slate-200"
+        >
+          Results →
+        </Link>
       </header>
 
       {isStale && (
