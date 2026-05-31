@@ -16,12 +16,13 @@ export type PropType =
   | "hitter_runs"
   | "hitter_home_runs";
 
-// One pitcher row. Projection is always present; edge fields are optional —
-// most pitchers won't have a betting line, and all values are pre-computed by
-// the engine (the frontend does ZERO math).
+// One pitcher/hitter row. Projection is always present; all other fields are
+// optional — most players won't have a line or enough graded history yet.
+// All values are pre-computed by the engine (the frontend does ZERO math).
 export type Pitcher = {
   name: string;
   projection: number;
+  confidence?: number;   // 0–1 hit rate; undefined = not enough graded history
   line?: number;
   edge?: number;
   fairOverProb?: number;
@@ -93,6 +94,51 @@ function EdgeDetail({ pitcher }: { pitcher: Pitcher }) {
   );
 }
 
+// ── confidence bar sub-component ─────────────────────────────────────────────
+// Renders only when confidence is defined (not undefined/null). Shows nothing
+// for the vast majority of players who don't yet have enough graded history.
+
+function ConfidenceBar({ confidence }: { confidence: number | undefined }) {
+  if (confidence === undefined) return null;
+
+  const pct = Math.round(confidence * 100);
+  const filled = Math.round(confidence * 10);   // 0–10 filled blocks out of 10
+
+  // Color thresholds match the spec: <40% red, 40–60% slate, >60% emerald.
+  let barColor: string;
+  let textColor: string;
+  if (confidence < 0.4) {
+    barColor = "bg-red-500/60";
+    textColor = "text-red-400";
+  } else if (confidence <= 0.6) {
+    barColor = "bg-slate-500/60";
+    textColor = "text-slate-400";
+  } else {
+    barColor = "bg-emerald-500/60";
+    textColor = "text-emerald-400";
+  }
+
+  return (
+    <div className="mt-1.5 flex items-center gap-2">
+      {/* segmented bar: 10 equal blocks */}
+      <div className="flex gap-px">
+        {Array.from({ length: 10 }, (_, i) => (
+          <div
+            key={i}
+            className={[
+              "h-1.5 w-3 rounded-sm",
+              i < filled ? barColor : "bg-slate-700",
+            ].join(" ")}
+          />
+        ))}
+      </div>
+      <span className={`text-xs tabular-nums ${textColor}`}>
+        {pct}% hit rate
+      </span>
+    </div>
+  );
+}
+
 // ── component ─────────────────────────────────────────────────────────────────
 
 export default function PropBoard({
@@ -158,6 +204,7 @@ export default function PropBoard({
                     <div className="min-w-0">
                       <span className="text-slate-100">{p.name}</span>
                       <EdgeDetail pitcher={p} />
+                      <ConfidenceBar confidence={p.confidence} />
                     </div>
                     <span className="ml-3 shrink-0 rounded-md bg-emerald-500/10 px-2.5 py-1 text-sm font-semibold text-emerald-400 tabular-nums">
                       {p.projection.toFixed(1)} {activeMeta.unit}

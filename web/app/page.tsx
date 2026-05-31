@@ -24,6 +24,7 @@ type ProjectionRow = {
   player_id: number;
   prop_type: string;
   projection: number;
+  confidence: number | null;
   players: { full_name: string | null } | null;
   games: { home_team: string; away_team: string } | null;
 };
@@ -66,11 +67,11 @@ async function getLatestSlate(): Promise<{
     return { date: null, updatedAt: null, byProp: empty };
   }
 
-  // Fetch all 5 prop types in one query — no math, just reading.
+  // Fetch all prop types in one query — no math, just reading.
   const { data } = await supabase
     .from("projections")
     .select(
-      "game_id, player_id, prop_type, projection, players(full_name), games(home_team, away_team)"
+      "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team)"
     )
     .eq("projection_date", date)
     .in("prop_type", ALL_PROP_TYPES)
@@ -117,7 +118,9 @@ async function getLatestSlate(): Promise<{
         byGame.get(r.game_id)!.pitchers.push({
           name: r.players?.full_name ?? "Unknown pitcher",
           projection: r.projection,
-          // Optional edge fields — undefined when this pitcher has no line.
+          // NULL until enough graded starts accumulate; undefined = render nothing.
+          confidence: r.confidence ?? undefined,
+          // Optional edge fields — undefined when this player has no line.
           line: e?.line,
           edge: e?.edge ?? undefined,
           fairOverProb: e?.fair_over_prob ?? undefined,
