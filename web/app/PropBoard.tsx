@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useLiveGameStatus, type GameStatus } from "./useLiveGameStatus";
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -207,6 +208,103 @@ function ConfidenceBar({ confidence }: { confidence: number | undefined }) {
   );
 }
 
+// ── game header sub-component ────────────────────────────────────────────────
+// Shows the matchup title + a status line beneath: date + live/scheduled/final.
+// `status` is undefined when the live fetch hasn't populated yet (or failed) —
+// in that case we just show the matchup + short date and nothing else, which
+// is the graceful-degrade path.
+
+function formatShortDate(iso: string): string {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function LiveDot() {
+  // Tailwind's animate-ping gives a built-in expanding-ring pulse.
+  // Two layers: a static solid dot + an animated ring on top.
+  return (
+    <span className="relative inline-flex h-2 w-2" aria-hidden="true">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+    </span>
+  );
+}
+
+function Score({ status }: { status: GameStatus }) {
+  const a = status.awayScore ?? 0;
+  const h = status.homeScore ?? 0;
+  return (
+    <span className="tabular-nums text-slate-300">
+      {status.awayAbbr} {a} @ {status.homeAbbr} {h}
+    </span>
+  );
+}
+
+function StatusLine({ status }: { status: GameStatus | undefined }) {
+  if (!status) return null;
+
+  if (status.state === "live") {
+    return (
+      <span className="flex items-center gap-1.5">
+        <LiveDot />
+        <span className="font-semibold tracking-wide text-emerald-400">LIVE</span>
+        <span className="text-slate-600">·</span>
+        <Score status={status} />
+        {status.inningOrdinal && (
+          <>
+            <span className="text-slate-600">·</span>
+            <span className="text-slate-300">
+              ▶ {status.inningHalf === "Top" ? "▲" : status.inningHalf === "Bottom" ? "▼" : ""}{" "}
+              {status.inningOrdinal}
+            </span>
+          </>
+        )}
+      </span>
+    );
+  }
+
+  if (status.state === "final") {
+    return (
+      <span className="flex items-center gap-1.5">
+        <span className="font-medium text-slate-300">Final</span>
+        <span className="text-slate-600">·</span>
+        <Score status={status} />
+      </span>
+    );
+  }
+
+  if (status.state === "scheduled") {
+    return <span>{status.startTimeET ?? "Scheduled"}</span>;
+  }
+
+  // "other" — postponed, delayed, etc. Show the raw detailedState if we have it.
+  return <span>{status.detailedState || "—"}</span>;
+}
+
+function GameHeader({
+  matchup,
+  date,
+  status,
+}: {
+  matchup: string;
+  date: string;
+  status: GameStatus | undefined;
+}) {
+  return (
+    <div className="border-b border-slate-800 bg-slate-900 px-5 py-3">
+      <h2 className="font-semibold text-slate-200">{matchup}</h2>
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+        <span>{formatShortDate(date)}</span>
+        {status && <span className="text-slate-600">·</span>}
+        <StatusLine status={status} />
+      </div>
+    </div>
+  );
+}
+
 // ── component ─────────────────────────────────────────────────────────────────
 
 export default function PropBoard({
@@ -224,6 +322,11 @@ export default function PropBoard({
 
   const activeMeta = PROPS.find((p) => p.key === active)!;
   const groups = byProp[active] ?? [];
+
+  // Poll the MLB Stats API for live game status. The hook returns an empty
+  // Map until the first response lands and on any failure — render falls back
+  // to the static matchup + date header in those cases.
+  const liveStatus = useLiveGameStatus(date);
 
   return (
     <>
@@ -267,9 +370,11 @@ export default function PropBoard({
               key={g.game_id}
               className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
             >
-              <div className="border-b border-slate-800 bg-slate-900 px-5 py-3">
-                <h2 className="font-semibold text-slate-200">{g.matchup}</h2>
-              </div>
+              <GameHeader
+                matchup={g.matchup}
+                date={date}
+                status={liveStatus.get(g.game_id)}
+              />
               <ul className="divide-y divide-slate-800">
                 {g.pitchers.map((p, i) => (
                   <li

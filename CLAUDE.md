@@ -244,6 +244,26 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Live game status on the frontend (web/app/useLiveGameStatus.ts + PropBoard.tsx):
+- useLiveGameStatus(date) is a client hook that polls the MLB Stats API
+  (statsapi.mlb.com/api/v1/schedule?sportId=1&date=...&hydrate=linescore)
+  every 60 seconds and returns Map<game_id, GameStatus>. game_id is the
+  MLB gamePk, which matches our games.game_id / projections.game_id 1:1.
+- Each game card header now renders three modes:
+    - LIVE: pulsing green dot (Tailwind animate-ping ring over a static
+      bg-emerald-500 dot), "LIVE", away-abbr score @ home-abbr score,
+      and the current inning ("▶ ▲ 3rd" / "▶ ▼ 5th").
+    - Scheduled: localized start time in ET ("1:05 PM ET").
+    - Final: "Final · MIL 4 @ HOU 1".
+  All three live below the matchup title with a short date prefix
+  ("Sun, May 31").
+- Graceful degrade: the hook never throws. On fetch failure it keeps the
+  prior Map, and the GameHeader's StatusLine renders nothing until the
+  next 60s tick succeeds — the matchup + date are always visible.
+- Pure presentation. No engine changes, no DB changes. The frontend is
+  still ZERO math: it only displays projections from Supabase + status
+  from the MLB API.
+
 FanGraphs keyspace validation (engine/stats.py, follow-up to the 403 hardening):
 - The 403 hardening (UA shim + retry + 2024 fallback) covered the failure
   case. The Actions log surfaced a different failure: FanGraphs returns a
