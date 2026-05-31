@@ -70,23 +70,26 @@ Steps 1-7 built. Working pipeline + frontend:
 - engine/db.py — the ONLY writer. upsert_players/games/projections, idempotent
   on each table's PK. Uses SUPABASE_KEY (service_role) to bypass RLS; falls back
   to SUPABASE_ANON_KEY. service_role key lives in .env (gitignored).
-- engine/baseline.py — weighted rolling strikeout projection from last 30 days
-  of pybaseball Statcast (last 5 starts weighted 2x). No DB writes.
-- engine/main.py — orchestrates fetch -> upsert -> baseline -> upsert. stdout only.
-- web/ — Next.js 14 (App Router) + Tailwind. Single page (app/page.tsx) reads the
-  latest slate's strikeout projections from Supabase via the anon key (read-only,
-  lazy client in lib/supabase.ts), joins players + games, groups by game, renders.
-  force-dynamic so it always reads fresh. ZERO math in the frontend. Build passes.
-- db/policies.sql — public SELECT (anon) RLS policies on projections + players +
-  games (the join needs all three). MUST be applied in the Supabase SQL editor;
-  until then anon reads return 0 rows and the page shows its empty state.
-Verified in Supabase: 15 games, 30 players, 29 strikeout projections. engine/main.py
-is the orchestrator (roadmap's project.py folded into it); refresh.yml calls main.py.
-
-ACTION NEEDED to make the site show data:
-1. Run db/policies.sql in the Supabase SQL editor (one time).
-2. web/.env.local holds NEXT_PUBLIC_SUPABASE_URL + _ANON_KEY (gitignored). On
-   Vercel, set those two as env vars. Set Vercel root directory to web/.
+- engine/constants.py — shared constants (STRIKEOUT/HIT/WALK_EVENTS,
+  LOOKBACK_DAYS, RECENT_*, LEAGUE_AVG_K_PCT). Imported by baseline, model, grade.
+- engine/stats.py — MLB Stats API game-log fetcher. get_pitcher_starts() is
+  lru_cached(maxsize=64) so all 4 non-strikeout prop builders share one API call
+  per pitcher per run. No Statcast, no DB code.
+- engine/baseline.py — weighted rolling strikeout projection (Statcast/pybaseball)
+  + 4 new builders via stats.py: hits_allowed, walks, earned_runs, outs_recorded.
+  All use last-5-starts 2x weighting. No DB writes.
+- engine/model.py — XGBoost layer. train() reads player_game_logs, returns fitted
+  model or None. predict() accepts the model object; no pkl file used.
+- engine/grade.py — grades yesterday's projections against final box scores.
+  Returns rows for player_game_logs (no DB writes).
+- engine/main.py — orchestrates: grade yesterday -> fetch -> upsert -> baseline
+  (5 props) -> XGBoost blend -> upsert. stdout only. pybaseball cache enabled.
+- web/ — Next.js 14 (App Router) + Tailwind. page.tsx (server) fetches all 5
+  prop types in one Supabase query, passes to PropBoard.tsx (client) which handles
+  tab selection. force-dynamic. ZERO math in frontend. Build passes.
+- db/policies.sql — public SELECT (anon) RLS on projections + players + games.
+Verified: 15 games, 30 players, 149 projection rows per run (29 strikeouts +
+30 each of hits_allowed, walks, earned_runs, outs_recorded).
 
 Known follow-ups:
 - statsapi.lookup_player is fuzzy and can resolve the wrong MLBAM id. Harden
@@ -96,7 +99,8 @@ Known follow-ups:
 - First pybaseball run is slow (cold cache, ~30 per-pitcher calls). Fine for a
   scheduled job; revisit if it bottlenecks.
 
-Next: step 8 — engine/model.py (XGBoost, export model.pkl, ensemble with baseline).
+Next: step 10 — calibration (isotonic regression on accumulated player_game_logs,
+populate confidence column in projections table).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

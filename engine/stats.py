@@ -5,6 +5,7 @@ All functions return plain Python dicts shaped for downstream consumers.
 """
 
 from datetime import date, timedelta
+from functools import lru_cache
 
 import statsapi
 
@@ -22,6 +23,7 @@ def _parse_innings(ip_str: str) -> int:
         return 0
 
 
+@lru_cache(maxsize=64)
 def get_pitcher_starts(
     player_id: int,
     lookback_days: int,
