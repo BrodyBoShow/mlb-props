@@ -244,6 +244,31 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Supabase 1000-row cap (root cause of months of phantom 'no data' on /results):
+- PostgREST (which powers supabase-js .select()) caps every response at
+  1000 rows by default unless the caller passes an explicit .limit() or
+  .range(). When the query exceeds 1000 rows the rest of the data is
+  silently truncated. NO error, NO warning. Downstream code sees fewer
+  rows than the table actually contains.
+- For /results, the 7-day window pulls projections (~20k rows expected),
+  lines (~10k), and player_game_logs (~2k). The cap was eating ~95% of
+  projections and ~90% of lines. The Vercel diag showed
+  earned_runs=lines=0, outs_recorded=lines=0, etc. -- not because those
+  rows didn't exist in the DB but because the most populous prop_types
+  (hitter_hits, hitter_total_bases) filled the 1000-row quota and the
+  rest of the prop_types were truncated to zero. This silently masked
+  every upstream fix attempted for those props.
+- For the home page, projections for ONE day across 280 players * 10
+  props ≈ 2800 rows. Same cap, same silent truncation.
+- Both pages now pass an explicit .limit() on every multi-row query:
+  - /results: .limit(100_000) on projections + lines + logs
+  - /: .limit(50_000) on projections + edges
+  - single-row metadata queries (.limit(1) for latest dates etc.) are
+    untouched.
+- This is THE most important fix in the project's history -- it
+  retroactively unblocks every prop_type that was being silently
+  truncated, which is most of them.
+
 Lines ingestion — many-to-one market_key map (fixes outs_recorded):
 - ParlayAPI substring-matches the markets parameter against its internal
   catalog, then returns rows with NORMALIZED market_key values that don't

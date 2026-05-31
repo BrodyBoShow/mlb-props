@@ -92,6 +92,10 @@ async function getSlate(dateOverride?: string): Promise<{
     { data: prevData },
     { data: nextData },
   ] = await Promise.all([
+    // Both projections and edges can exceed Supabase's default 1000-row
+    // cap (projections: ~280 players * 10 props ≈ 2800/day; edges: variable
+    // but often >1000). Set explicit high limits so we never silently
+    // truncate -- the same bug that hid prop_types from /results.
     supabase
       .from("projections")
       .select(
@@ -99,14 +103,16 @@ async function getSlate(dateOverride?: string): Promise<{
       )
       .eq("projection_date", selectedDate)
       .in("prop_type", ALL_PROP_TYPES)
-      .order("projection", { ascending: false }),
+      .order("projection", { ascending: false })
+      .limit(50_000),
 
     supabase
       .from("edges")
       .select(
         "player_id, prop_type, bookmaker, line, fair_over_prob, model_over_prob, edge, over_price, under_price"
       )
-      .eq("game_date", selectedDate),
+      .eq("game_date", selectedDate)
+      .limit(50_000),
 
     // Most-recently-written row for the "Last updated" timestamp.
     supabase

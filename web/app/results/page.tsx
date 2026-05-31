@@ -167,6 +167,19 @@ async function getResults(): Promise<{
   const startDate = start.toISOString().slice(0, 10);
 
   // Fetch the three tables in parallel for the window.
+  //
+  // CRITICAL: every query needs an explicit .limit() that exceeds the row
+  // count we expect. Supabase / PostgREST silently caps responses at 1000
+  // rows by default. We expect:
+  //   projections: ~280 players * 10 props * LOOKBACK_DAYS ≈ 20k
+  //   lines:       ~1500/day * LOOKBACK_DAYS ≈ 10k
+  //   logs:        ~280 players * LOOKBACK_DAYS ≈ 2k
+  // Without these explicit limits, the most populous prop_types fill the
+  // 1000-row quota and the rest of the props silently return 0 rows --
+  // exactly the symptom that hid the outs_recorded / earned_runs /
+  // fantasy_score "no data" reports for days.
+  const QUERY_LIMIT = 100_000;
+
   const [{ data: projData }, { data: lineData }, { data: logData }] =
     await Promise.all([
       supabase
@@ -176,13 +189,15 @@ async function getResults(): Promise<{
             "players(full_name), games(home_team, away_team)"
         )
         .gte("projection_date", startDate)
-        .lte("projection_date", endDate),
+        .lte("projection_date", endDate)
+        .limit(QUERY_LIMIT),
 
       supabase
         .from("lines")
         .select("player_id, prop_type, bookmaker, line, game_date")
         .gte("game_date", startDate)
-        .lte("game_date", endDate),
+        .lte("game_date", endDate)
+        .limit(QUERY_LIMIT),
 
       supabase
         .from("player_game_logs")
@@ -191,7 +206,8 @@ async function getResults(): Promise<{
             Object.values(ACTUAL_COLUMN).join(", ")
         )
         .gte("game_date", startDate)
-        .lte("game_date", endDate),
+        .lte("game_date", endDate)
+        .limit(QUERY_LIMIT),
     ]);
 
   const projections = (projData ?? []) as unknown as ProjectionRow[];
