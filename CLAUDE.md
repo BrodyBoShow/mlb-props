@@ -205,7 +205,29 @@ Known follow-ups:
   1 PM ET cron runs after lineups and captures them. fetch_lineups() returns []
   when no lineup is posted, which is the skip signal in main.py.
 
-Next: step 15 — hardening.
+Hardening Chunk A complete (commits 2f92cdb, 4d919b7):
+- fetch.py: pitcher lookup now filters candidates to primaryPosition in
+  (P, SP, RP) before exact-match/sole-candidate logic.
+- model.py: TEAM_NAME_MAP added (all 30 teams full-name -> FanGraphs abbr);
+  6 abbreviations corrected (CWS, KC, SD, SF, TB, WSH); _opp_k_rate now
+  lru_cached with WARNING on mismatch instead of silent league-avg fallback.
+- main.py: sanity WARNINGs when pitcher projections < 20 or hitter < 100.
+
+Hardening Chunk B complete (this session):
+- model.py: FanGraphs abbreviation fixes (CHW->CWS, KCR->KC, SDP->SD,
+  SFG->SF, TBR->TB, WSN->WSH) — these 6 were wrong and would silently
+  fall back to league average on every graded game.
+- requirements.txt: all 8 packages pinned to installed versions
+  (MLB-StatsAPI==1.9.0, pybaseball==2.2.7, supabase==2.30.1,
+  python-dotenv==1.2.2, xgboost==3.2.0, joblib==1.5.3, parlay-api==0.1.0,
+  scipy==1.17.1). Prevents silent projection-math changes from dep updates.
+- fetch.py: top-level statsapi.schedule() call wrapped in try/except for
+  fetch_games(), _fetch_starters_today(), and fetch_lineups(). A statsapi
+  outage now degrades gracefully (returns []/()) instead of crashing.
+- main.py: run header (=== pipeline run YYYY-MM-DD HH:MM UTC ===) at start
+  of main() and run summary (pitcher count + lineup players) after Done.
+
+Next: Chunk C — presentation polish.
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

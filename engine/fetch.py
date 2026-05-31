@@ -14,8 +14,13 @@ def fetch_games(date_str: str | None = None) -> list[dict]:
     """Today's (or a given date's) games, shaped for the `games` table.
 
     date_str: optional 'YYYY-MM-DD'. Defaults to today's slate.
+    Returns [] on any statsapi outage so the pipeline degrades gracefully.
     """
-    schedule = statsapi.schedule(date=date_str) if date_str else statsapi.schedule()
+    try:
+        schedule = statsapi.schedule(date=date_str) if date_str else statsapi.schedule()
+    except Exception as exc:
+        print(f"  WARNING: statsapi.schedule() failed in fetch_games: {exc}")
+        return []
     games = []
     for g in schedule:
         games.append(
@@ -39,7 +44,11 @@ def _fetch_starters_today() -> tuple[dict, ...]:
     baseline (which needs game_id per pitcher) derive from. lru_cached so one
     pipeline run hits the schedule + lookups only once.
     """
-    schedule = statsapi.schedule()
+    try:
+        schedule = statsapi.schedule()
+    except Exception as exc:
+        print(f"  WARNING: statsapi.schedule() failed in _fetch_starters_today: {exc}")
+        return ()
     records: list[dict] = []
     seen: set[int] = set()
     current_year = date.today().year
@@ -133,7 +142,11 @@ def fetch_lineups(date_str: str | None = None) -> list[dict]:
         player_id, full_name, team, position, bats, throws,
         game_id, batting_order (1-9), home_away ('home' | 'away').
     """
-    schedule = statsapi.schedule(date=date_str) if date_str else statsapi.schedule()
+    try:
+        schedule = statsapi.schedule(date=date_str) if date_str else statsapi.schedule()
+    except Exception as exc:
+        print(f"  WARNING: statsapi.schedule() failed in fetch_lineups: {exc} -- skipping hitter props")
+        return []
 
     records: list[dict] = []
     for g in schedule:

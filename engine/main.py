@@ -12,7 +12,7 @@ Logs to stdout only (GitHub Actions captures it). Never writes log rows to the D
 """
 
 import traceback
-from datetime import date
+from datetime import date, datetime
 
 import pybaseball
 
@@ -58,6 +58,8 @@ def _blend(base_rows: list[dict], model_rows: list[dict]) -> list[dict]:
 
 def main() -> None:
     try:
+        print(f"=== pipeline run {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC ===")
+
         # ── grade yesterday before projecting today ───────────────────────────
         print("Grading yesterday's pitcher projections...")
         game_logs = grade.grade_yesterday()
@@ -206,6 +208,8 @@ def main() -> None:
         print(f"  updated {n_conf} confidence scores")
 
         print("Done.")
+        print(f"=== run complete: {n_proj} pitcher projections, "
+              f"{len(lineup_players) if lineup_players else 0} lineup players ===")
     except Exception:
         # Surface the full traceback to stdout (Actions captures it) and let the
         # run fail — a failed Actions run emails a notification automatically.
