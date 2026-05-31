@@ -519,23 +519,24 @@ function TrackerFilterBar({
 }
 
 function TrackerRow({ r, zebra }: { r: TrackerResult; zebra: boolean }) {
-  // ▲ slate-300, ▼ slate-500 per spec — subtle, the only color indicator.
+  // ▲ slate-300, ▼ slate-500 -- subtle, the only color indicator.
   const arrow =
     r.direction === "over" ? (
       <span className="text-slate-300">▲</span>
     ) : (
       <span className="text-slate-500">▼</span>
     );
-  // Evenly spaced 6-column grid: Player | Prop | Proj | Actual | ▲▼ | Date.
+  // 5-column grid (was 6): Player | Proj | Actual | ▲▼ | Date.
+  // Prop is implicit from the section header (TrackerByProp groups rows by
+  // prop_type) so listing it on every row was redundant.
   return (
     <li
       className={[
-        "grid grid-cols-6 items-center gap-3 px-5 py-3 text-sm tabular-nums",
+        "grid grid-cols-5 items-center gap-3 px-5 py-3 text-sm tabular-nums",
         zebra ? "bg-slate-900/30" : "",
       ].join(" ")}
     >
       <span className="truncate font-medium text-slate-200">{r.playerName}</span>
-      <span className="truncate text-xs text-slate-500">{PROP_LABELS[r.propType]}</span>
       <span className="text-right text-slate-400">{fmt(r.projection)}</span>
       <span className="text-right text-slate-400">{fmt(r.actual)}</span>
       <span className="text-center text-base">{arrow}</span>
@@ -567,10 +568,9 @@ function TrackerSection({
 
       <TrackerFilterBar active={filter} setActive={setFilter} results={results} />
 
-      {/* column legend — six evenly-spaced columns matching TrackerRow */}
-      <div className="mb-2 grid grid-cols-6 gap-3 px-5 text-[10px] uppercase tracking-wider text-slate-500">
+      {/* column legend — five evenly-spaced columns matching TrackerRow */}
+      <div className="mb-2 grid grid-cols-5 gap-3 px-5 text-[10px] uppercase tracking-wider text-slate-500">
         <span>Player</span>
-        <span>Prop</span>
         <span className="text-right">Proj</span>
         <span className="text-right">Actual</span>
         <span className="text-center">vs proj</span>
@@ -582,60 +582,56 @@ function TrackerSection({
           No tracker rows for this prop.
         </div>
       ) : (
-        <TrackerByGame results={filtered} />
+        <TrackerByProp results={filtered} />
       )}
     </>
   );
 }
 
-// Group tracker results by gameId in newest-first iteration order, then
-// render each game as its own card. Mirrors the Betting Edge section's
-// game-card layout but with the tracker-specific row content and a muted
-// over/under tally instead of a hit-rate badge.
-function TrackerByGame({ results }: { results: TrackerResult[] }) {
-  const byGame = useMemo(() => {
-    const m = new Map<
-      number,
-      { matchup: string; date: string; rows: TrackerResult[] }
-    >();
-    for (const r of results) {
-      const g = m.get(r.gameId);
-      if (g) g.rows.push(r);
-      else m.set(r.gameId, { matchup: r.matchup, date: r.gameDate, rows: [r] });
-    }
-    return [...m.entries()];
+// Group tracker results by prop_type. Within each group, rows stay in
+// newest-first / alphabetical-by-player order from the upstream sort.
+// Each group is its own card with a labeled header that mirrors the
+// filter-chip naming -- so the eye lands on "Hits" or "Total Bases" first,
+// then scans the players within. Filter chips above still narrow to a
+// single prop; "All" shows every group.
+function TrackerByProp({ results }: { results: TrackerResult[] }) {
+  const byProp = useMemo(() => {
+    // Preserve TRACKER_PROPS order so groups always appear in the same
+    // sequence regardless of the upstream sort.
+    const m = new Map<PropType, TrackerResult[]>();
+    for (const pt of TRACKER_PROPS) m.set(pt, []);
+    for (const r of results) m.get(r.propType)?.push(r);
+    return [...m.entries()].filter(([, rows]) => rows.length > 0);
   }, [results]);
 
   return (
     <div className="space-y-4">
-      {byGame.map(([gid, g]) => {
-        const over = g.rows.filter((r) => r.direction === "over").length;
-        const under = g.rows.length - over;
-        const overPct = Math.round((over / g.rows.length) * 100);
+      {byProp.map(([propType, rows]) => {
+        const over = rows.filter((r) => r.direction === "over").length;
+        const under = rows.length - over;
+        const overPct = Math.round((over / rows.length) * 100);
         const underPct = 100 - overPct;
         return (
           <section
-            key={gid}
+            key={propType}
             className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
           >
             <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-5 py-3">
-              <div className="min-w-0">
-                <h3 className="truncate font-semibold text-slate-200">
-                  {g.matchup}
-                </h3>
-                <p className="text-xs text-slate-500">{formatShortDate(g.date)}</p>
-              </div>
-              {/* Per-game over/under split, slate-only to keep the stat-tracker
-                  feel. No hit-rate badge -- this isn't a betting result. */}
+              <h3 className="truncate font-semibold text-slate-200">
+                {PROP_LABELS[propType]}
+              </h3>
+              {/* Per-prop over/under split, slate-only -- same calibration
+                  read as the per-prop card above, but for the current
+                  filtered set. */}
               <span className="shrink-0 text-xs tabular-nums text-slate-500">
                 <span className="text-slate-300">▲ {overPct}%</span>
                 <span className="mx-1 text-slate-600">/</span>
                 <span className="text-slate-400">▼ {underPct}%</span>
-                <span className="ml-1.5 text-slate-600">({g.rows.length})</span>
+                <span className="ml-1.5 text-slate-600">({rows.length})</span>
               </span>
             </div>
             <ul>
-              {g.rows.map((r, i) => (
+              {rows.map((r, i) => (
                 <TrackerRow
                   key={`${r.playerId}-${r.propType}-${r.gameDate}-${i}`}
                   r={r}
