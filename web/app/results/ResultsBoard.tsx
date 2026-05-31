@@ -166,17 +166,17 @@ function BettingPerPropCard({
   results: EvaluatedResult[];
   trackedFrom: Partial<Record<PropType, string>>;
 }) {
-  const rows = [...BETTING_PITCHER_PROPS, ...BETTING_HITTER_PROPS]
-    .map((pt) => {
-      const sub = results.filter((r) => r.propType === pt);
-      const correct = sub.filter((r) => r.verdict === "correct").length;
-      const wrong = sub.filter((r) => r.verdict === "wrong").length;
-      const skip = sub.filter((r) => r.verdict === "skip").length;
-      return { propType: pt, correct, wrong, skip, evaluable: correct + wrong };
-    })
-    .filter((r) => r.evaluable + r.skip > 0);
-
-  if (rows.length === 0) return null;
+  // Show every betting prop, even when 0 rows in the window. A missing prop
+  // is much more informative than a missing row -- the user can see whether
+  // the data gap is "no lines yet" (no tracked_from) or "tracked but no
+  // graded actuals yet in this window" (tracked_from present, 0/0 rate).
+  const rows = [...BETTING_PITCHER_PROPS, ...BETTING_HITTER_PROPS].map((pt) => {
+    const sub = results.filter((r) => r.propType === pt);
+    const correct = sub.filter((r) => r.verdict === "correct").length;
+    const wrong = sub.filter((r) => r.verdict === "wrong").length;
+    const skip = sub.filter((r) => r.verdict === "skip").length;
+    return { propType: pt, correct, wrong, skip, evaluable: correct + wrong };
+  });
 
   return (
     <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/50">
@@ -186,32 +186,58 @@ function BettingPerPropCard({
         </h3>
       </div>
       <ul className="divide-y divide-slate-800">
-        {rows.map((r) => (
-          <li
-            key={r.propType}
-            className="flex items-center justify-between px-5 py-2.5 text-sm"
-          >
-            <span className="flex flex-col items-start gap-0.5">
-              <span className="text-slate-200">{PROP_LABELS[r.propType]}</span>
-              {trackedFrom[r.propType] && (
-                <span className="text-[10px] uppercase tracking-wide text-slate-500">
-                  tracked from {formatTrackedFrom(trackedFrom[r.propType]!)}
+        {rows.map((r) => {
+          const empty = r.evaluable + r.skip === 0;
+          const tracked = trackedFrom[r.propType];
+          return (
+            <li
+              key={r.propType}
+              className="flex items-center justify-between px-5 py-3 text-sm"
+            >
+              <span className="flex flex-col items-start gap-0.5">
+                <span className={empty ? "text-slate-500" : "text-slate-200"}>
+                  {PROP_LABELS[r.propType]}
                 </span>
-              )}
-            </span>
-            <div className="flex items-center gap-3 tabular-nums">
-              <span className="text-xs text-slate-500">
-                {r.correct}/{r.evaluable}
-                {r.skip > 0 && (
-                  <span className="ml-1 text-slate-600">({r.skip} skip)</span>
+                {tracked ? (
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                    tracked from {formatTrackedFrom(tracked)}
+                  </span>
+                ) : (
+                  <span className="text-[10px] uppercase tracking-wide text-slate-600">
+                    no lines yet
+                  </span>
                 )}
               </span>
-              <span className={`w-12 text-right font-semibold ${rateColor(r.correct, r.evaluable)}`}>
-                {pct(r.correct, r.evaluable)}
-              </span>
-            </div>
-          </li>
-        ))}
+              <div className="flex items-center gap-3 tabular-nums">
+                {empty ? (
+                  <>
+                    <span className="text-xs text-slate-600">
+                      0/0
+                      {r.skip > 0 && (
+                        <span className="ml-1 text-slate-600">({r.skip} skip)</span>
+                      )}
+                    </span>
+                    <span className="w-12 text-right font-semibold text-slate-600">—</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs text-slate-500">
+                      {r.correct}/{r.evaluable}
+                      {r.skip > 0 && (
+                        <span className="ml-1 text-slate-600">({r.skip} skip)</span>
+                      )}
+                    </span>
+                    <span
+                      className={`w-12 text-right font-semibold ${rateColor(r.correct, r.evaluable)}`}
+                    >
+                      {pct(r.correct, r.evaluable)}
+                    </span>
+                  </>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -312,9 +338,9 @@ function LeanIcon({ lean }: { lean: EvaluatedResult["lean"] }) {
 
 function BettingRow({ r }: { r: EvaluatedResult }) {
   return (
-    <li className="grid grid-cols-12 items-center gap-2 px-4 py-2.5 text-sm">
-      <div className="col-span-4 min-w-0 truncate">
-        <div className="truncate text-slate-100">{r.playerName}</div>
+    <li className="grid grid-cols-12 items-center gap-2 px-4 py-3 text-sm">
+      <div className="col-span-4 min-w-0">
+        <div className="truncate font-medium text-slate-100">{r.playerName}</div>
         <div className="truncate text-xs text-slate-500">{PROP_LABELS[r.propType]}</div>
       </div>
       <div className="col-span-5 flex items-center justify-end gap-3 tabular-nums">
@@ -365,23 +391,15 @@ function TrackerOverallCard({ results }: { results: TrackerResult[] }) {
   const label = calibrationLabel(over, under);
 
   return (
-    <div className="mb-5 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-sm font-medium uppercase tracking-wider text-slate-400">
-          Calibration
-        </h3>
-        <div className="flex items-baseline gap-2 text-2xl font-bold tabular-nums text-slate-200">
-          <span>▲ {overPct}%</span>
-          <span className="text-slate-600">·</span>
-          <span className="text-slate-400">▼ {underPct}%</span>
-        </div>
+    <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/50 p-6">
+      <div className="flex items-baseline justify-center gap-6 text-3xl font-bold tabular-nums">
+        <span className="text-slate-200">▲ {overPct}% over</span>
+        <span className="text-slate-400">▼ {underPct}% under</span>
       </div>
-      <p className="mt-2 text-sm text-slate-400">
-        <span className="text-slate-300">{label}</span>
-        <span className="mx-1.5 text-slate-600">·</span>
-        <span className="tabular-nums text-slate-500">{total}</span> evaluated
-        <span className="mx-1.5 text-slate-600">·</span>
-        <span className="text-slate-600">over = actual &gt; projection</span>
+      <p className="mt-3 text-center text-xs text-slate-500">
+        {label}
+        <span className="mx-1.5 text-slate-700">·</span>
+        <span className="tabular-nums">{total}</span> samples
       </p>
     </div>
   );
@@ -425,31 +443,34 @@ function TrackerPerPropCard({
           const overPct = Math.round((r.over / r.total) * 100);
           const underPct = 100 - overPct;
           return (
-            <li
-              key={r.propType}
-              className="flex items-start justify-between px-5 py-2.5 text-sm"
-            >
-              <span className="flex flex-col items-start gap-0.5">
-                <span className="text-slate-200">{PROP_LABELS[r.propType]}</span>
-                {trackedFrom[r.propType] && (
-                  <span className="text-[10px] uppercase tracking-wide text-slate-500">
-                    tracked from {formatTrackedFrom(trackedFrom[r.propType]!)}
-                  </span>
-                )}
-              </span>
-              <div className="text-right text-xs tabular-nums">
-                <div className="text-slate-400">
-                  proj {r.avgProj.toFixed(2)}
-                  <span className="mx-1 text-slate-600">·</span>
-                  actual {r.avgActual.toFixed(2)}
-                </div>
-                <div className="text-slate-500">
-                  <span className="text-slate-200">▲ {overPct}%</span>
-                  <span className="mx-1 text-slate-600">/</span>
-                  <span className="text-slate-400">▼ {underPct}%</span>
-                  <span className="ml-1.5 text-slate-600">({r.total})</span>
-                </div>
+            <li key={r.propType} className="px-5 py-4 text-sm">
+              {/* Line 1: prop name + sample count */}
+              <div className="flex items-baseline justify-between">
+                <span className="font-medium text-slate-200">
+                  {PROP_LABELS[r.propType]}
+                </span>
+                <span className="text-xs tabular-nums text-slate-500">
+                  {r.total} samples
+                </span>
               </div>
+              {/* Line 2: avg proj / actual + over/under split */}
+              <div className="mt-1.5 flex items-baseline justify-between text-xs tabular-nums">
+                <span className="text-slate-400">
+                  proj {r.avgProj.toFixed(2)}
+                  <span className="mx-1.5 text-slate-600">·</span>
+                  actual {r.avgActual.toFixed(2)}
+                </span>
+                <span>
+                  <span className="text-slate-200">▲ {overPct}%</span>
+                  <span className="mx-1.5 text-slate-600">/</span>
+                  <span className="text-slate-400">▼ {underPct}%</span>
+                </span>
+              </div>
+              {trackedFrom[r.propType] && (
+                <div className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">
+                  tracked from {formatTrackedFrom(trackedFrom[r.propType]!)}
+                </div>
+              )}
             </li>
           );
         })}
@@ -484,8 +505,10 @@ function TrackerFilterBar({
           className={[
             "shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
             active === c.key
-              ? "bg-slate-200 text-slate-950"   // muted slate, not emerald
-              : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100",
+              // Muted slate active state — Model Tracker stays a "stat
+              // tracker" visual, not a betting result.
+              ? "bg-slate-700 text-slate-100"
+              : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200",
           ].join(" ")}
         >
           {c.label}
@@ -495,30 +518,30 @@ function TrackerFilterBar({
   );
 }
 
-function TrackerRow({ r }: { r: TrackerResult }) {
+function TrackerRow({ r, zebra }: { r: TrackerResult; zebra: boolean }) {
+  // ▲ slate-300, ▼ slate-500 per spec — subtle, the only color indicator.
   const arrow =
     r.direction === "over" ? (
-      <span className="text-slate-200">▲</span>
+      <span className="text-slate-300">▲</span>
     ) : (
-      <span className="text-slate-400">▼</span>
+      <span className="text-slate-500">▼</span>
     );
+  // Evenly spaced 6-column grid: Player | Prop | Proj | Actual | ▲▼ | Date.
   return (
-    <li className="grid grid-cols-12 items-center gap-2 px-4 py-2.5 text-sm">
-      <div className="col-span-4 min-w-0 truncate">
-        <div className="truncate text-slate-100">{r.playerName}</div>
-        <div className="truncate text-xs text-slate-500">{PROP_LABELS[r.propType]}</div>
-      </div>
-      <div className="col-span-5 flex items-center justify-end gap-3 tabular-nums">
-        <span className="text-xs text-slate-500">
-          <span className="text-slate-400">{fmt(r.projection)}</span>
-          <span className="mx-1 text-slate-600">/</span>
-          <span className="text-slate-200">{fmt(r.actual)}</span>
-        </span>
-        <span className="w-4 text-center">{arrow}</span>
-      </div>
-      <div className="col-span-3 text-right text-xs text-slate-500">
+    <li
+      className={[
+        "grid grid-cols-6 items-center gap-3 px-5 py-3 text-sm tabular-nums",
+        zebra ? "bg-slate-900/30" : "",
+      ].join(" ")}
+    >
+      <span className="truncate font-medium text-slate-200">{r.playerName}</span>
+      <span className="truncate text-xs text-slate-500">{PROP_LABELS[r.propType]}</span>
+      <span className="text-right text-slate-400">{fmt(r.projection)}</span>
+      <span className="text-right text-slate-400">{fmt(r.actual)}</span>
+      <span className="text-center text-base">{arrow}</span>
+      <span className="truncate text-right text-xs text-slate-500">
         {formatShortDate(r.gameDate)}
-      </div>
+      </span>
     </li>
   );
 }
@@ -544,14 +567,14 @@ function TrackerSection({
 
       <TrackerFilterBar active={filter} setActive={setFilter} results={results} />
 
-      {/* column legend */}
-      <div className="mb-2 grid grid-cols-12 gap-2 px-4 text-[10px] uppercase tracking-wider text-slate-500">
-        <span className="col-span-4">Player / Prop</span>
-        <div className="col-span-5 flex justify-end gap-3">
-          <span>Proj / Actual</span>
-          <span className="w-4 text-center">vs proj</span>
-        </div>
-        <span className="col-span-3 text-right">Date</span>
+      {/* column legend — six evenly-spaced columns matching TrackerRow */}
+      <div className="mb-2 grid grid-cols-6 gap-3 px-5 text-[10px] uppercase tracking-wider text-slate-500">
+        <span>Player</span>
+        <span>Prop</span>
+        <span className="text-right">Proj</span>
+        <span className="text-right">Actual</span>
+        <span className="text-center">vs proj</span>
+        <span className="text-right">Date</span>
       </div>
 
       {filtered.length === 0 ? (
@@ -559,11 +582,14 @@ function TrackerSection({
           No tracker rows for this prop.
         </div>
       ) : (
-        <ul className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50">
+        // Flat list, no game-card grouping. Alternating row backgrounds via
+        // the `zebra` prop so the eye can track wide rows without rules.
+        <ul className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50">
           {filtered.map((r, i) => (
             <TrackerRow
               key={`${r.playerId}-${r.propType}-${r.gameDate}-${i}`}
               r={r}
+              zebra={i % 2 === 1}
             />
           ))}
         </ul>
@@ -697,16 +723,21 @@ export default function ResultsBoard({
         </div>
       )}
 
-      {/* ── divider ─────────────────────────────────────────────────────── */}
-      <div className="my-10 border-t border-slate-800" />
+      {/* ── section band — border with centered label cutting through it ─ */}
+      <div className="relative my-12">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t border-slate-800" />
+        </div>
+        <div className="relative flex justify-center">
+          <span className="bg-slate-950 px-4 text-xs uppercase tracking-widest text-slate-500">
+            Model Tracker
+          </span>
+        </div>
+      </div>
 
-      {/* ── Section 2: Model Tracker ────────────────────────────────────── */}
-      <header className="mb-4">
-        <h2 className="text-lg font-semibold text-slate-100">Model Tracker</h2>
-        <p className="text-xs text-slate-500">
-          Actual outcomes vs model projection · calibration, not a betting rate
-        </p>
-      </header>
+      <p className="mb-6 text-center text-xs text-slate-500">
+        Actual outcomes vs model projection — calibration, not a betting rate
+      </p>
 
       <TrackerSection results={trackerResults} trackedFrom={trackedFrom} />
     </>

@@ -245,15 +245,29 @@ def _hitter_result(box: dict, player_id: int) -> dict | None:
             continue
 
         # MLB API uses 'hitByPitch' (singular) for batting-side HBP.
+        #
+        # totalBases is NOT in the boxscore batting object (verified via probe
+        # 2026-05-31 -- batting.get('totalBases') returns None even for a
+        # batter with one double). We must compute it ourselves:
+        #   total_bases = hits + doubles + 2*triples + 3*home_runs
+        # which is algebraically:
+        #   singles*1 + doubles*2 + triples*3 + home_runs*4
+        # where singles = hits - doubles - triples - home_runs.
+        hits = int(batting.get("hits", 0))
+        doubles = int(batting.get("doubles", 0))
+        triples = int(batting.get("triples", 0))
+        home_runs = int(batting.get("homeRuns", 0))
+        total_bases = hits + doubles + 2 * triples + 3 * home_runs
+
         return {
             "home_away":          side,
-            "actual_hits":        int(batting.get("hits", 0)),
-            "actual_total_bases": int(batting.get("totalBases", 0)),
+            "actual_hits":        hits,
+            "actual_total_bases": total_bases,
             "actual_rbis":        int(batting.get("rbi", 0)),
             "actual_runs":        int(batting.get("runs", 0)),
-            "actual_home_runs":   int(batting.get("homeRuns", 0)),
-            "doubles":            int(batting.get("doubles", 0)),
-            "triples":            int(batting.get("triples", 0)),
+            "actual_home_runs":   home_runs,
+            "doubles":            doubles,
+            "triples":            triples,
             "walks":              int(batting.get("baseOnBalls", 0)),
             "hit_by_pitch":       int(batting.get("hitByPitch", 0)),
             "stolen_bases":       int(batting.get("stolenBases", 0)),

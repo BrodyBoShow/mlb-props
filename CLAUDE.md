@@ -244,6 +244,55 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Results page — Total Bases bug fix + UI polish:
+- TOTAL BASES BUG (silent since day one): the MLB boxscore batting
+  object does NOT carry a totalBases field -- only atBats, hits,
+  doubles, triples, homeRuns, rbi, baseOnBalls, etc. Verified via
+  probe 2026-05-31: batting.get('totalBases') returns None even for a
+  batter with a double. grade.py was writing actual_total_bases=0 for
+  every hitter every game; the Model Tracker surfaced this as
+  proj 1.36 / actual 0.00 / under 100% (the betting view conflated it
+  with calibrated under-leans so the bug was invisible). Fixed:
+  grade._hitter_result now computes
+    total_bases = hits + doubles + 2*triples + 3*home_runs
+  from components the boxscore DOES carry. New grading runs are
+  correct; historical rows can be backfilled via this SQL (only
+  recomputes rows where Phase 2's component columns are populated --
+  older rows stay at 0):
+    update player_game_logs
+       set actual_total_bases =
+             actual_hits + doubles + 2 * triples + 3 * actual_home_runs
+     where player_type = 'hitter'
+       and doubles is not null
+       and triples is not null;
+
+- BETTING PER-PROP CARD now shows all 5 betting props ALWAYS, even
+  when 0 rows in the window. Empty rows render with dimmed slate-500
+  label, '0/0', '—' rate, and either 'tracked from {date}' or
+  'no lines yet' depending on whether the prop has any line history.
+  A missing prop is much more informative than a missing row -- the
+  user can see immediately whether the data gap is upstream
+  (ParlayAPI not returning outs_recorded) or just a sparse window
+  (fantasy_score not yet graded).
+
+- UI POLISH (per spec):
+    * Betting per-prop rows: py-3 (was py-2.5).
+    * Betting result rows: py-3, player name font-medium.
+    * Tracker calibration card: simplified to two big numbers
+      ('▲ N% over · ▼ N% under') with the label centered below.
+      Removed the 'over = actual > projection' explainer text.
+    * Tracker per-prop card: two-line entries, prop name + sample
+      count on top, 'proj X · actual Y' + 'N% / N%' on bottom,
+      tracked-from beneath. py-4 spacing.
+    * Tracker result rows: 6-column grid (Player | Prop | Proj |
+      Actual | ▲▼ | Date) with bg-slate-900/30 zebra striping on
+      odd rows. ▲ slate-300, ▼ slate-500 — the only color indicator.
+    * Tracker filter chips: muted slate-700 active state (not
+      emerald) so the section reads as 'stat tracker', not 'betting'.
+    * Section divider replaced with a band — border-t with the label
+      'MODEL TRACKER' centered, using bg-slate-950 to cut through.
+      Matches the body bg from layout.tsx.
+
 Results page — two-section redesign (Betting Edge + Model Tracker):
 - /results now renders both sections inline, no tab switching:
 
