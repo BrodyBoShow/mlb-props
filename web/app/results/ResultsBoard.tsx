@@ -284,14 +284,21 @@ function BettingFilterBar({
 
 type GameKey = number | "all";
 
-function GameFilter({
+// Generic over EvaluatedResult / TrackerResult -- both carry gameId,
+// matchup, and gameDate. The accentColor prop lets the Betting Edge
+// section keep its emerald focus ring while the Model Tracker section
+// uses a muted slate ring (consistent with its 'stat tracker, not
+// betting' visual identity).
+function GameFilter<T extends { gameId: number; matchup: string; gameDate: string }>({
   active,
   setActive,
   results,
+  accent = "emerald",
 }: {
   active: GameKey;
   setActive: (k: GameKey) => void;
-  results: EvaluatedResult[];
+  results: T[];
+  accent?: "emerald" | "slate";
 }) {
   // Preserve first-encounter order (newest-first upstream).
   const seen = new Map<number, { matchup: string; date: string }>();
@@ -300,6 +307,9 @@ function GameFilter({
       seen.set(r.gameId, { matchup: r.matchup, date: r.gameDate });
     }
   }
+
+  const focusBorder =
+    accent === "emerald" ? "focus:border-emerald-500" : "focus:border-slate-500";
 
   return (
     <div className="mb-4">
@@ -311,7 +321,7 @@ function GameFilter({
         onChange={(e) =>
           setActive(e.target.value === "all" ? "all" : Number(e.target.value))
         }
-        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 focus:outline-none"
+        className={`mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 focus:outline-none ${focusBorder}`}
       >
         <option value="all">All games ({results.length} rows)</option>
         {[...seen.entries()].map(([gid, info]) => (
@@ -555,11 +565,15 @@ function TrackerSection({
   trackedFrom: Partial<Record<PropType, string>>;
 }) {
   const [filter, setFilter] = useState<TrackerFilter>("all");
+  const [gameFilter, setGameFilter] = useState<GameKey>("all");
 
+  // Apply prop filter first, then game filter -- independent and composable.
   const filtered = useMemo(() => {
-    if (filter === "all") return results;
-    return results.filter((r) => r.propType === filter);
-  }, [filter, results]);
+    let r = results;
+    if (filter !== "all") r = r.filter((x) => x.propType === filter);
+    if (gameFilter !== "all") r = r.filter((x) => x.gameId === gameFilter);
+    return r;
+  }, [filter, gameFilter, results]);
 
   return (
     <>
@@ -567,6 +581,12 @@ function TrackerSection({
       <TrackerPerPropCard results={results} trackedFrom={trackedFrom} />
 
       <TrackerFilterBar active={filter} setActive={setFilter} results={results} />
+      <GameFilter
+        active={gameFilter}
+        setActive={setGameFilter}
+        results={results}
+        accent="slate"
+      />
 
       {/* column legend — five evenly-spaced columns matching TrackerRow */}
       <div className="mb-2 grid grid-cols-5 gap-3 px-5 text-[10px] uppercase tracking-wider text-slate-500">
