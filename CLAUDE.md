@@ -244,6 +244,14 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+scikit-learn dependency (engine/requirements.txt):
+- XGBoost 3.x no longer bundles a fallback sklearn shim. Instantiating
+  XGBRegressor raises "ImportError: sklearn needs to be installed in
+  order to use this module" without scikit-learn in the env.
+- Pinned scikit-learn==1.8.0 (matches local). Earlier runs only failed
+  on this once the XGBoost path actually executed -- i.e. after the
+  b636a28 + 201729c fixes finally let train() reach model.fit().
+
 Workflow stale-code diagnostic (.github/workflows/refresh.yml):
 - Investigation found nothing in the workflow that could serve stale .py
   files: actions/checkout@v4 runs against the default branch with no ref
