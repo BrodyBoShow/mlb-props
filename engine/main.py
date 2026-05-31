@@ -119,21 +119,26 @@ def main() -> None:
             n = db.upsert_projections(rows)
             print(f"  upserted {n} {label} projections")
 
-        # ── betting lines (most fragile source — isolated, graceful fallback) ──
-        print("Fetching pitcher prop lines from ParlayAPI...")
-        name_to_id = {s["full_name"]: s["player_id"] for s in starters if s.get("full_name")}
-        line_rows = lines.fetch_pitcher_lines(name_to_id, date.today())
-        n_lines = db.upsert_lines(line_rows)
-        print(f"  upserted {n_lines} lines across {len(lines.BOOKMAKERS)} bookmakers")
-
         all_projections = projections + other_prop_rows
 
-        # ── edges (de-vig market vs model; sparse coverage degrades gracefully) ─
-        print("Computing edges...")
-        all_lines = db.get_lines_for_date(date.today().strftime("%Y-%m-%d"))
-        edge_rows = edge.compute_edges(all_projections, all_lines)
-        n_edges = db.upsert_edges(edge_rows)
-        print(f"  computed {n_edges} edges")
+        # ── betting lines + edges (most fragile source — fully isolated) ───────
+        # Per CLAUDE.md, betting data must never break projections. This whole
+        # block is wrapped so any flakiness (API down, a missing lines/edges
+        # table before its migration is run) logs and continues to Done.
+        try:
+            print("Fetching pitcher prop lines from ParlayAPI...")
+            name_to_id = {s["full_name"]: s["player_id"] for s in starters if s.get("full_name")}
+            line_rows = lines.fetch_pitcher_lines(name_to_id, date.today())
+            n_lines = db.upsert_lines(line_rows)
+            print(f"  upserted {n_lines} lines across {len(lines.BOOKMAKERS)} bookmakers")
+
+            print("Computing edges...")
+            all_lines = db.get_lines_for_date(date.today().strftime("%Y-%m-%d"))
+            edge_rows = edge.compute_edges(all_projections, all_lines)
+            n_edges = db.upsert_edges(edge_rows)
+            print(f"  computed {n_edges} edges")
+        except Exception as exc:
+            print(f"  betting layer failed ({exc}) -- skipping lines/edges, projections unaffected")
 
         # ── calibration confidence scores ─────────────────────────────────────
         print("Computing calibration confidence scores...")
