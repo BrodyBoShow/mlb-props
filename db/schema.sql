@@ -1,11 +1,12 @@
 -- players: one row per MLB player, refreshed each run
 create table if not exists players (
-    player_id  integer primary key,   -- official MLBAM id
-    full_name  text not null,
-    team       text,
-    position   text,
-    bats       text,                  -- L, R, or S (switch)
-    throws     text                   -- L or R
+    player_id   integer primary key,   -- official MLBAM id
+    full_name   text not null,
+    team        text,
+    position    text,
+    bats        text,                  -- L, R, or S (switch)
+    throws      text,                  -- L or R
+    player_type text default 'pitcher' -- 'pitcher' | 'hitter'
 );
 
 -- games: one row per scheduled game
@@ -26,11 +27,19 @@ create table if not exists player_game_logs (
     player_id         integer references players(player_id),
     game_id           integer references games(game_id),
     game_date         date,
+    player_type       text default 'pitcher',  -- 'pitcher' | 'hitter'
+    -- pitcher actuals
     actual_strikeouts    integer,
     actual_hits_allowed  integer,
     actual_walks         integer,
     actual_earned_runs   integer,
     actual_outs_recorded integer,
+    -- hitter actuals
+    actual_hits        integer,
+    actual_total_bases integer,
+    actual_rbis        integer,
+    actual_runs        integer,
+    actual_home_runs   integer,
     home_away         text,        -- 'home' | 'away'
     opp_k_rate        numeric,     -- opposing team K% as batters (0–1)
     days_rest         integer,

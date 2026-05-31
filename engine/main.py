@@ -59,10 +59,15 @@ def _blend(base_rows: list[dict], model_rows: list[dict]) -> list[dict]:
 def main() -> None:
     try:
         # ── grade yesterday before projecting today ───────────────────────────
-        print("Grading yesterday's projections...")
+        print("Grading yesterday's pitcher projections...")
         game_logs = grade.grade_yesterday()
         n_logs = db.upsert_game_logs(game_logs)
-        print(f"  upserted {n_logs} game log rows")
+        print(f"  upserted {n_logs} pitcher game log rows")
+
+        print("Grading yesterday's hitter projections...")
+        hitter_logs = grade.grade_hitters_yesterday()
+        n_hlogs = db.upsert_game_logs(hitter_logs)
+        print(f"  upserted {n_hlogs} hitter game log rows")
 
         print("Fetching today's games...")
         games = fetch.fetch_games()
@@ -121,14 +126,50 @@ def main() -> None:
 
         all_projections = projections + other_prop_rows
 
+        # name_to_id seeds with pitchers; hitters are added below if lineups posted.
+        name_to_id = {s["full_name"]: s["player_id"] for s in starters if s.get("full_name")}
+
+        # ── hitter props (requires confirmed lineups; graceful skip otherwise) ─
+        # Lineups post ~60-90 min before first pitch. The 8 AM cron typically
+        # runs before lineups -> skip; the 1 PM cron captures them.
+        print("Fetching lineup players...")
+        lineup_players = fetch.fetch_lineups()
+        if not lineup_players:
+            print("  no confirmed lineups yet — skipping hitter props")
+        else:
+            print(f"  {len(lineup_players)} lineup players confirmed")
+            db.upsert_players([
+                {k: v for k, v in p.items()
+                 if k in ("player_id", "full_name", "team", "position", "bats", "throws")}
+                for p in lineup_players
+            ])
+            for builder, label in [
+                (baseline.build_hitter_hits_projections,        "hitter_hits"),
+                (baseline.build_hitter_total_bases_projections, "hitter_total_bases"),
+                (baseline.build_hitter_rbis_projections,        "hitter_rbis"),
+                (baseline.build_hitter_runs_projections,        "hitter_runs"),
+                (baseline.build_hitter_home_runs_projections,   "hitter_home_runs"),
+            ]:
+                print(f"Building {label} projections...")
+                rows = builder(lineup_players)
+                all_projections.extend(rows)
+                n = db.upsert_projections(rows)
+                print(f"  upserted {n} {label} projections")
+
+            # Include hitters in the line fetch so edges cover them too.
+            hitter_name_to_id = {
+                p["full_name"]: p["player_id"]
+                for p in lineup_players if p.get("full_name")
+            }
+            name_to_id.update(hitter_name_to_id)
+
         # ── betting lines + edges (most fragile source — fully isolated) ───────
         # Per CLAUDE.md, betting data must never break projections. This whole
         # block is wrapped so any flakiness (API down, a missing lines/edges
         # table before its migration is run) logs and continues to Done.
         try:
-            print("Fetching pitcher prop lines from ParlayAPI...")
-            name_to_id = {s["full_name"]: s["player_id"] for s in starters if s.get("full_name")}
-            line_rows = lines.fetch_pitcher_lines(name_to_id, date.today())
+            print("Fetching prop lines from ParlayAPI...")
+            line_rows = lines.fetch_prop_lines(name_to_id, date.today())
             n_lines = db.upsert_lines(line_rows)
             print(f"  upserted {n_lines} lines across {len(lines.BOOKMAKERS)} bookmakers")
 

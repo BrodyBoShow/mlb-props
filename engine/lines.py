@@ -25,13 +25,20 @@ except ImportError:
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 
-# Our prop_type -> ParlayAPI market key.
+# Our prop_type -> ParlayAPI market key. Pitcher props + hitter props.
 PROP_TO_MARKET = {
+    # pitcher
     "strikeouts":    "player_strikeouts",
     "hits_allowed":  "player_hits_allowed",
     "walks":         "player_walks",
     "earned_runs":   "player_earned_runs",
     "outs_recorded": "player_pitcher_outs",
+    # hitter
+    "hitter_hits":        "player_hits",
+    "hitter_total_bases": "player_total_bases",
+    "hitter_rbis":        "player_rbis",
+    "hitter_runs":        "player_runs",
+    "hitter_home_runs":   "player_home_runs",
 }
 MARKET_TO_PROP = {v: k for k, v in PROP_TO_MARKET.items()}
 
@@ -40,13 +47,14 @@ BOOKMAKERS = ["pinnacle", "draftkings", "fanduel",
               "prizepicks", "underdog", "betr", "sleeper"]
 
 
-def fetch_pitcher_lines(
-    name_to_id: dict[str, int],   # full_name -> player_id, built from starters
+def fetch_prop_lines(
+    name_to_id: dict[str, int],   # full_name -> player_id (pitchers + hitters)
     game_date: date,
 ) -> list[dict]:
-    """Fetch all 5 pitcher prop markets in one ParlayAPI call.
+    """Fetch all pitcher + hitter prop markets in one ParlayAPI call.
 
-    Keeps only rows whose `player` exactly matches a starter we projected,
+    name_to_id covers both projected starters and confirmed lineup hitters.
+    Keeps only rows whose `player` exactly matches a player we projected,
     maps the market key back to our prop_type, and shapes each row for the
     `lines` table. On any API error, prints and returns [] so the pipeline
     continues (betting lines never break projections).
@@ -79,7 +87,7 @@ def fetch_pitcher_lines(
         player_name = r.get("player")
         player_id = name_to_id.get(player_name)
         if player_id is None:
-            continue   # not a starter we projected today
+            continue   # not a player we projected today
 
         prop_type = MARKET_TO_PROP.get(r.get("market_key"))
         if prop_type is None:

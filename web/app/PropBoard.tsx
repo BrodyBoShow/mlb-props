@@ -9,7 +9,12 @@ export type PropType =
   | "hits_allowed"
   | "walks"
   | "earned_runs"
-  | "outs_recorded";
+  | "outs_recorded"
+  | "hitter_hits"
+  | "hitter_total_bases"
+  | "hitter_rbis"
+  | "hitter_runs"
+  | "hitter_home_runs";
 
 // One pitcher row. Projection is always present; edge fields are optional —
 // most pitchers won't have a betting line, and all values are pre-computed by
@@ -37,11 +42,18 @@ export type ByProp = Record<PropType, GameGroup[]>;
 // ── prop metadata ─────────────────────────────────────────────────────────────
 
 const PROPS: { key: PropType; label: string; unit: string }[] = [
-  { key: "strikeouts",    label: "Strikeouts",    unit: "K"    },
-  { key: "hits_allowed",  label: "Hits Allowed",  unit: "H"    },
-  { key: "walks",         label: "Walks",         unit: "BB"   },
-  { key: "earned_runs",   label: "Earned Runs",   unit: "ER"   },
-  { key: "outs_recorded", label: "Outs Recorded", unit: "outs" },
+  // pitcher props
+  { key: "strikeouts",        label: "Strikeouts",    unit: "K"    },
+  { key: "hits_allowed",      label: "Hits Allowed",  unit: "H"    },
+  { key: "walks",             label: "Walks",         unit: "BB"   },
+  { key: "earned_runs",       label: "Earned Runs",   unit: "ER"   },
+  { key: "outs_recorded",     label: "Outs Recorded", unit: "outs" },
+  // hitter props
+  { key: "hitter_hits",        label: "H Hits",       unit: "H"   },
+  { key: "hitter_total_bases", label: "Total Bases",  unit: "TB"  },
+  { key: "hitter_rbis",        label: "RBIs",         unit: "RBI" },
+  { key: "hitter_runs",        label: "Runs",         unit: "R"   },
+  { key: "hitter_home_runs",   label: "Home Runs",    unit: "HR"  },
 ];
 
 // Edge threshold for calling a side a real lean vs. roughly even.
@@ -119,7 +131,7 @@ export default function PropBoard({
       <p className="mb-6 text-xs leading-relaxed text-slate-500">
         Edge = model probability vs. book implied probability.{" "}
         <span className="text-emerald-400">Positive</span> = model favors the
-        over. Most pitchers have no line until closer to game time.
+        over. Most players have no line until closer to game time.
       </p>
 
       {/* game cards */}

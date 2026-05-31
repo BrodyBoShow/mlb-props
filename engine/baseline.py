@@ -153,6 +153,84 @@ def build_outs_recorded_projections(
     return _build_from_starts(starters, "outs_recorded", "outs_recorded", "outs", projection_date)
 
 
+# ─── hitter builders (MLB Stats API game logs) ───────────────────────────────
+
+def _build_hitter_from_games(
+    players: list[dict],
+    field: str,
+    prop_type: str,
+    label: str,
+    projection_date: date | None = None,
+) -> list[dict]:
+    """Generic weighted-average builder for hitters using stats.get_hitter_games().
+
+    Mirrors _build_from_starts but for lineup hitters. Each player dict must
+    carry player_id, game_id, and full_name (from fetch.fetch_lineups()).
+
+    field:     key in the dicts returned by stats.get_hitter_games()
+    prop_type: value to store in the projections table
+    label:     short unit string for stdout (e.g. 'H', 'TB')
+    """
+    proj_date = projection_date or date.today()
+    proj_date_str = proj_date.strftime("%Y-%m-%d")
+
+    rows: list[dict] = []
+    for p in players:
+        player_id = p["player_id"]
+        games = stats.get_hitter_games(player_id, LOOKBACK_DAYS, proj_date)
+        if not games:
+            print(f"  no recent game-log data for hitter {player_id}, skipping")
+            continue
+        values = [float(g[field]) for g in games]
+        projection = _weighted_projection(values)
+        rows.append(
+            {
+                "game_id": p["game_id"],
+                "player_id": player_id,
+                "prop_type": prop_type,
+                "projection": projection,
+                "projection_date": proj_date_str,
+            }
+        )
+        print(f"  {p.get('full_name', player_id)}: {values[:5]} -> {projection} {label}")
+    return rows
+
+
+def build_hitter_hits_projections(
+    lineup_players: list[dict], projection_date: date | None = None
+) -> list[dict]:
+    """Weighted rolling projection for a hitter's hits per game."""
+    return _build_hitter_from_games(lineup_players, "hits", "hitter_hits", "H", projection_date)
+
+
+def build_hitter_total_bases_projections(
+    lineup_players: list[dict], projection_date: date | None = None
+) -> list[dict]:
+    """Weighted rolling projection for a hitter's total bases per game."""
+    return _build_hitter_from_games(lineup_players, "total_bases", "hitter_total_bases", "TB", projection_date)
+
+
+def build_hitter_rbis_projections(
+    lineup_players: list[dict], projection_date: date | None = None
+) -> list[dict]:
+    """Weighted rolling projection for a hitter's RBIs per game."""
+    return _build_hitter_from_games(lineup_players, "rbis", "hitter_rbis", "RBI", projection_date)
+
+
+def build_hitter_runs_projections(
+    lineup_players: list[dict], projection_date: date | None = None
+) -> list[dict]:
+    """Weighted rolling projection for a hitter's runs per game."""
+    return _build_hitter_from_games(lineup_players, "runs", "hitter_runs", "R", projection_date)
+
+
+def build_hitter_home_runs_projections(
+    lineup_players: list[dict], projection_date: date | None = None
+) -> list[dict]:
+    """Weighted rolling projection for a hitter's home runs per game."""
+    return _build_hitter_from_games(lineup_players, "home_runs", "hitter_home_runs", "HR", projection_date)
+
+
 if __name__ == "__main__":
     import fetch
     starters = fetch.fetch_starters()

@@ -26,13 +26,20 @@ MIN_GRADED_STARTS = 5
 CONFIDENCE_WINDOW = 10
 
 # prop_type → key in player_game_logs that holds the actual value.
-# All five prop types are now graded and stored by grade.py.
+# All pitcher + hitter prop types are graded and stored by grade.py.
 _ACTUAL_COL: dict[str, str] = {
+    # pitcher
     "strikeouts":    "actual_strikeouts",
     "hits_allowed":  "actual_hits_allowed",
     "walks":         "actual_walks",
     "earned_runs":   "actual_earned_runs",
     "outs_recorded": "actual_outs_recorded",
+    # hitter
+    "hitter_hits":        "actual_hits",
+    "hitter_total_bases": "actual_total_bases",
+    "hitter_rbis":        "actual_rbis",
+    "hitter_runs":        "actual_runs",
+    "hitter_home_runs":   "actual_home_runs",
 }
 
 

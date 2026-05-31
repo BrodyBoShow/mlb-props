@@ -63,10 +63,12 @@ sources -> scheduled job (fetch, clean, train, project) -> database -> frontend 
     to the last good snapshot so their flakiness never touches the projections.
 
 ## Current status
-Steps 1-12 complete. Working pipeline + frontend:
+Steps 1-14 complete. Working pipeline + frontend:
 - engine/fetch.py — pure MLB Stats API layer. fetch_games(), fetch_starters()
   (probable pitchers linked to game_id, lru_cached), fetch_probable_pitchers()
-  (players-table rows). No DB code.
+  (players-table rows), fetch_lineups() (step 14 — confirmed batting orders via
+  boxscore battingOrder; returns [] until lineups post ~60-90 min pre-game).
+  No DB code.
 - engine/db.py — the ONLY writer. upsert_players/games/projections/game_logs,
   update_confidences, idempotent on each table's PK. Uses SUPABASE_KEY
   (service_role) to bypass RLS; falls back to SUPABASE_ANON_KEY.
@@ -74,23 +76,29 @@ Steps 1-12 complete. Working pipeline + frontend:
   LOOKBACK_DAYS, RECENT_*, LEAGUE_AVG_K_PCT). Imported by baseline, model, grade.
 - engine/stats.py — MLB Stats API game-log fetcher. get_pitcher_starts() is
   lru_cached(maxsize=64) so all 4 non-strikeout prop builders share one API call
-  per pitcher per run. No Statcast, no DB code.
+  per pitcher per run. get_hitter_games() (step 14) is lru_cached(maxsize=512)
+  so all 5 hitter builders share one API call per batter. No Statcast, no DB code.
 - engine/baseline.py — weighted rolling strikeout projection (Statcast/pybaseball)
-  + 4 new builders via stats.py: hits_allowed, walks, earned_runs, outs_recorded.
-  All use last-5-starts 2x weighting. No DB writes.
+  + 4 pitcher builders via stats.py: hits_allowed, walks, earned_runs,
+  outs_recorded. Step 14 adds 5 hitter builders via stats.get_hitter_games():
+  hitter_hits, hitter_total_bases, hitter_rbis, hitter_runs, hitter_home_runs.
+  All use last-5-games 2x weighting. No DB writes.
 - engine/model.py — XGBoost layer. train() reads player_game_logs, returns fitted
   model or None. predict() accepts the model object; no pkl file used.
 - engine/grade.py — grades yesterday's projections against final box scores.
-  Extracts all 5 actual values per pitcher (strikeouts, hits_allowed, walks,
-  earned_runs, outs_recorded) from the box score. Returns rows for
-  player_game_logs (no DB writes).
+  grade_yesterday() extracts the 5 pitcher actuals; grade_hitters_yesterday()
+  (step 14) extracts the 5 hitter actuals (hits, total_bases, rbis, runs,
+  home_runs) from each player's batting line. Both tag rows with player_type
+  and return rows for player_game_logs (no DB writes).
 - engine/calibrate.py — compute_confidences() reads player_game_logs and emits
-  a 0.0-1.0 hit-rate score per pitcher per prop type. Covers all 5 prop types
-  once player_game_logs accumulates 5+ graded starts per pitcher. No DB writes.
+  a 0.0-1.0 hit-rate score per player per prop type. Covers all 10 prop types
+  (5 pitcher + 5 hitter) once player_game_logs accumulates 5+ graded games per
+  player per prop. No DB writes.
 - engine/lines.py — ParlayAPI betting-line fetch layer (step 11). Pure fetch,
-  no DB code. fetch_pitcher_lines(name_to_id, game_date) pulls all 5 pitcher
-  prop markets in ONE call across 7 books (pinnacle + DK/FD + PrizePicks/
-  Underdog/Betr/Sleeper), keeps only projected starters, maps market_key ->
+  no DB code. fetch_prop_lines(name_to_id, game_date) (renamed in step 14 from
+  fetch_pitcher_lines) pulls all 10 pitcher + hitter prop markets in ONE call
+  across 7 books (pinnacle + DK/FD + PrizePicks/Underdog/Betr/Sleeper), keeps
+  only projected players (starters + lineup hitters), maps market_key ->
   prop_type, shapes rows for the lines table. Defensive: the parlay_api import
   is guarded and the API call is wrapped in try/except, so a missing package
   or failed request prints and returns [] — projections are never affected.
@@ -101,12 +109,15 @@ Steps 1-12 complete. Working pipeline + frontend:
   (std = projection * 0.35) until calibrated confidence scores accumulate.
   Projections with no matching/de-viggable line are skipped — sparse coverage
   degrades gracefully to fewer edge rows, never an error.
-- engine/main.py — orchestrates: grade yesterday -> fetch -> upsert -> baseline
-  (5 props) -> XGBoost blend -> upsert -> fetch lines -> upsert -> compute edges
-  -> upsert -> calibrate confidences. stdout only.
-- web/ — Next.js 14 (App Router) + Tailwind. page.tsx (server) fetches all 5
-  prop types in one Supabase query, passes to PropBoard.tsx (client) which handles
-  tab selection. force-dynamic. ZERO math in frontend. Build passes.
+- engine/main.py — orchestrates: grade yesterday (pitchers + hitters) -> fetch
+  -> upsert -> pitcher baseline (5 props) -> XGBoost blend -> upsert -> fetch
+  lineups -> hitter baseline (5 props, skipped if no confirmed lineups) ->
+  upsert -> fetch lines -> upsert -> compute edges -> upsert -> calibrate
+  confidences. stdout only.
+- web/ — Next.js 14 (App Router) + Tailwind. page.tsx (server) fetches all 10
+  prop types in one Supabase query + edges, passes to PropBoard.tsx (client)
+  which handles tab selection (5 pitcher tabs + 5 hitter tabs) and edge display.
+  force-dynamic. ZERO math in frontend. Build passes.
 - db/policies.sql — public SELECT (anon) RLS on projections + players + games.
 - db/schema.sql — player_game_logs now includes actual_hits_allowed,
   actual_walks, actual_earned_runs, actual_outs_recorded columns.
@@ -154,8 +165,20 @@ Steps 1-12 complete. Working pipeline + frontend:
     );
     alter table edges enable row level security;
     create policy "public read edges" on edges for select to anon using (true);
-Verified: 15 games, 30 players, 149 projection rows per run (29 strikeouts +
-30 each of hits_allowed, walks, earned_runs, outs_recorded).
+- db/schema.sql — step 14 adds player_type to players + player_game_logs and 5
+  hitter actual columns. Migration SQL (run once in Supabase SQL editor):
+    alter table players
+      add column if not exists player_type text default 'pitcher';
+    alter table player_game_logs
+      add column if not exists player_type        text default 'pitcher',
+      add column if not exists actual_hits        integer,
+      add column if not exists actual_total_bases integer,
+      add column if not exists actual_rbis        integer,
+      add column if not exists actual_runs        integer,
+      add column if not exists actual_home_runs   integer;
+Verified: 15 games, 30 players, 149 pitcher projection rows per run (29
+strikeouts + 30 each of hits_allowed, walks, earned_runs, outs_recorded).
+Hitter props add 5 more types once lineups post (1 PM cron).
 
 Known follow-ups:
 - statsapi.lookup_player is fuzzy and can resolve the wrong MLBAM id. Harden
@@ -175,8 +198,14 @@ Known follow-ups:
   markets, so a morning run gets full coverage while a late run may have few
   two-sided lines left. Edges use a normal approximation for model_over_prob
   until calibrated confidence scores accumulate; revisit once they exist.
+- Run the step-14 player_type + hitter-actuals migration SQL in Supabase before
+  hitter projections/grading will persist (one-time manual step).
+- Lineup timing (step 14): batting lineups post ~60-90 min before first pitch,
+  so the 8 AM ET cron runs BEFORE lineups and skips hitter props cleanly; the
+  1 PM ET cron runs after lineups and captures them. fetch_lineups() returns []
+  when no lineup is posted, which is the skip signal in main.py.
 
-Next: step 13 — frontend expansion to show edges alongside projections.
+Next: step 15 — hardening.
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

@@ -11,6 +11,11 @@ const ALL_PROP_TYPES: PropType[] = [
   "walks",
   "earned_runs",
   "outs_recorded",
+  "hitter_hits",
+  "hitter_total_bases",
+  "hitter_rbis",
+  "hitter_runs",
+  "hitter_home_runs",
 ];
 
 // Shape of a projection row with its joined player + game.

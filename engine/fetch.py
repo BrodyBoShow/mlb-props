@@ -108,6 +108,62 @@ def fetch_probable_pitchers() -> list[dict]:
     return [{c: r[c] for c in cols} for r in _fetch_starters_today()]
 
 
+def fetch_lineups(date_str: str | None = None) -> list[dict]:
+    """Confirmed batting lineups for today's (or a given date's) games.
+
+    Lineups post ~60-90 min before first pitch. Until then a game's
+    battingOrder is empty and that game is skipped. Returns ONLY players from
+    games whose lineup is confirmed; if no game has a posted lineup, returns []
+    — main.py uses an empty list as the signal to skip the hitter prop block.
+
+    Each row is shaped for the `players` table plus lineup context:
+        player_id, full_name, team, position, bats, throws,
+        game_id, batting_order (1-9), home_away ('home' | 'away').
+    """
+    schedule = statsapi.schedule(date=date_str) if date_str else statsapi.schedule()
+
+    records: list[dict] = []
+    for g in schedule:
+        game_id = g["game_id"]
+        try:
+            box = statsapi.boxscore_data(game_id)
+        except Exception as exc:
+            print(f"  lineup fetch failed for game {game_id}: {exc}")
+            continue
+
+        for side in ("home", "away"):
+            side_data = box.get(side, {}) or {}
+            # battingOrder is the confirmed starting nine (ordered player ids).
+            # Empty until the lineup is posted — that's the graceful skip.
+            order = side_data.get("battingOrder") or []
+            players = side_data.get("players", {}) or {}
+            team_name = (side_data.get("team", {}) or {}).get("name")
+
+            for idx, pid in enumerate(order):
+                entry = players.get(f"ID{pid}", {}) or {}
+                person = entry.get("person", {}) or {}
+                full_name = person.get("fullName")
+                if not full_name:
+                    continue   # can't map a line/grade without a name
+
+                position = (entry.get("position", {}) or {}).get("abbreviation")
+                records.append(
+                    {
+                        "player_id": int(pid),
+                        "full_name": full_name,
+                        "team": team_name,
+                        "position": position,
+                        "bats": (person.get("batSide", {}) or {}).get("code"),
+                        "throws": (person.get("pitchHand", {}) or {}).get("code"),
+                        "game_id": game_id,
+                        "batting_order": idx + 1,   # 1-9, always non-zero
+                        "home_away": side,
+                    }
+                )
+
+    return records
+
+
 if __name__ == "__main__":
     games = fetch_games()
     print(f"Games: {len(games)}")
