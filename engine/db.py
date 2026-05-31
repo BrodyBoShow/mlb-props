@@ -163,6 +163,35 @@ def upsert_lines(rows: list[dict]) -> int:
     return len(rows)
 
 
+def get_lines_for_date(date_str: str) -> list[dict]:
+    """Return all betting line rows for a given game_date. [] on error/missing."""
+    try:
+        resp = (
+            _client()
+            .table("lines")
+            .select("*")
+            .eq("game_date", date_str)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as exc:
+        print(f"  could not fetch lines for {date_str}: {exc}")
+        return []
+
+
+def upsert_edges(rows: list[dict]) -> int:
+    """Upsert edge rows on (player_id, prop_type, game_date, bookmaker).
+
+    Idempotent — re-running the job refreshes each edge in place.
+    """
+    if not rows:
+        return 0
+    _client().table("edges").upsert(
+        rows, on_conflict="player_id,prop_type,game_date,bookmaker"
+    ).execute()
+    return len(rows)
+
+
 def update_confidences(rows: list[dict]) -> int:
     """Update the confidence column for existing projection rows.
 

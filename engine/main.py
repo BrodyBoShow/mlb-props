@@ -21,6 +21,7 @@ pybaseball.cache.enable()
 import baseline
 import calibrate
 import db
+import edge
 import fetch
 import grade
 import lines
@@ -125,10 +126,18 @@ def main() -> None:
         n_lines = db.upsert_lines(line_rows)
         print(f"  upserted {n_lines} lines across {len(lines.BOOKMAKERS)} bookmakers")
 
+        all_projections = projections + other_prop_rows
+
+        # ── edges (de-vig market vs model; sparse coverage degrades gracefully) ─
+        print("Computing edges...")
+        all_lines = db.get_lines_for_date(date.today().strftime("%Y-%m-%d"))
+        edge_rows = edge.compute_edges(all_projections, all_lines)
+        n_edges = db.upsert_edges(edge_rows)
+        print(f"  computed {n_edges} edges")
+
         # ── calibration confidence scores ─────────────────────────────────────
         print("Computing calibration confidence scores...")
         logs = db.get_game_logs() or []
-        all_projections = projections + other_prop_rows
         confidence_rows = calibrate.compute_confidences(all_projections, logs)
         n_conf = db.update_confidences(confidence_rows)
         print(f"  updated {n_conf} confidence scores")

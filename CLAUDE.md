@@ -63,7 +63,7 @@ sources -> scheduled job (fetch, clean, train, project) -> database -> frontend 
     to the last good snapshot so their flakiness never touches the projections.
 
 ## Current status
-Steps 1-11 complete. Working pipeline + frontend:
+Steps 1-12 complete. Working pipeline + frontend:
 - engine/fetch.py — pure MLB Stats API layer. fetch_games(), fetch_starters()
   (probable pitchers linked to game_id, lru_cached), fetch_probable_pitchers()
   (players-table rows). No DB code.
@@ -94,9 +94,16 @@ Steps 1-11 complete. Working pipeline + frontend:
   prop_type, shapes rows for the lines table. Defensive: the parlay_api import
   is guarded and the API call is wrapped in try/except, so a missing package
   or failed request prints and returns [] — projections are never affected.
+- engine/edge.py — edge calculation (step 12). Pure math, no DB/API. de-vigs
+  the market into a fair over probability (Pinnacle preferred; else a consensus
+  of draftkings/fanduel/caesars) and compares it to the model's over prob.
+  model_over_prob uses a normal approximation around the projection
+  (std = projection * 0.35) until calibrated confidence scores accumulate.
+  Projections with no matching/de-viggable line are skipped — sparse coverage
+  degrades gracefully to fewer edge rows, never an error.
 - engine/main.py — orchestrates: grade yesterday -> fetch -> upsert -> baseline
-  (5 props) -> XGBoost blend -> upsert -> fetch lines -> upsert -> calibrate
-  confidences. stdout only.
+  (5 props) -> XGBoost blend -> upsert -> fetch lines -> upsert -> compute edges
+  -> upsert -> calibrate confidences. stdout only.
 - web/ — Next.js 14 (App Router) + Tailwind. page.tsx (server) fetches all 5
   prop types in one Supabase query, passes to PropBoard.tsx (client) which handles
   tab selection. force-dynamic. ZERO math in frontend. Build passes.
@@ -126,6 +133,27 @@ Steps 1-11 complete. Working pipeline + frontend:
     );
     alter table lines enable row level security;
     create policy "public read lines" on lines for select to anon using (true);
+- db/schema.sql — new `edges` table (step 12): one row per pitcher + prop +
+  day, keyed on the baseline bookmaker. Migration SQL (run once in Supabase
+  SQL editor):
+    create table if not exists edges (
+        id              serial primary key,
+        player_id       integer not null references players(player_id),
+        prop_type       text not null,
+        game_date       date not null,
+        bookmaker       text not null,
+        line            numeric not null,
+        fair_over_prob  numeric,
+        model_proj      numeric,
+        model_over_prob numeric,
+        edge            numeric,
+        over_price      integer,
+        under_price     integer,
+        updated_at      timestamptz default now(),
+        unique (player_id, prop_type, game_date, bookmaker)
+    );
+    alter table edges enable row level security;
+    create policy "public read edges" on edges for select to anon using (true);
 Verified: 15 games, 30 players, 149 projection rows per run (29 strikeouts +
 30 each of hits_allowed, walks, earned_runs, outs_recorded).
 
@@ -141,9 +169,14 @@ Known follow-ups:
 - Run the `lines` table migration SQL in Supabase before line ingestion will
   persist (one-time manual step). The parlay_api import in lines.py is guarded;
   CI installs the real parlay-api package from requirements.txt.
+- Run the `edges` table migration SQL in Supabase before edge rows will persist
+  (one-time manual step).
+- Edge coverage is sparse at runtime: lines exist only for active pre-game
+  markets, so a morning run gets full coverage while a late run may have few
+  two-sided lines left. Edges use a normal approximation for model_over_prob
+  until calibrated confidence scores accumulate; revisit once they exist.
 
-Next: step 12 — edge calculation (de-vig Pinnacle baseline, compare to our
-projection, populate an edge column or edges view).
+Next: step 13 — frontend expansion to show edges alongside projections.
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

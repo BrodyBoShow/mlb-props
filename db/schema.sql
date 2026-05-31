@@ -69,3 +69,25 @@ create table if not exists lines (
     fetched_at  timestamptz default now(),
     unique (player_id, prop_type, bookmaker, game_date)
 );
+
+-- edges: model-vs-market comparison per pitcher + prop + day (step 12).
+-- The baseline line is de-vigged (Pinnacle preferred, else a consensus of
+-- traditional books) into a fair over probability; `edge` is the model's over
+-- probability minus that fair probability. UPSERT key:
+-- (player_id, prop_type, game_date, bookmaker).
+create table if not exists edges (
+    id              serial primary key,
+    player_id       integer not null references players(player_id),
+    prop_type       text not null,
+    game_date       date not null,
+    bookmaker       text not null,
+    line            numeric not null,
+    fair_over_prob  numeric,
+    model_proj      numeric,
+    model_over_prob numeric,
+    edge            numeric,
+    over_price      integer,
+    under_price     integer,
+    updated_at      timestamptz default now(),
+    unique (player_id, prop_type, game_date, bookmaker)
+);
