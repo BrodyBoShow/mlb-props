@@ -15,9 +15,13 @@ const LOOKBACK_DAYS = 7;
 
 // Bookmaker preference. We score against ONE book per prop so the hit rate
 // is consistent — comparing model leans across mixed books would muddy the
-// signal. DraftKings is the widest US listing; PrizePicks is the DFS fallback.
-// Anything else is accepted as last resort.
-const BOOK_PREFERENCE = ["draftkings", "prizepicks"] as const;
+// signal. Main-market US books first (DK / FD / Pinnacle), then DFS apps.
+// Anything outside the list is still accepted as a last resort so a market
+// only listed at a fringe book isn't silently dropped.
+const BOOK_PREFERENCE = [
+  "draftkings", "fanduel", "pinnacle",
+  "prizepicks", "underdog", "betr", "sleeper",
+] as const;
 
 // Skip props where projection is within this much of the line. Too close to
 // call a lean direction either way.
@@ -35,6 +39,24 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
   hitter_rbis:        "actual_rbis",
   hitter_runs:        "actual_runs",
   hitter_home_runs:   "actual_home_runs",
+};
+
+// Minimum line value to count as a "main market" line. Anything below is an
+// alternate (e.g. 0.5 hits, 1.5 strikeouts) which lands as a hit so often it
+// inflates the hit rate without telling us anything about the model. Props
+// not listed in this map are excluded from results entirely — see hitter_home_runs.
+const MIN_LINE: Partial<Record<PropType, number>> = {
+  strikeouts:         2.5,
+  hits_allowed:       2.5,
+  walks:              1.5,
+  earned_runs:        1.5,
+  outs_recorded:      10.5,
+  hitter_hits:        1.5,   // drop 0.5 lines that hit ~70% baseline
+  hitter_total_bases: 1.5,
+  hitter_rbis:        1.5,   // drop 0.5 lines
+  hitter_runs:        0.5,   // marginal but kept — there's no higher main market
+  // hitter_home_runs deliberately omitted. 0.5 line dominates and the model
+  // has no real HR signal yet, so any rate we report would be noise.
 };
 
 const ALL_PROP_TYPES = Object.keys(ACTUAL_COLUMN) as PropType[];
@@ -158,10 +180,17 @@ async function getResults(): Promise<{
     const actualCol = ACTUAL_COLUMN[propType];
     if (!actualCol) continue;
 
+    // Main-market threshold. Props absent from MIN_LINE (currently just
+    // hitter_home_runs) are excluded entirely. Alternate lines below the
+    // threshold are dropped so the hit rate reflects real markets.
+    const minLine = MIN_LINE[propType];
+    if (minLine === undefined) continue;
+
     const line = linesByKey.get(
       `${p.player_id}|${p.prop_type}|${p.projection_date}`
     );
     if (!line) continue;
+    if (line.line < minLine) continue;
 
     const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
     if (!log) continue;
@@ -237,7 +266,8 @@ export default async function ResultsPage() {
 
       <footer className="mt-10 text-center text-xs text-slate-600">
         Hit = projection&apos;s lean direction matches actual vs. line. Props
-        within {NO_LEAN_THRESHOLD} of the line are skipped (no lean).
+        within {NO_LEAN_THRESHOLD} of the line are skipped (no lean). Main
+        market lines only — alternate lines and home run props excluded.
       </footer>
     </main>
   );

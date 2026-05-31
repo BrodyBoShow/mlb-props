@@ -244,6 +244,28 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Results page — main-market filtering (web/app/results/page.tsx):
+- Added MIN_LINE thresholds so the hit rate reflects only main-market
+  lines, not alternates that resolve as easy hits and inflate accuracy:
+    strikeouts >= 2.5 | hits_allowed >= 2.5 | walks >= 1.5
+    earned_runs >= 1.5 | outs_recorded >= 10.5
+    hitter_hits >= 1.5 | hitter_total_bases >= 1.5
+    hitter_rbis >= 1.5 | hitter_runs >= 0.5
+  Props absent from MIN_LINE are excluded entirely -- currently
+  hitter_home_runs, because the 0.5 line dominates and there is no
+  real HR signal in the model yet. Adding HRs back is a one-line
+  change to MIN_LINE once HR-specific features land.
+- BOOK_PREFERENCE expanded from ['draftkings','prizepicks'] to all 7
+  ingested books in main-market order: draftkings, fanduel, pinnacle,
+  prizepicks, underdog, betr, sleeper. Earned-runs-style props that
+  weren't listed at DK or PrizePicks now resolve to Pinnacle/FanDuel
+  lines instead of falling through to "no line, skipped".
+- earned_runs sanity-checked end-to-end: same string used in baseline.py,
+  grade.py, calibrate.py, lines.py, and ACTUAL_COLUMN. The prop wasn't
+  missing from the wiring -- the broader book list is what unblocks it.
+- Footer copy updated: "Main market lines only -- alternate lines and
+  home run props excluded."
+
 Results page — line-lean hit rate (web/app/results/):
 - Replaced the old "actual >= projection" metric (which showed 40% the
   user flagged) with the metric that actually matters for betting:
