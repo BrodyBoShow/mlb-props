@@ -40,8 +40,20 @@ PROP_TO_MARKET = {
     "hitter_rbis":        "player_rbis",
     "hitter_runs":        "player_runs",
     "hitter_home_runs":   "player_home_runs",
+    # PrizePicks-exclusive fantasy score props (Phase 0 confirmed prizepicks
+    # is the sole book listing either). The PrizePicks-only restriction is
+    # enforced below in fetch_prop_lines, not by including/excluding books
+    # here — the books list is the universe we query for the OTHER props.
+    "pitcher_fantasy_score": "player_pitcher_fantasy_score",
+    "hitter_fantasy_score":  "player_hitter_fantasy_score",
 }
 MARKET_TO_PROP = {v: k for k, v in PROP_TO_MARKET.items()}
+
+# Prop types that are scored against PrizePicks only — any line on any other
+# book for these props is dropped on ingest, no matter what ParlayAPI returns.
+# This is a hard contract: fantasy-score lines from any other book would be
+# meaningless because the scoring formula is PrizePicks-specific.
+PRIZEPICKS_ONLY_PROPS = {"pitcher_fantasy_score", "hitter_fantasy_score"}
 
 # Sharp baseline (pinnacle) + major US books + main DFS apps.
 BOOKMAKERS = ["pinnacle", "draftkings", "fanduel",
@@ -118,6 +130,7 @@ def fetch_prop_lines(
     rows: list[dict] = []
     per_prop: dict[str, int] = {p: 0 for p in PROP_TO_MARKET}
     normalized_matches = 0
+    pp_only_dropped = 0   # diagnostic: lines dropped by the PrizePicks-only rule
 
     for r in raw or []:
         player_name = r.get("player")
@@ -134,14 +147,26 @@ def fetch_prop_lines(
         if player_id is None:
             continue   # not a player we projected today
 
+        # ParlayAPI does substring matching on the markets parameter, so a
+        # request for hitter_fantasy_score returns inning-specific variants
+        # too (player_2nd_inning_hitter_fantasy_score, etc.). MARKET_TO_PROP
+        # is an exact map, so a market_key we don't recognize gets dropped
+        # here — partial-game variants can never sneak through.
         prop_type = MARKET_TO_PROP.get(r.get("market_key"))
         if prop_type is None:
-            continue   # a market we don't track
+            continue   # a market we don't track (incl. inning variants)
 
         bookmaker = r.get("bookmaker")
         line = r.get("line")
         if bookmaker is None or line is None:
             continue   # both are NOT NULL in the schema
+
+        # PrizePicks-exclusive prop_types: drop any line from any other book.
+        # Phase 0 probe confirmed PrizePicks is the sole listing today, but
+        # if a different book ever picks them up we still ignore those rows.
+        if prop_type in PRIZEPICKS_ONLY_PROPS and bookmaker != "prizepicks":
+            pp_only_dropped += 1
+            continue
 
         rows.append({
             "player_id":   player_id,
@@ -167,6 +192,7 @@ def fetch_prop_lines(
     rows = deduped
 
     norm_note = f" [{normalized_matches} via normalized match]" if normalized_matches else ""
+    pp_note = f" [{pp_only_dropped} non-PrizePicks fantasy lines dropped]" if pp_only_dropped else ""
     summary = ", ".join(f"{p}: {n}" for p, n in per_prop.items())
-    print(f"  fetched {len(rows)} lines ({summary}){norm_note}")
+    print(f"  fetched {len(rows)} lines ({summary}){norm_note}{pp_note}")
     return rows

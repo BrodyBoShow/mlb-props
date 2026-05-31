@@ -244,6 +244,26 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Fantasy Score props — Phase 4 (lines + edges):
+- engine/lines.py PROP_TO_MARKET adds pitcher_fantasy_score ->
+  player_pitcher_fantasy_score and hitter_fantasy_score ->
+  player_hitter_fantasy_score (confirmed market keys from Phase 0).
+- New PRIZEPICKS_ONLY_PROPS set lists the two fantasy-score prop_types.
+  fetch_prop_lines drops any row whose prop_type is in that set unless
+  bookmaker == 'prizepicks'. The fantasy-score scoring formula is
+  PrizePicks-specific, so a line from any other book would be a
+  category error -- this is a hard contract enforced at ingest.
+- ParlayAPI does substring matching on the markets parameter, so
+  asking for player_hitter_fantasy_score also returns inning-variant
+  keys (player_1st_inning_hitter_fantasy_score, _2nd_, _1+2+3_, etc.).
+  MARKET_TO_PROP is an exact map and unrecognized keys were already
+  dropped by the existing code path, so partial-game variants can
+  never sneak through.
+- Per-run summary line now appends '[N non-PrizePicks fantasy lines
+  dropped]' when applicable so the filter is auditable in the Actions log.
+- engine/edge.py is already prop-type-generic (keys on
+  (player_id, prop_type, game_date)) so edges flow without any change.
+
 Fantasy Score props — Phase 3 (baselines):
 - HITTER PATH (no cold start): extended stats.get_hitter_games to return
   doubles, triples, walks, hit_by_pitch, stolen_bases alongside the
