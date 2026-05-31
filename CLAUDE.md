@@ -244,6 +244,21 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+FanGraphs 403 hardening (engine/stats.py):
+- Module-level monkey-patch on requests.Session.request installs a browser
+  User-Agent + Accept-Language header as defaults on every requests call so
+  pybaseball's internal HTTP inherits a non-bot UA. Idempotent (only fills
+  when caller didn't set its own UA).
+- _team_k_pcts(year) retries pybaseball.team_batting up to 3 times with a
+  2-second backoff, logging each failed attempt.
+- After 3 failures it falls back to _TEAM_K_PCT_2024, a hardcoded table of
+  2024 season team batting K% (fraction form) covering all 30 teams plus
+  the 'ATH' rebrand. The fallback shares the FanGraphs abbr keyspace so
+  _opp_k_rate's resolution logic is unchanged.
+- Net effect: opp_k_rate is never silently constant — either FanGraphs
+  succeeds (real current-season values) or the 2024 table activates (real
+  per-team values, last-season prior). Restores model signal beyond is_home.
+
 XGBoost training threshold:
 - MIN_TRAINING_ROWS = 25 (lowered from 50). Verified against live data: pool
   is currently 30 pitcher rows (270 hitters + 30 pitchers in player_game_logs),
