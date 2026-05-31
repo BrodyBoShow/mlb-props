@@ -26,9 +26,13 @@ MIN_GRADED_STARTS = 5
 CONFIDENCE_WINDOW = 10
 
 # prop_type → key in player_game_logs that holds the actual value.
-# Extend this dict as grading covers more prop types.
+# All five prop types are now graded and stored by grade.py.
 _ACTUAL_COL: dict[str, str] = {
-    "strikeouts": "actual_strikeouts",
+    "strikeouts":    "actual_strikeouts",
+    "hits_allowed":  "actual_hits_allowed",
+    "walks":         "actual_walks",
+    "earned_runs":   "actual_earned_runs",
+    "outs_recorded": "actual_outs_recorded",
 }
 
 

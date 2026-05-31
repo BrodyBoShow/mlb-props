@@ -63,13 +63,13 @@ sources -> scheduled job (fetch, clean, train, project) -> database -> frontend 
     to the last good snapshot so their flakiness never touches the projections.
 
 ## Current status
-Steps 1-7 built. Working pipeline + frontend:
+Steps 1-10 complete. Working pipeline + frontend:
 - engine/fetch.py — pure MLB Stats API layer. fetch_games(), fetch_starters()
   (probable pitchers linked to game_id, lru_cached), fetch_probable_pitchers()
   (players-table rows). No DB code.
-- engine/db.py — the ONLY writer. upsert_players/games/projections, idempotent
-  on each table's PK. Uses SUPABASE_KEY (service_role) to bypass RLS; falls back
-  to SUPABASE_ANON_KEY. service_role key lives in .env (gitignored).
+- engine/db.py — the ONLY writer. upsert_players/games/projections/game_logs,
+  update_confidences, idempotent on each table's PK. Uses SUPABASE_KEY
+  (service_role) to bypass RLS; falls back to SUPABASE_ANON_KEY.
 - engine/constants.py — shared constants (STRIKEOUT/HIT/WALK_EVENTS,
   LOOKBACK_DAYS, RECENT_*, LEAGUE_AVG_K_PCT). Imported by baseline, model, grade.
 - engine/stats.py — MLB Stats API game-log fetcher. get_pitcher_starts() is
@@ -81,13 +81,26 @@ Steps 1-7 built. Working pipeline + frontend:
 - engine/model.py — XGBoost layer. train() reads player_game_logs, returns fitted
   model or None. predict() accepts the model object; no pkl file used.
 - engine/grade.py — grades yesterday's projections against final box scores.
-  Returns rows for player_game_logs (no DB writes).
+  Extracts all 5 actual values per pitcher (strikeouts, hits_allowed, walks,
+  earned_runs, outs_recorded) from the box score. Returns rows for
+  player_game_logs (no DB writes).
+- engine/calibrate.py — compute_confidences() reads player_game_logs and emits
+  a 0.0-1.0 hit-rate score per pitcher per prop type. Covers all 5 prop types
+  once player_game_logs accumulates 5+ graded starts per pitcher. No DB writes.
 - engine/main.py — orchestrates: grade yesterday -> fetch -> upsert -> baseline
-  (5 props) -> XGBoost blend -> upsert. stdout only. pybaseball cache enabled.
+  (5 props) -> XGBoost blend -> upsert -> calibrate confidences. stdout only.
 - web/ — Next.js 14 (App Router) + Tailwind. page.tsx (server) fetches all 5
   prop types in one Supabase query, passes to PropBoard.tsx (client) which handles
   tab selection. force-dynamic. ZERO math in frontend. Build passes.
 - db/policies.sql — public SELECT (anon) RLS on projections + players + games.
+- db/schema.sql — player_game_logs now includes actual_hits_allowed,
+  actual_walks, actual_earned_runs, actual_outs_recorded columns.
+  Migration SQL (run once in Supabase SQL editor):
+    alter table player_game_logs
+      add column if not exists actual_hits_allowed  integer,
+      add column if not exists actual_walks         integer,
+      add column if not exists actual_earned_runs   integer,
+      add column if not exists actual_outs_recorded integer;
 Verified: 15 games, 30 players, 149 projection rows per run (29 strikeouts +
 30 each of hits_allowed, walks, earned_runs, outs_recorded).
 
@@ -98,9 +111,10 @@ Known follow-ups:
   lookup_player; enrich when the model needs them.
 - First pybaseball run is slow (cold cache, ~30 per-pitcher calls). Fine for a
   scheduled job; revisit if it bottlenecks.
+- Run the player_game_logs migration SQL in Supabase before the new grading
+  columns will be written (one-time manual step).
 
-Next: step 10 — calibration (isotonic regression on accumulated player_game_logs,
-populate confidence column in projections table).
+Next: step 11 — betting line ingestion via Parlay API key.
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

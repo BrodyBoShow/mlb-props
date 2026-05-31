@@ -26,7 +26,11 @@ create table if not exists player_game_logs (
     player_id         integer references players(player_id),
     game_id           integer references games(game_id),
     game_date         date,
-    actual_strikeouts integer,
+    actual_strikeouts    integer,
+    actual_hits_allowed  integer,
+    actual_walks         integer,
+    actual_earned_runs   integer,
+    actual_outs_recorded integer,
     home_away         text,        -- 'home' | 'away'
     opp_k_rate        numeric,     -- opposing team K% as batters (0–1)
     days_rest         integer,
