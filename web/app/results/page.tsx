@@ -3,6 +3,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import ResultsBoard, {
   type EvaluatedResult,
   type PropType,
+  type TrackerResult,
   type Verdict,
 } from "./ResultsBoard";
 
@@ -43,26 +44,34 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
   hitter_fantasy_score:   "actual_hitter_fantasy_score",
 };
 
-// Minimum line value to count as a "main market" line. Anything below is an
-// alternate (e.g. 0.5 hits, 1.5 strikeouts) which lands as a hit so often it
-// inflates the hit rate without telling us anything about the model. Props
-// not listed in this map are excluded from results entirely.
+// Minimum line value to count as a "main market" line for the BETTING EDGE
+// section. Props absent from this map are not evaluated against book lines
+// at all -- they go through the Model Tracker section (calibration only,
+// no lines required).
 //
-// EXCLUDED entirely:
-//   - hitter_home_runs: 0.5 line dominates and the model has no HR signal yet.
-//   - hitter_runs:      no real main market line above 0.5; rate is base-rate noise.
-//   - hitter_rbis:      same — most listed lines are 0.5 alternates.
+// Betting Edge (these props): strikeouts, hits_allowed, outs_recorded,
+//                             pitcher_fantasy_score, hitter_fantasy_score
+// Model Tracker:             walks, earned_runs, hitter_hits,
+//                             hitter_total_bases (see TRACKER_PROPS below)
+// Excluded entirely:          home runs, runs, RBIs (one-sided markets).
 const MIN_LINE: Partial<Record<PropType, number>> = {
-  strikeouts:             3.5,   // bumped from 2.5 — 2.5 was still alternate-ish
+  strikeouts:             3.5,
   hits_allowed:           3.5,
-  walks:                  1.5,
-  earned_runs:            1.5,
-  outs_recorded:          10.5,  // pitchers going past 4 IP — filters short relievers
-  pitcher_fantasy_score:  6.0,   // floor for a real outing — short relief stints filtered
-  hitter_hits:            1.5,
-  hitter_total_bases:     1.5,
-  hitter_fantasy_score:   4.0,   // ~1 hit + run/RBI floor — filters bench/pinch appearances
+  outs_recorded:          10.5,  // pitchers going past 4 IP -- filters short relievers
+  pitcher_fantasy_score:  6.0,   // floor for a real outing
+  hitter_fantasy_score:   4.0,   // ~1 hit + run/RBI floor -- filters bench appearances
 };
+
+// Model Tracker props: evaluated as actual-vs-projection (no book line). This
+// list lives in page.tsx so the join loop knows which prop_types to emit as
+// TrackerResult instead of EvaluatedResult. Keep in sync with TRACKER_PROPS
+// in ResultsBoard.tsx -- they're the same authoritative list.
+const TRACKER_PROPS: ReadonlySet<PropType> = new Set([
+  "walks",
+  "earned_runs",
+  "hitter_hits",
+  "hitter_total_bases",
+]);
 
 const ALL_PROP_TYPES = Object.keys(ACTUAL_COLUMN) as PropType[];
 
@@ -109,7 +118,8 @@ function classify(projection: number, line: number, actual: number): Verdict {
 // ── data fetch ───────────────────────────────────────────────────────────────
 
 async function getResults(): Promise<{
-  results: EvaluatedResult[];
+  bettingResults: EvaluatedResult[];
+  trackerResults: TrackerResult[];
   dateRange: { start: string; end: string } | null;
   trackedFrom: Partial<Record<PropType, string>>;
 }> {
@@ -138,7 +148,7 @@ async function getResults(): Promise<{
   const latestLineDate = latestLine?.[0]?.game_date as string | undefined;
   // Empty state: nothing graded AND no lines either.
   if (!latestLogDate && !latestLineDate) {
-    return { results: [], dateRange: null, trackedFrom: {} };
+    return { bettingResults: [], trackerResults: [], dateRange: null, trackedFrom: {} };
   }
   const endDate =
     latestLogDate && latestLineDate
@@ -246,11 +256,11 @@ async function getResults(): Promise<{
     logsByKey.set(`${l.player_id}|${l.game_date}`, l);
   }
 
-  // ── join projections → lines → logs ────────────────────────────────────
-  // Per-prop drop counter so the diagnostic logs above are actionable for
-  // every prop_type, not just earned_runs. Each stage that drops a row
-  // bumps the corresponding counter; the totals are logged at the end of
-  // the join. A row that survives all four stages becomes a result.
+  // ── join: project + line + log → BettingResult (Section 1)
+  //         project + log → TrackerResult (Section 2, no line needed) ──────
+  // Per-prop drop counter for the betting join so the diagnostic logs are
+  // actionable for every prop_type, not just earned_runs. Each dropping
+  // stage bumps the corresponding counter; totals are logged at the end.
   type DropCounter = {
     noLine: number; belowMin: number;
     noLog: number; noActual: number; survived: number;
@@ -264,18 +274,44 @@ async function getResults(): Promise<{
     drops.set(pt, c);
   };
 
-  const results: EvaluatedResult[] = [];
+  const bettingResults: EvaluatedResult[] = [];
+  const trackerResults: TrackerResult[] = [];
+
   for (const p of projections) {
     const propType = p.prop_type as PropType;
     const actualCol = ACTUAL_COLUMN[propType];
     if (!actualCol) continue;
 
-    // Main-market threshold. Props absent from MIN_LINE (hitter_runs,
-    // hitter_rbis, hitter_home_runs) are excluded entirely. Alternate
-    // lines below the threshold are dropped so the hit rate reflects
-    // real markets.
+    const matchup = p.games
+      ? `${p.games.away_team} @ ${p.games.home_team}`
+      : `Game ${p.game_id}`;
+
+    // ── Section 2 (Model Tracker) — projection vs actual, no line needed.
+    if (TRACKER_PROPS.has(propType)) {
+      const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
+      if (!log) continue;
+      const actualRaw = log[actualCol];
+      if (actualRaw === null || actualRaw === undefined) continue;
+      const actual = Number(actualRaw);
+      if (!Number.isFinite(actual)) continue;
+
+      trackerResults.push({
+        gameId: p.game_id,
+        matchup,
+        playerId: p.player_id,
+        playerName: p.players?.full_name ?? "Unknown player",
+        propType,
+        gameDate: p.projection_date,
+        projection: p.projection,
+        actual,
+        direction: actual > p.projection ? "over" : "under",
+      });
+      continue;
+    }
+
+    // ── Section 1 (Betting Edge) — needs line + actual.
     const minLine = MIN_LINE[propType];
-    if (minLine === undefined) continue;
+    if (minLine === undefined) continue;   // prop not on either side -- excluded
 
     const line = linesByKey.get(
       `${p.player_id}|${p.prop_type}|${p.projection_date}`
@@ -296,10 +332,7 @@ async function getResults(): Promise<{
     trackDrop(propType, "survived");
 
     const verdict = classify(p.projection, line.line, actual);
-    const matchup = p.games
-      ? `${p.games.away_team} @ ${p.games.home_team}`
-      : `Game ${p.game_id}`;
-    results.push({
+    bettingResults.push({
       gameId: p.game_id,
       matchup,
       playerId: p.player_id,
@@ -325,14 +358,26 @@ async function getResults(): Promise<{
         `survived=${d.survived} (threshold=${MIN_LINE[pt]})`,
     );
   }
+  console.log(
+    `[results-diag] section totals: ` +
+      `betting=${bettingResults.length} tracker=${trackerResults.length}`,
+  );
 
-  // Newest first; stable secondary sort by player name.
-  results.sort((a, b) => {
+  // Newest first; stable secondary sort by player name. Same sort for both
+  // sections so the lists feel consistent.
+  const sortNewestFirst = <T extends { gameDate: string; playerName: string }>(a: T, b: T) => {
     if (a.gameDate !== b.gameDate) return a.gameDate < b.gameDate ? 1 : -1;
     return a.playerName.localeCompare(b.playerName);
-  });
+  };
+  bettingResults.sort(sortNewestFirst);
+  trackerResults.sort(sortNewestFirst);
 
-  return { results, dateRange: { start: startDate, end: endDate }, trackedFrom };
+  return {
+    bettingResults,
+    trackerResults,
+    dateRange: { start: startDate, end: endDate },
+    trackedFrom,
+  };
 }
 
 // ── page ─────────────────────────────────────────────────────────────────────
@@ -345,7 +390,9 @@ function formatDate(iso: string): string {
 }
 
 export default async function ResultsPage() {
-  const { results, dateRange, trackedFrom } = await getResults();
+  const { bettingResults, trackerResults, dateRange, trackedFrom } =
+    await getResults();
+  const hasAny = bettingResults.length + trackerResults.length > 0;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -354,7 +401,7 @@ export default async function ResultsPage() {
           <h1 className="text-3xl font-bold tracking-tight">Results</h1>
           <p className="mt-1 text-sm text-slate-400">
             {dateRange
-              ? `Hit rate vs DraftKings line · ${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`
+              ? `${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`
               : "No graded results yet"}
           </p>
         </div>
@@ -366,21 +413,30 @@ export default async function ResultsPage() {
         </Link>
       </header>
 
-      {results.length > 0 ? (
-        <ResultsBoard results={results} trackedFrom={trackedFrom} />
+      {hasAny ? (
+        <ResultsBoard
+          bettingResults={bettingResults}
+          trackerResults={trackerResults}
+          trackedFrom={trackedFrom}
+        />
       ) : (
         <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
-          No evaluable results yet — need projections + lines + graded actuals
-          on the same day. Check back once a few full slates accumulate.
+          No evaluable results yet — projections need to land alongside graded
+          actuals (and book lines, for the Betting Edge section). Check back
+          once a few full slates accumulate.
         </div>
       )}
 
       <footer className="mt-10 text-center text-xs leading-relaxed text-slate-600">
-        Hit = projection&apos;s lean direction matches actual vs. line. Props
-        within {NO_LEAN_THRESHOLD} of the line are skipped (no lean). Main
-        market lines only. Excluded entirely: home runs, runs, RBIs (one-sided
-        markets or no main line above 0.5). Fantasy score uses the official
-        PrizePicks scoring formula and PrizePicks lines only.
+        <span className="text-slate-500">Betting Edge:</span> hit = projection&apos;s
+        lean direction matches actual vs. book line. Props within{" "}
+        {NO_LEAN_THRESHOLD} of the line are skipped. Main market lines only.
+        Fantasy score uses the official PrizePicks scoring formula and
+        PrizePicks lines only.
+        <br />
+        <span className="text-slate-500">Model Tracker:</span> actual vs
+        projection only (no book line) — a calibration metric, not a betting
+        hit rate.
       </footer>
     </main>
   );

@@ -244,6 +244,51 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Results page — two-section redesign (Betting Edge + Model Tracker):
+- /results now renders both sections inline, no tab switching:
+
+  SECTION 1 -- Betting Edge (5 props)
+    Props: strikeouts, hits_allowed, outs_recorded,
+           pitcher_fantasy_score, hitter_fantasy_score
+    Score: existing lean-vs-line ('correct'/'wrong'/'skip').
+    Headline: hit % (≥60% emerald, 45-60% amber, <45% red).
+    Components reused/renamed: BettingOverallCard, BettingPerPropCard,
+    BettingFilterBar, GameFilter, BettingRow. Game dropdown stays only in
+    this section. ⚠ lean-bias chip removed -- the four props that used to
+    trigger it have moved to Section 2.
+
+  SECTION 2 -- Model Tracker (4 props)
+    Props: hitter_hits, hitter_total_bases, walks, earned_runs
+    Score: actual vs MODEL PROJECTION (no book line).
+      over  = actual > projection
+      under = actual <= projection (no skip threshold)
+    Headline: '▲ N% over proj · ▼ N% under proj' in slate-200/400 plus
+    a calibration label:
+      under% > 60 (>=10 samples)  -> '↓ Model tends to overestimate'
+      over%  > 60                  -> '↑ Model tends to underestimate'
+      else                         -> '~ Well calibrated'
+    Per-prop card shows avg proj vs avg actual, over%/under% split, and
+    sample count. Result row uses ▲/▼ only (no ✓/✗) in muted slate to
+    signal 'diagnostic, not a betting hit rate'.
+    Section has its own filter chips; uses slate-200 (not emerald) for
+    the active chip so the visual identity stays 'stat tracker' rather
+    than 'betting result'.
+
+- page.tsx getResults() now returns { bettingResults, trackerResults,
+  dateRange, trackedFrom }. One pass over the fetched projections emits
+  EvaluatedResult into bettingResults OR TrackerResult into trackerResults
+  based on TRACKER_PROPS set membership. The tracker join skips lines
+  entirely so it produces results immediately for props whose lines aren't
+  yet ingested.
+- MIN_LINE narrowed to the five betting props only.
+- ACTUAL_COLUMN keeps all 10 props -- tracker join needs the actual
+  column for walks/earned_runs/hitter_hits/hitter_total_bases too.
+- Page header subtitle simplified: '{start} – {end}'. Section headings
+  carry the framing ('Model lean vs book line · main market props only'
+  vs 'Actual outcomes vs model projection · calibration, not a betting rate').
+- Footer split: Betting Edge / Model Tracker disclosures on separate
+  lines so the user knows what each section measures.
+
 Results page — forward-anchored window + per-prop diagnostics:
 - Window end was previously max(player_game_logs.game_date). When a
   prop_type's first lines were ingested today, today's lines + today's
