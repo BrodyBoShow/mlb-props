@@ -244,6 +244,18 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+XGBoost training threshold:
+- MIN_TRAINING_ROWS = 25 (lowered from 50). Verified against live data: pool
+  is currently 30 pitcher rows (270 hitters + 30 pitchers in player_game_logs),
+  one start per pitcher. Threshold 50 was blocking training entirely; 25 lets
+  the model fit while the season accumulates. engine/test_model.py reproduces
+  the row-survival accounting against live Supabase.
+- Signal warning: with 1 start per pitcher, imputed last5/last30 are constant
+  (in-pool mean); opp_k_rate/days_rest are NULL on ~all pitcher rows because
+  FanGraphs 403s during grading, so imputation also yields constants. Net:
+  only is_home varies until more starts accumulate. The ensemble blends with
+  the baseline (model.py predict() + main.py), so this degrades gracefully.
+
 XGBoost feature set (engine/model.py train()):
 - FEATURE_COLS = [last5_k_rate, last30_k_rate, is_home, days_rest, opp_k_rate].
   Target: actual_strikeouts. Only pitcher rows train the model.

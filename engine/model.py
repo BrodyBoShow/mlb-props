@@ -22,7 +22,7 @@ from xgboost import XGBRegressor
 from constants import LEAGUE_AVG_K_PCT, STRIKEOUT_EVENTS
 from stats import TEAM_NAME_MAP, _mlb_name_to_abbr, _opp_k_rate, _team_k_pcts  # noqa: F401
 
-MIN_TRAINING_ROWS = 50
+MIN_TRAINING_ROWS = 25
 PROP_TYPE = "strikeouts"
 
 FEATURE_COLS = ["last5_k_rate", "last30_k_rate", "is_home", "days_rest", "opp_k_rate"]
