@@ -244,6 +244,30 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Results page — forward-anchored window + per-prop diagnostics:
+- Window end was previously max(player_game_logs.game_date). When a
+  prop_type's first lines were ingested today, today's lines + today's
+  projections lived OUTSIDE the window (anchored on yesterday's last
+  graded game) so the prop showed proj=N lines=0 in the diag and never
+  appeared. Window end now uses MAX(latest_log_date, latest_line_date).
+  Newly-ingested prop_types appear as soon as the next grading cycle
+  catches up, without waiting for them to drift into the historical
+  log window.
+- Per-prop diagnostic + drop counter now generalized: page.tsx logs
+  [results-diag] proj=N lines=N logs=N tracked_from=... for every
+  DIAG_PROPS entry (strikeouts, hits_allowed, walks, earned_runs,
+  outs_recorded, pitcher_fantasy_score, hitter_hits, hitter_total_bases,
+  hitter_fantasy_score). Per-stage drop counter is now a Map keyed by
+  prop_type; each prop with non-zero rows gets its own
+  '[results-diag] {pt} join drop: noLine=N belowMin=N noLog=N
+  noActual=N survived=N (threshold=...)' line.
+- 'Tracked from' date per prop: one supabase round-trip per prop_type
+  (SELECT game_date FROM lines WHERE prop_type=X ORDER BY game_date
+  ASC LIMIT 1). Returned as Partial<Record<PropType, string>> from
+  getResults; passed through ResultsBoard into PerPropCard and
+  rendered as a small slate-500 subtitle beneath the prop label
+  ('tracked from May 31'). Hidden when null (prop never ingested).
+
 Fantasy Score props — Phase 5 (frontend):
 - web/lib/fantasyScore.ts is the TypeScript mirror of engine/fantasy_score.py.
   Same weights, same QS rule, same singles derivation. Comment on each

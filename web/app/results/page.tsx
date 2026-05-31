@@ -111,20 +111,40 @@ function classify(projection: number, line: number, actual: number): Verdict {
 async function getResults(): Promise<{
   results: EvaluatedResult[];
   dateRange: { start: string; end: string } | null;
+  trackedFrom: Partial<Record<PropType, string>>;
 }> {
   const supabase = getSupabaseClient();
 
-  // Anchor the window on the most recent graded date (so weekends/off-days
-  // don't show an empty page). Compute start by stepping back LOOKBACK_DAYS.
-  const { data: latest } = await supabase
-    .from("player_game_logs")
-    .select("game_date")
-    .order("game_date", { ascending: false })
-    .limit(1);
+  // Anchor the window on whichever is more recent: the latest graded game
+  // date or the latest date with any line in the lines table. This lets
+  // newly-ingested prop_types (whose first lines are dated today, before
+  // today's games finish) appear in results as soon as the next grading
+  // cycle catches up -- without waiting for them to drift into the
+  // historical log window.
+  const [{ data: latestLog }, { data: latestLine }] = await Promise.all([
+    supabase
+      .from("player_game_logs")
+      .select("game_date")
+      .order("game_date", { ascending: false })
+      .limit(1),
+    supabase
+      .from("lines")
+      .select("game_date")
+      .order("game_date", { ascending: false })
+      .limit(1),
+  ]);
 
-  if (!latest?.[0]?.game_date) return { results: [], dateRange: null };
+  const latestLogDate = latestLog?.[0]?.game_date as string | undefined;
+  const latestLineDate = latestLine?.[0]?.game_date as string | undefined;
+  // Empty state: nothing graded AND no lines either.
+  if (!latestLogDate && !latestLineDate) {
+    return { results: [], dateRange: null, trackedFrom: {} };
+  }
+  const endDate =
+    latestLogDate && latestLineDate
+      ? (latestLogDate > latestLineDate ? latestLogDate : latestLineDate)
+      : (latestLogDate ?? latestLineDate!);
 
-  const endDate = latest[0].game_date as string;
   const start = new Date(`${endDate}T00:00:00`);
   start.setDate(start.getDate() - (LOOKBACK_DAYS - 1));
   const startDate = start.toISOString().slice(0, 10);
@@ -161,19 +181,50 @@ async function getResults(): Promise<{
   const lines = (lineData ?? []) as unknown as LineRow[];
   const logs = (logData ?? []) as unknown as LogRow[];
 
-  // earned_runs diagnostic — visible in Vercel function logs / dev terminal.
-  // The string match is the same across baseline.py / lines.py / grade.py /
-  // ACTUAL_COLUMN, so this isolates which stage drops the rows.
-  const erProj = projections.filter((r) => r.prop_type === "earned_runs").length;
-  const erLines = lines.filter((r) => r.prop_type === "earned_runs").length;
-  const erLogs = logs.filter(
-    (r) => (r as LogRow).actual_earned_runs !== null &&
-           (r as LogRow).actual_earned_runs !== undefined
-  ).length;
-  console.log(
-    `[results-diag] earned_runs window ${startDate}..${endDate}: ` +
-      `proj=${erProj} lines=${erLines} logs=${erLogs}`
+  // Per-prop "tracked from" — earliest game_date with any line for this
+  // prop_type. One round-trip per prop with LIMIT 1 ordered ascending
+  // (cheap; total lines table is small). This is the all-time first-tracked
+  // date, NOT just within the current window, so a prop tracked since
+  // April still shows "tracked from Apr ..." even when the window is
+  // 7 days. Props that have never been ingested return null.
+  const trackedFromEntries = await Promise.all(
+    ALL_PROP_TYPES.map(async (pt) => {
+      const { data } = await supabase
+        .from("lines")
+        .select("game_date")
+        .eq("prop_type", pt)
+        .order("game_date", { ascending: true })
+        .limit(1);
+      return [pt, (data?.[0]?.game_date as string | undefined) ?? null] as const;
+    }),
   );
+  const trackedFrom: Partial<Record<PropType, string>> = {};
+  for (const [pt, d] of trackedFromEntries) {
+    if (d) trackedFrom[pt] = d;
+  }
+
+  // Diagnostic logging — visible in Vercel function logs / dev terminal.
+  // Covers every prop_type we evaluate so a future "missing prop" is
+  // diagnosable from logs alone. proj / lines / logs counts isolate which
+  // stage is empty; the per-stage drop counter below pinpoints the join.
+  const DIAG_PROPS: PropType[] = [
+    "strikeouts", "hits_allowed", "walks", "earned_runs", "outs_recorded",
+    "pitcher_fantasy_score",
+    "hitter_hits", "hitter_total_bases", "hitter_fantasy_score",
+  ];
+  for (const pt of DIAG_PROPS) {
+    const col = ACTUAL_COLUMN[pt];
+    const projCount = projections.filter((r) => r.prop_type === pt).length;
+    const lineCount = lines.filter((r) => r.prop_type === pt).length;
+    const logCount = logs.filter(
+      (r) => (r as LogRow)[col] !== null && (r as LogRow)[col] !== undefined,
+    ).length;
+    console.log(
+      `[results-diag] ${pt} window ${startDate}..${endDate}: ` +
+        `proj=${projCount} lines=${lineCount} logs=${logCount} ` +
+        `tracked_from=${trackedFrom[pt] ?? "never"}`,
+    );
+  }
 
   // ── reduce lines to one per (player, prop, date) by book preference ────
   const linesByKey = new Map<string, LineRow>();
@@ -196,10 +247,22 @@ async function getResults(): Promise<{
   }
 
   // ── join projections → lines → logs ────────────────────────────────────
-  // Track per-stage drop counts for earned_runs so the diagnostic above is
-  // actionable — we can see whether rows die at the line lookup, the
-  // threshold gate, the log lookup, or the actual-column extraction.
-  const erDrop = { noLine: 0, belowMin: 0, noLog: 0, noActual: 0, survived: 0 };
+  // Per-prop drop counter so the diagnostic logs above are actionable for
+  // every prop_type, not just earned_runs. Each stage that drops a row
+  // bumps the corresponding counter; the totals are logged at the end of
+  // the join. A row that survives all four stages becomes a result.
+  type DropCounter = {
+    noLine: number; belowMin: number;
+    noLog: number; noActual: number; survived: number;
+  };
+  const drops = new Map<PropType, DropCounter>();
+  const trackDrop = (pt: PropType, stage: keyof DropCounter) => {
+    const c = drops.get(pt) ?? {
+      noLine: 0, belowMin: 0, noLog: 0, noActual: 0, survived: 0,
+    };
+    c[stage]++;
+    drops.set(pt, c);
+  };
 
   const results: EvaluatedResult[] = [];
   for (const p of projections) {
@@ -214,25 +277,23 @@ async function getResults(): Promise<{
     const minLine = MIN_LINE[propType];
     if (minLine === undefined) continue;
 
-    const isER = propType === "earned_runs";
-
     const line = linesByKey.get(
       `${p.player_id}|${p.prop_type}|${p.projection_date}`
     );
-    if (!line) { if (isER) erDrop.noLine++; continue; }
-    if (line.line < minLine) { if (isER) erDrop.belowMin++; continue; }
+    if (!line) { trackDrop(propType, "noLine"); continue; }
+    if (line.line < minLine) { trackDrop(propType, "belowMin"); continue; }
 
     const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
-    if (!log) { if (isER) erDrop.noLog++; continue; }
+    if (!log) { trackDrop(propType, "noLog"); continue; }
 
     const actualRaw = log[actualCol];
     if (actualRaw === null || actualRaw === undefined) {
-      if (isER) erDrop.noActual++;
+      trackDrop(propType, "noActual");
       continue;
     }
     const actual = Number(actualRaw);
     if (!Number.isFinite(actual)) continue;
-    if (isER) erDrop.survived++;
+    trackDrop(propType, "survived");
 
     const verdict = classify(p.projection, line.line, actual);
     const matchup = p.games
@@ -254,12 +315,16 @@ async function getResults(): Promise<{
     });
   }
 
-  console.log(
-    `[results-diag] earned_runs join drop: noLine=${erDrop.noLine} ` +
-      `belowMin=${erDrop.belowMin} noLog=${erDrop.noLog} ` +
-      `noActual=${erDrop.noActual} survived=${erDrop.survived} ` +
-      `(threshold=${MIN_LINE.earned_runs})`
-  );
+  for (const pt of DIAG_PROPS) {
+    const d = drops.get(pt);
+    if (!d) continue;
+    console.log(
+      `[results-diag] ${pt} join drop: ` +
+        `noLine=${d.noLine} belowMin=${d.belowMin} ` +
+        `noLog=${d.noLog} noActual=${d.noActual} ` +
+        `survived=${d.survived} (threshold=${MIN_LINE[pt]})`,
+    );
+  }
 
   // Newest first; stable secondary sort by player name.
   results.sort((a, b) => {
@@ -267,7 +332,7 @@ async function getResults(): Promise<{
     return a.playerName.localeCompare(b.playerName);
   });
 
-  return { results, dateRange: { start: startDate, end: endDate } };
+  return { results, dateRange: { start: startDate, end: endDate }, trackedFrom };
 }
 
 // ── page ─────────────────────────────────────────────────────────────────────
@@ -280,7 +345,7 @@ function formatDate(iso: string): string {
 }
 
 export default async function ResultsPage() {
-  const { results, dateRange } = await getResults();
+  const { results, dateRange, trackedFrom } = await getResults();
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -302,7 +367,7 @@ export default async function ResultsPage() {
       </header>
 
       {results.length > 0 ? (
-        <ResultsBoard results={results} />
+        <ResultsBoard results={results} trackedFrom={trackedFrom} />
       ) : (
         <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
           No evaluable results yet — need projections + lines + graded actuals

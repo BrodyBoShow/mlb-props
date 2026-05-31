@@ -155,7 +155,20 @@ function OverallCard({ results }: { results: EvaluatedResult[] }) {
   );
 }
 
-function PerPropCard({ results }: { results: EvaluatedResult[] }) {
+function formatTrackedFrom(iso: string): string {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function PerPropCard({
+  results,
+  trackedFrom,
+}: {
+  results: EvaluatedResult[];
+  trackedFrom: Partial<Record<PropType, string>>;
+}) {
   const allTypes: PropType[] = [...PITCHER_PROPS, ...HITTER_PROPS];
   const rows = allTypes
     .map((pt) => {
@@ -195,16 +208,23 @@ function PerPropCard({ results }: { results: EvaluatedResult[] }) {
               key={r.propType}
               className="flex items-center justify-between px-5 py-2.5 text-sm"
             >
-              <span className="flex items-center gap-2">
-                <span className={r.biased ? "text-slate-400" : "text-slate-200"}>
-                  {PROP_LABELS[r.propType]}
+              <span className="flex flex-col items-start gap-0.5">
+                <span className="flex items-center gap-2">
+                  <span className={r.biased ? "text-slate-400" : "text-slate-200"}>
+                    {PROP_LABELS[r.propType]}
+                  </span>
+                  {r.biased && (
+                    <span
+                      className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400"
+                      title="Model leans one direction on >80% of rows for this prop — hit rate likely reflects base rate, not signal."
+                    >
+                      ⚠ lean bias
+                    </span>
+                  )}
                 </span>
-                {r.biased && (
-                  <span
-                    className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400"
-                    title="Model leans one direction on >80% of rows for this prop — hit rate likely reflects base rate, not signal."
-                  >
-                    ⚠ lean bias
+                {trackedFrom[r.propType] && (
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                    tracked from {formatTrackedFrom(trackedFrom[r.propType]!)}
                   </span>
                 )}
               </span>
@@ -360,7 +380,14 @@ function GameFilter({
 
 // ── main component ───────────────────────────────────────────────────────────
 
-export default function ResultsBoard({ results }: { results: EvaluatedResult[] }) {
+export default function ResultsBoard({
+  results,
+  trackedFrom,
+}: {
+  results: EvaluatedResult[];
+  // Per-prop earliest-line-ingested date. Display only — not used for filtering.
+  trackedFrom: Partial<Record<PropType, string>>;
+}) {
   const [propFilter, setPropFilter] = useState<Filter>("all");
   const [gameFilter, setGameFilter] = useState<GameKey>("all");
 
@@ -397,7 +424,7 @@ export default function ResultsBoard({ results }: { results: EvaluatedResult[] }
       <OverallCard results={filtered} />
       {/* per-prop breakdown always uses the FULL set so the user sees per-prop
           coverage even while filtered */}
-      <PerPropCard results={results} />
+      <PerPropCard results={results} trackedFrom={trackedFrom} />
 
       <FilterBar active={propFilter} setActive={setPropFilter} results={results} />
       <GameFilter active={gameFilter} setActive={setGameFilter} results={results} />
