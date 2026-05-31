@@ -52,3 +52,20 @@ create table if not exists projections (
     updated_at       timestamptz default now(),
     primary key (game_id, player_id, prop_type, projection_date)
 );
+
+-- lines: sportsbook betting lines per pitcher + prop + book per day.
+-- The most fragile data source (CLAUDE.md step 10/11): fetched defensively,
+-- isolated from projections. UPSERT key: (player_id, prop_type, bookmaker, game_date).
+create table if not exists lines (
+    id          serial primary key,
+    player_id   integer not null references players(player_id),
+    player_name text not null,
+    prop_type   text not null,
+    bookmaker   text not null,
+    line        numeric not null,
+    over_price  integer,
+    under_price integer,
+    game_date   date not null,
+    fetched_at  timestamptz default now(),
+    unique (player_id, prop_type, bookmaker, game_date)
+);

@@ -4,3 +4,4 @@ supabase
 python-dotenv
 xgboost
 joblib
+parlay-api

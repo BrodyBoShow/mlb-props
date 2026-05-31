@@ -12,6 +12,7 @@ Logs to stdout only (GitHub Actions captures it). Never writes log rows to the D
 """
 
 import traceback
+from datetime import date
 
 import pybaseball
 
@@ -22,6 +23,7 @@ import calibrate
 import db
 import fetch
 import grade
+import lines
 import model as mlb_model
 
 MODEL_WEIGHT = 0.6
@@ -115,6 +117,13 @@ def main() -> None:
             other_prop_rows.extend(rows)
             n = db.upsert_projections(rows)
             print(f"  upserted {n} {label} projections")
+
+        # ── betting lines (most fragile source — isolated, graceful fallback) ──
+        print("Fetching pitcher prop lines from ParlayAPI...")
+        name_to_id = {s["full_name"]: s["player_id"] for s in starters if s.get("full_name")}
+        line_rows = lines.fetch_pitcher_lines(name_to_id, date.today())
+        n_lines = db.upsert_lines(line_rows)
+        print(f"  upserted {n_lines} lines across {len(lines.BOOKMAKERS)} bookmakers")
 
         # ── calibration confidence scores ─────────────────────────────────────
         print("Computing calibration confidence scores...")

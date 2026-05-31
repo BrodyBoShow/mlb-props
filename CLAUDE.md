@@ -63,7 +63,7 @@ sources -> scheduled job (fetch, clean, train, project) -> database -> frontend 
     to the last good snapshot so their flakiness never touches the projections.
 
 ## Current status
-Steps 1-10 complete. Working pipeline + frontend:
+Steps 1-11 complete. Working pipeline + frontend:
 - engine/fetch.py — pure MLB Stats API layer. fetch_games(), fetch_starters()
   (probable pitchers linked to game_id, lru_cached), fetch_probable_pitchers()
   (players-table rows). No DB code.
@@ -87,8 +87,16 @@ Steps 1-10 complete. Working pipeline + frontend:
 - engine/calibrate.py — compute_confidences() reads player_game_logs and emits
   a 0.0-1.0 hit-rate score per pitcher per prop type. Covers all 5 prop types
   once player_game_logs accumulates 5+ graded starts per pitcher. No DB writes.
+- engine/lines.py — ParlayAPI betting-line fetch layer (step 11). Pure fetch,
+  no DB code. fetch_pitcher_lines(name_to_id, game_date) pulls all 5 pitcher
+  prop markets in ONE call across 7 books (pinnacle + DK/FD + PrizePicks/
+  Underdog/Betr/Sleeper), keeps only projected starters, maps market_key ->
+  prop_type, shapes rows for the lines table. Defensive: the parlay_api import
+  is guarded and the API call is wrapped in try/except, so a missing package
+  or failed request prints and returns [] — projections are never affected.
 - engine/main.py — orchestrates: grade yesterday -> fetch -> upsert -> baseline
-  (5 props) -> XGBoost blend -> upsert -> calibrate confidences. stdout only.
+  (5 props) -> XGBoost blend -> upsert -> fetch lines -> upsert -> calibrate
+  confidences. stdout only.
 - web/ — Next.js 14 (App Router) + Tailwind. page.tsx (server) fetches all 5
   prop types in one Supabase query, passes to PropBoard.tsx (client) which handles
   tab selection. force-dynamic. ZERO math in frontend. Build passes.
@@ -101,6 +109,23 @@ Steps 1-10 complete. Working pipeline + frontend:
       add column if not exists actual_walks         integer,
       add column if not exists actual_earned_runs   integer,
       add column if not exists actual_outs_recorded integer;
+- db/schema.sql — new `lines` table (step 11): one row per pitcher + prop +
+  bookmaker + day. Migration SQL (run once in Supabase SQL editor):
+    create table if not exists lines (
+        id          serial primary key,
+        player_id   integer not null references players(player_id),
+        player_name text not null,
+        prop_type   text not null,
+        bookmaker   text not null,
+        line        numeric not null,
+        over_price  integer,
+        under_price integer,
+        game_date   date not null,
+        fetched_at  timestamptz default now(),
+        unique (player_id, prop_type, bookmaker, game_date)
+    );
+    alter table lines enable row level security;
+    create policy "public read lines" on lines for select to anon using (true);
 Verified: 15 games, 30 players, 149 projection rows per run (29 strikeouts +
 30 each of hits_allowed, walks, earned_runs, outs_recorded).
 
@@ -113,8 +138,12 @@ Known follow-ups:
   scheduled job; revisit if it bottlenecks.
 - Run the player_game_logs migration SQL in Supabase before the new grading
   columns will be written (one-time manual step).
+- Run the `lines` table migration SQL in Supabase before line ingestion will
+  persist (one-time manual step). The parlay_api import in lines.py is guarded;
+  CI installs the real parlay-api package from requirements.txt.
 
-Next: step 11 — betting line ingestion via Parlay API key.
+Next: step 12 — edge calculation (de-vig Pinnacle baseline, compare to our
+projection, populate an edge column or edges view).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

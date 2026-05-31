@@ -150,6 +150,19 @@ def upsert_projections(rows: list[dict]) -> int:
     return len(rows)
 
 
+def upsert_lines(rows: list[dict]) -> int:
+    """Upsert betting line rows on (player_id, prop_type, bookmaker, game_date).
+
+    Idempotent — re-running the job refreshes each book's line in place.
+    """
+    if not rows:
+        return 0
+    _client().table("lines").upsert(
+        rows, on_conflict="player_id,prop_type,bookmaker,game_date"
+    ).execute()
+    return len(rows)
+
+
 def update_confidences(rows: list[dict]) -> int:
     """Update the confidence column for existing projection rows.
 
