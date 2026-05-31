@@ -84,35 +84,57 @@ async function getSlate(dateOverride?: string): Promise<{
     selectedDate = latest[0].projection_date;
   }
 
-  // Run all five reads in parallel: projections, edges, updated_at, prev, next.
-  const [
-    { data: projData },
-    { data: edgeData },
-    { data: updatedAtData },
-    { data: prevData },
-    { data: nextData },
-  ] = await Promise.all([
-    // Both projections and edges can exceed Supabase's default 1000-row
-    // cap (projections: ~280 players * 10 props ≈ 2800/day; edges: variable
-    // but often >1000). Set explicit high limits so we never silently
-    // truncate -- the same bug that hid prop_types from /results.
-    supabase
-      .from("projections")
-      .select(
-        "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team, start_time)"
-      )
-      .eq("projection_date", selectedDate)
-      .in("prop_type", ALL_PROP_TYPES)
-      .order("projection", { ascending: false })
-      .limit(50_000),
+  // Paginate projections + edges past Supabase's 1000-row server cap.
+  // .limit() does NOT bypass it; only .range() does (see /results comment).
+  const HOME_PAGE_SIZE = 1000;
+  async function fetchAllHome<T>(
+    build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  ): Promise<T[]> {
+    const all: T[] = [];
+    for (let page = 0; page < 50; page++) {
+      const from = page * HOME_PAGE_SIZE;
+      const to = from + HOME_PAGE_SIZE - 1;
+      const { data, error } = await build(from, to);
+      if (error || !data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < HOME_PAGE_SIZE) break;
+    }
+    return all;
+  }
 
-    supabase
-      .from("edges")
-      .select(
-        "player_id, prop_type, bookmaker, line, fair_over_prob, model_over_prob, edge, over_price, under_price"
-      )
-      .eq("game_date", selectedDate)
-      .limit(50_000),
+  // Run all five reads in parallel: projections (paginated), edges
+  // (paginated), updated_at, prev, next.
+  const [projData, edgeData, { data: updatedAtData }, { data: prevData }, { data: nextData }] =
+    await Promise.all([
+      fetchAllHome<ProjectionRow>(
+        (from, to) =>
+          supabase
+            .from("projections")
+            .select(
+              "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team, start_time)",
+            )
+            .eq("projection_date", selectedDate)
+            .in("prop_type", ALL_PROP_TYPES)
+            .order("projection", { ascending: false })
+            .range(from, to) as unknown as PromiseLike<{
+              data: ProjectionRow[] | null;
+              error: unknown;
+            }>,
+      ),
+
+      fetchAllHome<EdgeRow>(
+        (from, to) =>
+          supabase
+            .from("edges")
+            .select(
+              "player_id, prop_type, bookmaker, line, fair_over_prob, model_over_prob, edge, over_price, under_price",
+            )
+            .eq("game_date", selectedDate)
+            .range(from, to) as unknown as PromiseLike<{
+              data: EdgeRow[] | null;
+              error: unknown;
+            }>,
+      ),
 
     // Most-recently-written row for the "Last updated" timestamp.
     supabase
@@ -139,7 +161,10 @@ async function getSlate(dateOverride?: string): Promise<{
       .limit(1),
   ]);
 
-  const rows = (projData ?? []) as unknown as ProjectionRow[];
+  const rows = projData;
+  console.log(
+    `[home-diag] fetched (paginated): projections=${rows.length} edges=${edgeData.length}`,
+  );
 
   // If the requested date has no data (e.g. a future date with no runs yet),
   // return an empty shell so the UI can still show the date + disabled arrows.
@@ -150,7 +175,7 @@ async function getSlate(dateOverride?: string): Promise<{
   const nextDate = nextData?.[0]?.projection_date ?? null;
 
   // Index edges by (player_id, prop_type) for an O(1) join.
-  const edgeRows = (edgeData ?? []) as unknown as EdgeRow[];
+  const edgeRows = edgeData;
   const edgeByKey = new Map<string, EdgeRow>();
   for (const e of edgeRows) {
     edgeByKey.set(`${e.player_id}|${e.prop_type}`, e);

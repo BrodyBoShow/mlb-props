@@ -168,51 +168,96 @@ async function getResults(): Promise<{
 
   // Fetch the three tables in parallel for the window.
   //
-  // CRITICAL: every query needs an explicit .limit() that exceeds the row
-  // count we expect. Supabase / PostgREST silently caps responses at 1000
-  // rows by default. We expect:
-  //   projections: ~280 players * 10 props * LOOKBACK_DAYS ≈ 20k
-  //   lines:       ~1500/day * LOOKBACK_DAYS ≈ 10k
-  //   logs:        ~280 players * LOOKBACK_DAYS ≈ 2k
-  // Without these explicit limits, the most populous prop_types fill the
-  // 1000-row quota and the rest of the props silently return 0 rows --
-  // exactly the symptom that hid the outs_recorded / earned_runs /
-  // fantasy_score "no data" reports for days.
-  const QUERY_LIMIT = 100_000;
+  // CRITICAL: Supabase enforces a 1000-row cap server-side that .limit()
+  // does NOT override (the b32e840 commit tried; the diag still showed
+  // betting=4 after deploy). The actual mechanism PostgREST honors is the
+  // Range header, exposed via .range(from, to). We paginate in 1000-row
+  // chunks until the server returns less than a full page.
+  //
+  // For /results, the 7-day window pulls projections (~20k), lines (~10k),
+  // and logs (~2k). The 1000-row cap was the silent killer behind every
+  // "no data" report on these props -- the most populous prop_types
+  // (hitter_hits, hitter_total_bases) filled the 1000-row quota and the
+  // rest of the prop_types returned zero rows downstream.
+  const PAGE = 1000;
 
-  const [{ data: projData }, { data: lineData }, { data: logData }] =
-    await Promise.all([
-      supabase
-        .from("projections")
-        .select(
-          "game_id, player_id, prop_type, projection, projection_date, " +
-            "players(full_name), games(home_team, away_team)"
-        )
-        .gte("projection_date", startDate)
-        .lte("projection_date", endDate)
-        .limit(QUERY_LIMIT),
+  async function fetchAllPages<T>(
+    build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+    label: string,
+  ): Promise<T[]> {
+    const all: T[] = [];
+    for (let page = 0; page < 50; page++) {
+      const from = page * PAGE;
+      const to = from + PAGE - 1;
+      const { data, error } = await build(from, to);
+      if (error) {
+        console.log(`[results-diag] paginate ${label} page=${page} error=${String(error)}`);
+        break;
+      }
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < PAGE) break;
+    }
+    return all;
+  }
 
-      supabase
-        .from("lines")
-        .select("player_id, prop_type, bookmaker, line, game_date")
-        .gte("game_date", startDate)
-        .lte("game_date", endDate)
-        .limit(QUERY_LIMIT),
+  const [projData, lineData, logData] = await Promise.all([
+    fetchAllPages<ProjectionRow>(
+      (from, to) =>
+        supabase
+          .from("projections")
+          .select(
+            "game_id, player_id, prop_type, projection, projection_date, " +
+              "players(full_name), games(home_team, away_team)",
+          )
+          .gte("projection_date", startDate)
+          .lte("projection_date", endDate)
+          .range(from, to) as unknown as PromiseLike<{
+            data: ProjectionRow[] | null;
+            error: unknown;
+          }>,
+      "projections",
+    ),
 
-      supabase
-        .from("player_game_logs")
-        .select(
-          "player_id, game_date, " +
-            Object.values(ACTUAL_COLUMN).join(", ")
-        )
-        .gte("game_date", startDate)
-        .lte("game_date", endDate)
-        .limit(QUERY_LIMIT),
-    ]);
+    fetchAllPages<LineRow>(
+      (from, to) =>
+        supabase
+          .from("lines")
+          .select("player_id, prop_type, bookmaker, line, game_date")
+          .gte("game_date", startDate)
+          .lte("game_date", endDate)
+          .range(from, to) as unknown as PromiseLike<{
+            data: LineRow[] | null;
+            error: unknown;
+          }>,
+      "lines",
+    ),
 
-  const projections = (projData ?? []) as unknown as ProjectionRow[];
-  const lines = (lineData ?? []) as unknown as LineRow[];
-  const logs = (logData ?? []) as unknown as LogRow[];
+    fetchAllPages<LogRow>(
+      (from, to) =>
+        supabase
+          .from("player_game_logs")
+          .select(
+            "player_id, game_date, " + Object.values(ACTUAL_COLUMN).join(", "),
+          )
+          .gte("game_date", startDate)
+          .lte("game_date", endDate)
+          .range(from, to) as unknown as PromiseLike<{
+            data: LogRow[] | null;
+            error: unknown;
+          }>,
+      "logs",
+    ),
+  ]);
+
+  console.log(
+    `[results-diag] fetched (paginated): ` +
+      `projections=${projData.length} lines=${lineData.length} logs=${logData.length}`,
+  );
+
+  const projections = projData;
+  const lines = lineData;
+  const logs = logData;
 
   // Per-prop "tracked from" — earliest game_date with any line for this
   // prop_type. One round-trip per prop with LIMIT 1 ordered ascending
