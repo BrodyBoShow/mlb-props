@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 // ── types ────────────────────────────────────────────────────────────────────
@@ -60,6 +61,73 @@ const PROPS: { key: PropType; label: string; unit: string }[] = [
 // Edge threshold for calling a side a real lean vs. roughly even.
 const EDGE_THRESHOLD = 0.1;
 
+// ── date navigation sub-component ────────────────────────────────────────────
+// Renders a row with prev/next arrows around the current date.
+// Arrows are Links when a date exists, greyed non-clickable spans otherwise.
+
+function formatDateLong(iso: string): string {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+const arrowBase =
+  "flex h-10 w-10 items-center justify-center rounded-lg text-xl transition-colors select-none";
+
+function DateNav({
+  currentDate,
+  prevDate,
+  nextDate,
+}: {
+  currentDate: string;
+  prevDate: string | null;
+  nextDate: string | null;
+}) {
+  return (
+    <div className="mb-5 flex items-center justify-between">
+      {prevDate ? (
+        <Link
+          href={`/?date=${prevDate}`}
+          className={`${arrowBase} bg-slate-800 text-slate-200 hover:bg-slate-700`}
+          aria-label="Previous day"
+        >
+          ‹
+        </Link>
+      ) : (
+        <span
+          className={`${arrowBase} cursor-not-allowed bg-slate-800/40 text-slate-700`}
+          aria-disabled="true"
+        >
+          ‹
+        </span>
+      )}
+
+      <span className="text-center text-sm font-semibold text-slate-200">
+        {formatDateLong(currentDate)}
+      </span>
+
+      {nextDate ? (
+        <Link
+          href={`/?date=${nextDate}`}
+          className={`${arrowBase} bg-slate-800 text-slate-200 hover:bg-slate-700`}
+          aria-label="Next day"
+        >
+          ›
+        </Link>
+      ) : (
+        <span
+          className={`${arrowBase} cursor-not-allowed bg-slate-800/40 text-slate-700`}
+          aria-disabled="true"
+        >
+          ›
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── edge sub-component ──────────────────────────────────────────────────────
 // Pure display. Receives the pre-computed edge + line and picks colors/labels.
 
@@ -104,7 +172,7 @@ function ConfidenceBar({ confidence }: { confidence: number | undefined }) {
   const pct = Math.round(confidence * 100);
   const filled = Math.round(confidence * 10);   // 0–10 filled blocks out of 10
 
-  // Color thresholds match the spec: <40% red, 40–60% slate, >60% emerald.
+  // Color thresholds: <40% red, 40–60% slate, >60% emerald.
   let barColor: string;
   let textColor: string;
   if (confidence < 0.4) {
@@ -143,9 +211,13 @@ function ConfidenceBar({ confidence }: { confidence: number | undefined }) {
 
 export default function PropBoard({
   date,
+  prevDate,
+  nextDate,
   byProp,
 }: {
   date: string;
+  prevDate: string | null;
+  nextDate: string | null;
   byProp: ByProp;
 }) {
   const [active, setActive] = useState<PropType>("strikeouts");
@@ -155,6 +227,9 @@ export default function PropBoard({
 
   return (
     <>
+      {/* date navigation */}
+      <DateNav currentDate={date} prevDate={prevDate} nextDate={nextDate} />
+
       {/* prop selector tabs */}
       <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
         {PROPS.map((p) => (

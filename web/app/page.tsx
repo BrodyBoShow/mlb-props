@@ -18,6 +18,9 @@ const ALL_PROP_TYPES: PropType[] = [
   "hitter_home_runs",
 ];
 
+// Simple guard for URL ?date= param — must be YYYY-MM-DD.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 // Shape of a projection row with its joined player + game.
 type ProjectionRow = {
   game_id: number;
@@ -43,62 +46,107 @@ type EdgeRow = {
   under_price: number | null;
 };
 
-async function getLatestSlate(): Promise<{
+// Empty result used when there's no data to show.
+const emptyResult = (date: string | null = null) => ({
+  date,
+  updatedAt: null as string | null,
+  prevDate: null as string | null,
+  nextDate: null as string | null,
+  byProp: Object.fromEntries(
+    ALL_PROP_TYPES.map((p) => [p, []])
+  ) as unknown as ByProp,
+});
+
+async function getSlate(dateOverride?: string): Promise<{
   date: string | null;
   updatedAt: string | null;
+  prevDate: string | null;
+  nextDate: string | null;
   byProp: ByProp;
 }> {
   const supabase = getSupabaseClient();
 
-  // Which slate to show: the most recent projection_date present.
-  // Also grab updated_at so we can show a "last updated" timestamp.
-  const { data: latest } = await supabase
-    .from("projections")
-    .select("projection_date, updated_at")
-    .order("updated_at", { ascending: false })
-    .limit(1);
-
-  const date = latest?.[0]?.projection_date ?? null;
-  const updatedAt = latest?.[0]?.updated_at ?? null;
-  if (!date) {
-    const empty = Object.fromEntries(
-      ALL_PROP_TYPES.map((p) => [p, []])
-    ) as unknown as ByProp;
-    return { date: null, updatedAt: null, byProp: empty };
+  // Resolve the date to display.
+  let selectedDate: string;
+  if (dateOverride) {
+    selectedDate = dateOverride;
+  } else {
+    const { data: latest } = await supabase
+      .from("projections")
+      .select("projection_date")
+      .order("projection_date", { ascending: false })
+      .limit(1);
+    if (!latest?.[0]?.projection_date) return emptyResult();
+    selectedDate = latest[0].projection_date;
   }
 
-  // Fetch all prop types in one query — no math, just reading.
-  const { data } = await supabase
-    .from("projections")
-    .select(
-      "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team)"
-    )
-    .eq("projection_date", date)
-    .in("prop_type", ALL_PROP_TYPES)
-    .order("projection", { ascending: false });
+  // Run all five reads in parallel: projections, edges, updated_at, prev, next.
+  const [
+    { data: projData },
+    { data: edgeData },
+    { data: updatedAtData },
+    { data: prevData },
+    { data: nextData },
+  ] = await Promise.all([
+    supabase
+      .from("projections")
+      .select(
+        "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team)"
+      )
+      .eq("projection_date", selectedDate)
+      .in("prop_type", ALL_PROP_TYPES)
+      .order("projection", { ascending: false }),
 
-  const rows = (data ?? []) as unknown as ProjectionRow[];
+    supabase
+      .from("edges")
+      .select(
+        "player_id, prop_type, bookmaker, line, fair_over_prob, model_over_prob, edge, over_price, under_price"
+      )
+      .eq("game_date", selectedDate),
 
-  // Fetch edges for the same slate date. Most pitchers won't have one (lines
-  // only exist for active pre-game markets), so this is a sparse side table.
-  const { data: edgeData } = await supabase
-    .from("edges")
-    .select(
-      "player_id, prop_type, bookmaker, line, fair_over_prob, model_over_prob, edge, over_price, under_price"
-    )
-    .eq("game_date", date);
+    // Most-recently-written row for the "Last updated" timestamp.
+    supabase
+      .from("projections")
+      .select("updated_at")
+      .eq("projection_date", selectedDate)
+      .order("updated_at", { ascending: false })
+      .limit(1),
 
+    // Closest available date before selectedDate (for the ‹ arrow).
+    supabase
+      .from("projections")
+      .select("projection_date")
+      .lt("projection_date", selectedDate)
+      .order("projection_date", { ascending: false })
+      .limit(1),
+
+    // Closest available date after selectedDate (for the › arrow).
+    supabase
+      .from("projections")
+      .select("projection_date")
+      .gt("projection_date", selectedDate)
+      .order("projection_date", { ascending: true })
+      .limit(1),
+  ]);
+
+  const rows = (projData ?? []) as unknown as ProjectionRow[];
+
+  // If the requested date has no data (e.g. a future date with no runs yet),
+  // return an empty shell so the UI can still show the date + disabled arrows.
+  if (rows.length === 0) return emptyResult(selectedDate);
+
+  const updatedAt = updatedAtData?.[0]?.updated_at ?? null;
+  const prevDate = prevData?.[0]?.projection_date ?? null;
+  const nextDate = nextData?.[0]?.projection_date ?? null;
+
+  // Index edges by (player_id, prop_type) for an O(1) join.
   const edgeRows = (edgeData ?? []) as unknown as EdgeRow[];
-
-  // Index edges by (player_id, prop_type) for an in-memory join. game_date is
-  // fixed to the slate date, so it doesn't need to be part of the key.
   const edgeByKey = new Map<string, EdgeRow>();
   for (const e of edgeRows) {
     edgeByKey.set(`${e.player_id}|${e.prop_type}`, e);
   }
 
-  // Group by prop_type → game_id → pitchers. Pure presentation — no math.
-  // Each pitcher carries its matching edge row (if any), already computed.
+  // Group by prop_type → game_id → players. Pure presentation — no math.
   const byProp = Object.fromEntries(
     ALL_PROP_TYPES.map((propType) => {
       const byGame = new Map<number, GameGroup>();
@@ -116,7 +164,7 @@ async function getLatestSlate(): Promise<{
 
         const e = edgeByKey.get(`${r.player_id}|${r.prop_type}`);
         byGame.get(r.game_id)!.pitchers.push({
-          name: r.players?.full_name ?? "Unknown pitcher",
+          name: r.players?.full_name ?? "Unknown player",
           projection: r.projection,
           // NULL until enough graded starts accumulate; undefined = render nothing.
           confidence: r.confidence ?? undefined,
@@ -134,15 +182,7 @@ async function getLatestSlate(): Promise<{
     })
   ) as unknown as ByProp;
 
-  return { date, updatedAt, byProp };
-}
-
-function formatDate(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
+  return { date: selectedDate, updatedAt, prevDate, nextDate, byProp };
 }
 
 function formatUpdatedAt(iso: string): string {
@@ -157,19 +197,24 @@ function formatUpdatedAt(iso: string): string {
   });
 }
 
-export default async function Home() {
-  const { date, updatedAt, byProp } = await getLatestSlate();
+export default async function Home({
+  searchParams,
+}: {
+  searchParams?: { date?: string };
+}) {
+  const rawDate = searchParams?.date;
+  const dateOverride =
+    rawDate && DATE_RE.test(rawDate) ? rawDate : undefined;
+
+  const { date, updatedAt, prevDate, nextDate, byProp } =
+    await getSlate(dateOverride);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">
-          MLB Props
-        </h1>
+      <header className="mb-6">
+        <h1 className="text-3xl font-bold tracking-tight">MLB Props</h1>
         <p className="mt-1 text-sm text-slate-400">
-          {date
-            ? `Pitchers & hitters · ${formatDate(date)}`
-            : "No projections available yet."}
+          Pitchers &amp; hitters
         </p>
         {updatedAt && (
           <p className="mt-0.5 text-sm text-slate-400">
@@ -179,7 +224,12 @@ export default async function Home() {
       </header>
 
       {date ? (
-        <PropBoard date={date} byProp={byProp} />
+        <PropBoard
+          date={date}
+          prevDate={prevDate}
+          nextDate={nextDate}
+          byProp={byProp}
+        />
       ) : (
         <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
           Nothing to show. Once the engine runs, today&apos;s projections appear
