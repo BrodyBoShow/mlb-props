@@ -244,6 +244,51 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Workflow stale-code diagnostic (.github/workflows/refresh.yml):
+- Investigation found nothing in the workflow that could serve stale .py
+  files: actions/checkout@v4 runs against the default branch with no ref
+  pin, no actions/cache step, no __pycache__ persistence between runs.
+  Each Actions VM is fresh. The "stale output" reports were almost
+  certainly queued runs whose checkout happened before the new commits
+  landed (cron triggers can fire and queue mid-push).
+- Added a "Debug — confirm checkout is fresh" step that prints git HEAD,
+  the last 3 commits, and the mtimes of the engine python files. Then
+  greps engine/model.py for "pitcher rows after type filter" and
+  engine/stats.py for "unrecognized keyspace" — strings that only exist
+  in post-b636a28/post-201729c code. Prints "MISSING: ... is stale" if
+  not found. Next stale-output report is diagnosable from the log alone.
+- Local mtime touches deliberately skipped: git clone always resets file
+  mtimes to checkout time, so touching files locally does nothing for
+  the runner. The grep is the real verification.
+
+Live in-game stat overlay (web/app/useLiveBoxScores.ts + PropBoard.tsx):
+- useLiveBoxScores(liveGamePks) is a client hook that polls
+  statsapi.mlb.com/api/v1/game/{gamePk}/boxscore for each live game
+  every 60s. Returns Map<gamePk, Map<personId, StatLine>>.
+  - personId is the MLBAM id, identical to our players.player_id, so
+    the join is a Map.get() in render.
+  - Re-fetches only when the SET of live gamePks changes (stringified
+    sorted key) — order-only swaps from useLiveGameStatus don't
+    retrigger the wave of box-score requests.
+  - Never throws; on any per-game failure that gamePk drops from the
+    Map and the row falls back to projection-only.
+- PROP_STAT_KEY maps each PropType to the StatLine field it reads:
+    strikeouts → strikeOuts | hits_allowed → hitsAllowed (pitching.hits)
+    walks → baseOnBalls | earned_runs → earnedRuns | outs_recorded → outs
+    hitter_hits → hits | hitter_total_bases → totalBases
+    hitter_rbis → rbi  | hitter_runs → runs | hitter_home_runs → homeRuns
+- ProjectionBadge replaces the right-side green chip when liveActual is
+  defined: '{actual} {unit} · proj {projection}'. The actual is colored
+  by paceColor():
+  - Hitters: green if actual > 0, neutral if 0.
+  - Pitchers: innings_elapsed = (currentInning - 1) +
+    (half === 'bottom' ? 0.5 : 0); expected = projection *
+    innings_elapsed / 9; green if actual >= 0.8 * expected, amber if
+    >= 0.5 * expected, red otherwise. Neutral before innings_elapsed > 0.
+- Only LIVE games show overlay; final games keep projection-only (the
+  /results page covers that view) and pre-game games are unchanged.
+- Pitcher type gained player_id; page.tsx now passes r.player_id through.
+
 Chronological game ordering on the frontend (web/app/page.tsx):
 - games table gained a start_time timestamptz column (first-pitch UTC).
   Populated by engine/fetch.py from statsapi schedule's game_datetime.

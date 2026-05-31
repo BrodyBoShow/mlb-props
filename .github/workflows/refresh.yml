@@ -13,6 +13,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Confirm the runner is on the latest master and that the engine files
+      # actually contain the code we expect to run. Stale-output reports usually
+      # turn out to be queued-run artifacts, but printing the commit + key file
+      # mtimes makes the next failure diagnosable from the log alone.
+      - name: Debug — confirm checkout is fresh
+        run: |
+          echo "=== git ==="
+          git rev-parse HEAD
+          git log --oneline -3
+          echo "=== engine file mtimes ==="
+          ls -la engine/model.py engine/stats.py engine/fetch.py engine/main.py
+          echo "=== sanity grep (these strings only exist in post-b636a28 / post-201729c code) ==="
+          grep -n "pitcher rows after type filter" engine/model.py || echo "MISSING: model.py is stale"
+          grep -n "unrecognized keyspace" engine/stats.py || echo "MISSING: stats.py is stale"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

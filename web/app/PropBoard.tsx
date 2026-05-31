@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useLiveGameStatus, type GameStatus } from "./useLiveGameStatus";
+import { useLiveBoxScores, type StatLine } from "./useLiveBoxScores";
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ export type PropType =
 // optional — most players won't have a line or enough graded history yet.
 // All values are pre-computed by the engine (the frontend does ZERO math).
 export type Pitcher = {
+  player_id: number;     // MLBAM id — matches boxscore "ID{n}" keys 1:1
   name: string;
   projection: number;
   confidence?: number;   // 0–1 hit rate; undefined = not enough graded history
@@ -64,6 +66,90 @@ const PROPS: { key: PropType; label: string; unit: string }[] = [
 
 // Edge threshold for calling a side a real lean vs. roughly even.
 const EDGE_THRESHOLD = 0.1;
+
+// Map each prop type to the StatLine field it reads. Used when overlaying
+// live in-game stats on top of the projection badge.
+const PROP_STAT_KEY: Record<PropType, keyof StatLine> = {
+  strikeouts:         "strikeOuts",
+  hits_allowed:       "hitsAllowed",
+  walks:              "baseOnBalls",
+  earned_runs:        "earnedRuns",
+  outs_recorded:      "outs",
+  hitter_hits:        "hits",
+  hitter_total_bases: "totalBases",
+  hitter_rbis:        "rbi",
+  hitter_runs:        "runs",
+  hitter_home_runs:   "homeRuns",
+};
+
+const HITTER_PROPS: ReadonlySet<PropType> = new Set([
+  "hitter_hits",
+  "hitter_total_bases",
+  "hitter_rbis",
+  "hitter_runs",
+  "hitter_home_runs",
+]);
+
+// Pace coloring for the live actual. For pitchers we compare actual vs the
+// pro-rated portion of the projection given how far into the game we are.
+// For hitters there's no half-inning baseline, so any contribution >0 is
+// green; 0 is neutral. Returns a Tailwind text color class.
+function paceColor(
+  actual: number,
+  projection: number,
+  isHitter: boolean,
+  status: GameStatus | undefined,
+): string {
+  if (isHitter) {
+    return actual > 0 ? "text-emerald-400" : "text-slate-300";
+  }
+  // Pitcher pacing
+  if (!status || !status.inningOrdinal) return "text-slate-300";
+  const inningNum = parseInt(status.inningOrdinal, 10);
+  if (!Number.isFinite(inningNum) || inningNum < 1) return "text-slate-300";
+  const half = status.inningHalf?.toLowerCase() ?? "";
+  const inningsElapsed = (inningNum - 1) + (half === "bottom" ? 0.5 : 0);
+  if (inningsElapsed <= 0) return "text-slate-300";
+  const expected = projection * (inningsElapsed / 9);
+  if (actual >= expected * 0.8) return "text-emerald-400";
+  if (actual >= expected * 0.5) return "text-amber-400";
+  return "text-red-400";
+}
+
+// Render the right-side badge. When a live actual exists, show "{actual} {unit}
+// · proj {projection}"; otherwise just the projection (existing behavior).
+function ProjectionBadge({
+  pitcher,
+  unit,
+  liveActual,
+  isHitter,
+  status,
+}: {
+  pitcher: Pitcher;
+  unit: string;
+  liveActual: number | undefined;
+  isHitter: boolean;
+  status: GameStatus | undefined;
+}) {
+  if (liveActual === undefined) {
+    return (
+      <span className="ml-3 shrink-0 rounded-md bg-emerald-500/10 px-2.5 py-1 text-sm font-semibold text-emerald-400 tabular-nums">
+        {pitcher.projection.toFixed(1)} {unit}
+      </span>
+    );
+  }
+  const color = paceColor(liveActual, pitcher.projection, isHitter, status);
+  return (
+    <span className="ml-3 shrink-0 rounded-md bg-slate-800/80 px-2.5 py-1 text-sm font-semibold tabular-nums">
+      <span className={color}>
+        {liveActual} {unit}
+      </span>
+      <span className="ml-1.5 font-normal text-slate-500">
+        · proj {pitcher.projection.toFixed(1)}
+      </span>
+    </span>
+  );
+}
 
 // ── date navigation sub-component ────────────────────────────────────────────
 // Renders a row with prev/next arrows around the current date.
@@ -331,6 +417,19 @@ export default function PropBoard({
   // to the static matchup + date header in those cases.
   const liveStatus = useLiveGameStatus(date);
 
+  // Derive the list of currently-live gamePks from the schedule poll, then
+  // fetch box scores for those alone. The list is recomputed each render but
+  // useLiveBoxScores stabilizes via a stringified key, so the effect only
+  // re-runs when the set of live games actually changes.
+  const liveGamePks: number[] = [];
+  for (const [gid, s] of liveStatus) {
+    if (s.state === "live") liveGamePks.push(gid);
+  }
+  const liveStats = useLiveBoxScores(liveGamePks);
+
+  const statKey = PROP_STAT_KEY[active];
+  const isHitter = HITTER_PROPS.has(active);
+
   return (
     <>
       {/* date navigation */}
@@ -379,21 +478,37 @@ export default function PropBoard({
                 status={liveStatus.get(g.game_id)}
               />
               <ul className="divide-y divide-slate-800">
-                {g.pitchers.map((p, i) => (
-                  <li
-                    key={`${g.game_id}-${i}`}
-                    className="flex items-start justify-between px-5 py-3"
-                  >
-                    <div className="min-w-0">
-                      <span className="text-slate-100">{p.name}</span>
-                      <EdgeDetail pitcher={p} />
-                      <ConfidenceBar confidence={p.confidence} />
-                    </div>
-                    <span className="ml-3 shrink-0 rounded-md bg-emerald-500/10 px-2.5 py-1 text-sm font-semibold text-emerald-400 tabular-nums">
-                      {p.projection.toFixed(1)} {activeMeta.unit}
-                    </span>
-                  </li>
-                ))}
+                {g.pitchers.map((p, i) => {
+                  const gameStatus = liveStatus.get(g.game_id);
+                  // Only show live actuals when the game is actually live; a
+                  // final-game boxscore would show total stats, which is what
+                  // /results is for, not the in-progress overlay.
+                  const liveActual =
+                    gameStatus?.state === "live"
+                      ? (liveStats.get(g.game_id)?.get(p.player_id)?.[statKey] as
+                          | number
+                          | undefined)
+                      : undefined;
+                  return (
+                    <li
+                      key={`${g.game_id}-${i}`}
+                      className="flex items-start justify-between px-5 py-3"
+                    >
+                      <div className="min-w-0">
+                        <span className="text-slate-100">{p.name}</span>
+                        <EdgeDetail pitcher={p} />
+                        <ConfidenceBar confidence={p.confidence} />
+                      </div>
+                      <ProjectionBadge
+                        pitcher={p}
+                        unit={activeMeta.unit}
+                        liveActual={liveActual}
+                        isHitter={isHitter}
+                        status={gameStatus}
+                      />
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           ))}

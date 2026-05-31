@@ -175,6 +175,7 @@ async function getSlate(dateOverride?: string): Promise<{
 
         const e = edgeByKey.get(`${r.player_id}|${r.prop_type}`);
         byGame.get(r.game_id)!.pitchers.push({
+          player_id: r.player_id,
           name: r.players?.full_name ?? "Unknown player",
           projection: r.projection,
           // NULL until enough graded starts accumulate; undefined = render nothing.
