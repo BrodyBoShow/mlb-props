@@ -244,6 +244,34 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Lines ingestion — many-to-one market_key map (fixes outs_recorded):
+- ParlayAPI substring-matches the markets parameter against its internal
+  catalog, then returns rows with NORMALIZED market_key values that don't
+  always equal the request string. Previously MARKET_TO_PROP was the
+  reverse of PROP_TO_MARKET (one request -> one response), which silently
+  dropped any prop where ParlayAPI's response key differs from the
+  request key.
+- The big one we missed: requesting 'player_pitcher_outs' returns rows
+  with market_key='player_outs' (10) or 'player_pitching_outs' (4) -- not
+  'player_pitcher_outs'. Every one of the 14 daily outs lines was getting
+  dropped at the market-key match step. The '/results' page's "Outs --
+  no lines yet" tag was caused by this, not by a true upstream gap.
+- engine/lines.py now defines MARKET_TO_PROP as an EXPLICIT many-to-one
+  dict including every response market_key we want per prop:
+    strikeouts:   player_strikeouts, player_pitcher_strikeouts
+    hits_allowed: player_hits_allowed
+    walks:        player_walks, player_walks_allowed
+    earned_runs:  player_earned_runs, player_earned_runs_allowed
+    outs_recorded: player_outs, player_pitching_outs        [FIX]
+    hitter_*: unchanged
+    pitcher_fantasy_score / hitter_fantasy_score: unchanged
+- PROP_TO_MARKET is unchanged (still drives the request) -- only the
+  reverse map gained new keys, so this is purely additive: more lines
+  per cron run, no existing lines lost.
+- Discovered via engine/_probe_keys.py (removed after the audit).
+  The probe tried both canonical Odds-API names (pitcher_outs) and our
+  legacy player_X names and tallied the response market_keys and books.
+
 Results page — Total Bases bug fix + UI polish:
 - TOTAL BASES BUG (silent since day one): the MLB boxscore batting
   object does NOT carry a totalBases field -- only atBats, hits,

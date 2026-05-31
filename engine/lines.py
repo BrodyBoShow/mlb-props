@@ -26,7 +26,9 @@ except ImportError:
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 
-# Our prop_type -> ParlayAPI market key. Pitcher props + hitter props.
+# REQUEST keys -- one per prop_type, sent as the `markets` parameter to
+# ParlayAPI. ParlayAPI substring-matches this against its internal catalog
+# so the request key doesn't have to equal the response market_key.
 PROP_TO_MARKET = {
     # pitcher
     "strikeouts":    "player_strikeouts",
@@ -47,7 +49,38 @@ PROP_TO_MARKET = {
     "pitcher_fantasy_score": "player_pitcher_fantasy_score",
     "hitter_fantasy_score":  "player_hitter_fantasy_score",
 }
-MARKET_TO_PROP = {v: k for k, v in PROP_TO_MARKET.items()}
+
+# RESPONSE keys -- the values of `market_key` in the rows ParlayAPI returns.
+# Multiple response keys can map to the same prop_type because ParlayAPI
+# normalizes some markets differently from the request. Anything NOT in this
+# map is dropped (which includes alt/milestone/inning variants we don't want).
+#
+# Discovered via the engine/_probe_keys.py probe (2026-05-31). The OUTS map
+# below is the one that was broken: requesting 'player_pitcher_outs' returns
+# rows with market_key='player_outs' or 'player_pitching_outs', neither of
+# which was previously accepted -- all 14 daily outs lines were getting
+# dropped silently.
+MARKET_TO_PROP = {
+    # pitcher
+    "player_strikeouts":            "strikeouts",
+    "player_pitcher_strikeouts":    "strikeouts",
+    "player_hits_allowed":          "hits_allowed",
+    "player_walks":                 "walks",
+    "player_walks_allowed":         "walks",
+    "player_earned_runs":           "earned_runs",
+    "player_earned_runs_allowed":   "earned_runs",
+    "player_outs":                  "outs_recorded",
+    "player_pitching_outs":         "outs_recorded",
+    # hitter
+    "player_hits":         "hitter_hits",
+    "player_total_bases":  "hitter_total_bases",
+    "player_rbis":         "hitter_rbis",
+    "player_runs":         "hitter_runs",
+    "player_home_runs":    "hitter_home_runs",
+    # PrizePicks-only fantasy
+    "player_pitcher_fantasy_score": "pitcher_fantasy_score",
+    "player_hitter_fantasy_score":  "hitter_fantasy_score",
+}
 
 # Prop types that are scored against PrizePicks only — any line on any other
 # book for these props is dropped on ingest, no matter what ParlayAPI returns.
