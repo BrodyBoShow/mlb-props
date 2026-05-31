@@ -26,21 +26,23 @@ async function getLatestSlate(): Promise<{
   const supabase = getSupabaseClient();
 
   // Which slate to show: the most recent projection_date present.
-  const { data: latest } = await supabase
+  const { data: latest, error: e1 } = await supabase
     .from("projections")
     .select("projection_date")
     .order("projection_date", { ascending: false })
     .limit(1);
+  if (e1) console.error("[Supabase] date query error:", JSON.stringify(e1));
 
   const date = latest?.[0]?.projection_date ?? null;
   if (!date) return { date: null, groups: [] };
 
-  const { data } = await supabase
+  const { data, error: e2 } = await supabase
     .from("projections")
     .select("game_id, projection, players(full_name), games(home_team, away_team)")
     .eq("prop_type", "strikeouts")
     .eq("projection_date", date)
     .order("projection", { ascending: false });
+  if (e2) console.error("[Supabase] projections query error:", JSON.stringify(e2));
 
   const rows = (data ?? []) as unknown as ProjectionRow[];
 
