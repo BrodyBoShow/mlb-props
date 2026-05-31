@@ -244,6 +244,24 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+XGBoost feature set (engine/model.py train()):
+- FEATURE_COLS = [last5_k_rate, last30_k_rate, is_home, days_rest, opp_k_rate].
+  Target: actual_strikeouts. Only pitcher rows train the model.
+- Required (drop if missing): actual_strikeouts, home_away.
+- Optional / imputed (never drop, always fill):
+    - last5_k_rate / last30_k_rate: shift(1).rolling(...).mean() makes the
+      FIRST row per pitcher NaN. Imputed with the league pitcher K average
+      from the current pool (fallback 5.0).
+    - opp_k_rate: NULL when FanGraphs 403s on the Actions runner. Imputed
+      with constants.LEAGUE_AVG_K_PCT.
+    - days_rest: NULL on a pitcher's first row of the season. Imputed with 5.
+- train() filters to player_type='pitcher' BEFORE feature engineering. Without
+  this, hitter rows (actual_strikeouts=NULL) silently void the entire pool —
+  the original bug behind the "300 training rows / 0 usable" symptom.
+- Diagnostics: train() prints row count after the type filter and per-column
+  NaN counts after imputation, so the next zero-row failure is immediately
+  attributable to a specific column.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

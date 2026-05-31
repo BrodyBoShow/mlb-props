@@ -112,7 +112,20 @@ def train() -> XGBRegressor | None:
     print(f"  {len(rows)} training rows found")
     df = pd.DataFrame(rows).sort_values(["player_id", "game_date"]).reset_index(drop=True)
 
-    # Build rolling features from the log table (no API calls needed for training)
+    # Step 1: keep only pitcher rows. player_game_logs mixes pitcher + hitter
+    # rows (hitter rows have actual_strikeouts=NULL); training on hitter rows
+    # produces all-NaN features and silently drops the entire pool.
+    if "player_type" in df.columns:
+        df = df[df["player_type"].fillna("pitcher") == "pitcher"].reset_index(drop=True)
+    else:
+        df = df[df["actual_strikeouts"].notna()].reset_index(drop=True)
+    print(f"  {len(df)} pitcher rows after type filter")
+
+    # Step 2: rolling features. shift(1) prevents leakage of the current game's
+    # K count into its own feature, but it makes the FIRST row per player NaN.
+    # Early-season many pitchers have only 1-2 starts, so we impute the NaN
+    # first-row values with the league pitcher K average (~5.0 per start)
+    # instead of dropping them — this preserves the training pool.
     df["is_home"] = (df["home_away"] == "home").astype(int)
     df["last5_k_rate"] = (
         df.groupby("player_id")["actual_strikeouts"]
@@ -122,10 +135,23 @@ def train() -> XGBRegressor | None:
         df.groupby("player_id")["actual_strikeouts"]
         .transform(lambda x: x.shift(1).rolling(30, min_periods=1).mean())
     )
+
+    # Step 3: impute optional columns. opp_k_rate may be NULL on rows graded
+    # while FanGraphs returned 403 on the Actions runner; days_rest may be
+    # NULL on the first row of the season. Fill rather than drop.
+    league_pitcher_k = float(df["actual_strikeouts"].mean()) if len(df) else 5.0
+    df["last5_k_rate"]  = df["last5_k_rate"].fillna(league_pitcher_k)
+    df["last30_k_rate"] = df["last30_k_rate"].fillna(league_pitcher_k)
     if "opp_k_rate" not in df.columns:
         df["opp_k_rate"] = LEAGUE_AVG_K_PCT
+    df["opp_k_rate"] = pd.to_numeric(df["opp_k_rate"], errors="coerce").fillna(LEAGUE_AVG_K_PCT)
     if "days_rest" not in df.columns:
         df["days_rest"] = 5
+    df["days_rest"] = pd.to_numeric(df["days_rest"], errors="coerce").fillna(5)
+
+    # Diagnostics: per-column NaN counts before the final drop
+    nan_counts = {c: int(df[c].isna().sum()) for c in FEATURE_COLS + ["actual_strikeouts"]}
+    print(f"  NaN counts after imputation: {nan_counts}")
 
     df = df.dropna(subset=FEATURE_COLS + ["actual_strikeouts"])
     if len(df) < MIN_TRAINING_ROWS:
