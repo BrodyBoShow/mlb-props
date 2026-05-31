@@ -244,6 +244,38 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Fantasy Score props — Phase 5 (frontend):
+- web/lib/fantasyScore.ts is the TypeScript mirror of engine/fantasy_score.py.
+  Same weights, same QS rule, same singles derivation. Comment on each
+  file references the other; change in one => change in the other.
+- PropBoard.tsx:
+    * PropType union + PROPS list gain both new types. Labels "Fantasy
+      Score" with unit "FP". Pitcher FP placed after Outs Recorded;
+      Hitter FP placed after Home Runs.
+    * HITTER_PROPS Set now includes hitter_fantasy_score so the pacing
+      function treats it correctly.
+    * PROP_STAT_KEY became Partial<Record<...>> -- fantasy-score props
+      aren't 1:1 with a StatLine field. A new liveActualFor(propType,
+      stat) function returns the live actual: simple props look up
+      PROP_STAT_KEY; hitter_fantasy_score calls hitterFantasyScore over
+      all components; pitcher_fantasy_score computes ONLY the
+      outs/K/ER portion (W and QS withheld until the game is final, per
+      spec). The render replaces the inline statKey lookup with this
+      helper.
+- useLiveBoxScores.ts extends StatLine with doubles, triples, hitByPitch,
+  stolenBases so the live hitter FP has everything it needs.
+- results/page.tsx ACTUAL_COLUMN + MIN_LINE both gain the two new
+  prop_types:
+    pitcher_fantasy_score floor 6.0  (filters short relief outings)
+    hitter_fantasy_score  floor 4.0  (filters bench/pinch appearances)
+- ResultsBoard.tsx PropType + PROP_LABELS ("Pitcher Fantasy",
+  "Hitter Fantasy") + PITCHER_PROPS + HITTER_PROPS arrays all updated.
+  New BIAS_EXEMPT Set lists both fantasy-score props so the lean-bias
+  flag never fires for them -- PrizePicks posts a single balanced
+  flat-payout line, so any tilt is model behavior, not a base-rate trap.
+- Results footer now notes: "Fantasy score uses the official PrizePicks
+  scoring formula and PrizePicks lines only."
+
 Fantasy Score props — Phase 4 (lines + edges):
 - engine/lines.py PROP_TO_MARKET adds pitcher_fantasy_score ->
   player_pitcher_fantasy_score and hitter_fantasy_score ->

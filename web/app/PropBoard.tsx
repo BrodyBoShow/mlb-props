@@ -4,6 +4,12 @@ import Link from "next/link";
 import { useState } from "react";
 import { useLiveGameStatus, type GameStatus } from "./useLiveGameStatus";
 import { useLiveBoxScores, type StatLine } from "./useLiveBoxScores";
+import {
+  hitterFantasyScore,
+  PITCHER_OUT_PTS,
+  PITCHER_STRIKEOUT_PTS,
+  PITCHER_EARNED_RUN_PTS,
+} from "@/lib/fantasyScore";
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -13,11 +19,13 @@ export type PropType =
   | "walks"
   | "earned_runs"
   | "outs_recorded"
+  | "pitcher_fantasy_score"
   | "hitter_hits"
   | "hitter_total_bases"
   | "hitter_rbis"
   | "hitter_runs"
-  | "hitter_home_runs";
+  | "hitter_home_runs"
+  | "hitter_fantasy_score";
 
 // One pitcher/hitter row. Projection is always present; all other fields are
 // optional — most players won't have a line or enough graded history yet.
@@ -51,25 +59,28 @@ export type ByProp = Record<PropType, GameGroup[]>;
 
 const PROPS: { key: PropType; label: string; unit: string }[] = [
   // pitcher props
-  { key: "strikeouts",        label: "Strikeouts",    unit: "K"    },
-  { key: "hits_allowed",      label: "Hits Allowed",  unit: "H"    },
-  { key: "walks",             label: "Walks",         unit: "BB"   },
-  { key: "earned_runs",       label: "Earned Runs",   unit: "ER"   },
-  { key: "outs_recorded",     label: "Outs Recorded", unit: "outs" },
+  { key: "strikeouts",            label: "Strikeouts",     unit: "K"    },
+  { key: "hits_allowed",          label: "Hits Allowed",   unit: "H"    },
+  { key: "walks",                 label: "Walks",          unit: "BB"   },
+  { key: "earned_runs",           label: "Earned Runs",    unit: "ER"   },
+  { key: "outs_recorded",         label: "Outs Recorded",  unit: "outs" },
+  { key: "pitcher_fantasy_score", label: "Fantasy Score",  unit: "FP"   },
   // hitter props
-  { key: "hitter_hits",        label: "H Hits",       unit: "H"   },
-  { key: "hitter_total_bases", label: "Total Bases",  unit: "TB"  },
-  { key: "hitter_rbis",        label: "RBIs",         unit: "RBI" },
-  { key: "hitter_runs",        label: "Runs",         unit: "R"   },
-  { key: "hitter_home_runs",   label: "Home Runs",    unit: "HR"  },
+  { key: "hitter_hits",           label: "H Hits",         unit: "H"    },
+  { key: "hitter_total_bases",    label: "Total Bases",    unit: "TB"   },
+  { key: "hitter_rbis",           label: "RBIs",           unit: "RBI"  },
+  { key: "hitter_runs",           label: "Runs",           unit: "R"    },
+  { key: "hitter_home_runs",      label: "Home Runs",      unit: "HR"   },
+  { key: "hitter_fantasy_score",  label: "Fantasy Score",  unit: "FP"   },
 ];
 
 // Edge threshold for calling a side a real lean vs. roughly even.
 const EDGE_THRESHOLD = 0.1;
 
-// Map each prop type to the StatLine field it reads. Used when overlaying
-// live in-game stats on top of the projection badge.
-const PROP_STAT_KEY: Record<PropType, keyof StatLine> = {
+// Map each SIMPLE prop type to the StatLine field it reads. Fantasy-score
+// props are computed across multiple StatLine fields, not mapped 1:1 here —
+// handled in liveActualFor below.
+const PROP_STAT_KEY: Partial<Record<PropType, keyof StatLine>> = {
   strikeouts:         "strikeOuts",
   hits_allowed:       "hitsAllowed",
   walks:              "baseOnBalls",
@@ -88,7 +99,52 @@ const HITTER_PROPS: ReadonlySet<PropType> = new Set([
   "hitter_rbis",
   "hitter_runs",
   "hitter_home_runs",
+  "hitter_fantasy_score",
 ]);
+
+// Compute the live actual for the active prop from a single StatLine row.
+// Returns undefined when the player hasn't accumulated any of the required
+// fields yet (e.g. hasn't batted; hasn't taken the mound). For fantasy-score
+// props we synthesize from components via the shared scoring constants.
+//
+// Pitcher fantasy score during LIVE games intentionally omits the W bonus
+// and the QS bonus -- both are not final until the game ends. The badge
+// labels it as "in-progress FP" via the trailing asterisk in PROP rendering.
+function liveActualFor(
+  propType: PropType,
+  stat: StatLine | undefined,
+): number | undefined {
+  if (!stat) return undefined;
+
+  if (propType === "hitter_fantasy_score") {
+    if (stat.hits === undefined) return undefined;
+    return hitterFantasyScore({
+      hits:        stat.hits,
+      doubles:     stat.doubles ?? 0,
+      triples:     stat.triples ?? 0,
+      homeRuns:    stat.homeRuns ?? 0,
+      runs:        stat.runs ?? 0,
+      rbis:        stat.rbi ?? 0,
+      walks:       stat.baseOnBalls ?? 0,
+      hitByPitch:  stat.hitByPitch ?? 0,
+      stolenBases: stat.stolenBases ?? 0,
+    });
+  }
+
+  if (propType === "pitcher_fantasy_score") {
+    if (stat.outs === undefined) return undefined;
+    // Live partial: outs + K + ER only. W and QS held back until final.
+    return (
+      stat.outs * PITCHER_OUT_PTS +
+      (stat.strikeOuts ?? 0) * PITCHER_STRIKEOUT_PTS +
+      (stat.earnedRuns ?? 0) * PITCHER_EARNED_RUN_PTS
+    );
+  }
+
+  const key = PROP_STAT_KEY[propType];
+  if (!key) return undefined;
+  return stat[key] as number | undefined;
+}
 
 // Pace coloring for the live actual. For pitchers we compare actual vs the
 // pro-rated portion of the projection given how far into the game we are.
@@ -427,7 +483,6 @@ export default function PropBoard({
   }
   const liveStats = useLiveBoxScores(liveGamePks);
 
-  const statKey = PROP_STAT_KEY[active];
   const isHitter = HITTER_PROPS.has(active);
 
   return (
@@ -485,9 +540,10 @@ export default function PropBoard({
                   // /results is for, not the in-progress overlay.
                   const liveActual =
                     gameStatus?.state === "live"
-                      ? (liveStats.get(g.game_id)?.get(p.player_id)?.[statKey] as
-                          | number
-                          | undefined)
+                      ? liveActualFor(
+                          active,
+                          liveStats.get(g.game_id)?.get(p.player_id),
+                        )
                       : undefined;
                   return (
                     <li

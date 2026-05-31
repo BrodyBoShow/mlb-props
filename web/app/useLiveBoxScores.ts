@@ -19,6 +19,13 @@ export type StatLine = {
   rbi?: number;
   runs?: number;
   homeRuns?: number;
+  // batter components needed to compute live PrizePicks fantasy score.
+  // The five batter fields above PLUS these four are everything the
+  // hitterFantasyScore() helper needs.
+  doubles?: number;
+  triples?: number;
+  hitByPitch?: number;
+  stolenBases?: number;
 };
 
 // Map shape: gamePk -> personId (MLBAM = our players.player_id) -> StatLine.
@@ -100,6 +107,11 @@ export function useLiveBoxScores(liveGamePks: number[]): LiveStatsMap {
               rbi: hasBatting ? Number(batting.rbi ?? 0) : undefined,
               runs: hasBatting ? Number(batting.runs ?? 0) : undefined,
               homeRuns: hasBatting ? Number(batting.homeRuns ?? 0) : undefined,
+              // extra batter components for fantasy score
+              doubles:     hasBatting ? Number(batting.doubles ?? 0) : undefined,
+              triples:     hasBatting ? Number(batting.triples ?? 0) : undefined,
+              hitByPitch:  hasBatting ? Number(batting.hitByPitch ?? 0) : undefined,
+              stolenBases: hasBatting ? Number(batting.stolenBases ?? 0) : undefined,
             });
           }
         }

@@ -10,11 +10,13 @@ export type PropType =
   | "walks"
   | "earned_runs"
   | "outs_recorded"
+  | "pitcher_fantasy_score"
   | "hitter_hits"
   | "hitter_total_bases"
   | "hitter_rbis"
   | "hitter_runs"
-  | "hitter_home_runs";
+  | "hitter_home_runs"
+  | "hitter_fantasy_score";
 
 export type Verdict = "correct" | "wrong" | "skip";
 
@@ -41,30 +43,46 @@ const BIAS_THRESHOLD = 0.8;
 const BIAS_MIN_SAMPLES = 5;
 
 export const PROP_LABELS: Record<PropType, string> = {
-  strikeouts:         "Strikeouts",
-  hits_allowed:       "Hits Allowed",
-  walks:              "Walks",
-  earned_runs:        "Earned Runs",
-  outs_recorded:      "Outs",
-  hitter_hits:        "Hits",
-  hitter_total_bases: "Total Bases",
-  hitter_rbis:        "RBIs",
-  hitter_runs:        "Runs",
-  hitter_home_runs:   "Home Runs",
+  strikeouts:             "Strikeouts",
+  hits_allowed:           "Hits Allowed",
+  walks:                  "Walks",
+  earned_runs:            "Earned Runs",
+  outs_recorded:          "Outs",
+  pitcher_fantasy_score:  "Pitcher Fantasy",
+  hitter_hits:            "Hits",
+  hitter_total_bases:     "Total Bases",
+  hitter_rbis:            "RBIs",
+  hitter_runs:            "Runs",
+  hitter_home_runs:       "Home Runs",
+  hitter_fantasy_score:   "Hitter Fantasy",
 };
 
 const PITCHER_PROPS: PropType[] = [
   "strikeouts", "hits_allowed", "walks", "earned_runs", "outs_recorded",
+  "pitcher_fantasy_score",
 ];
 const HITTER_PROPS: PropType[] = [
   "hitter_hits", "hitter_total_bases", "hitter_rbis", "hitter_runs", "hitter_home_runs",
+  "hitter_fantasy_score",
 ];
+
+// Props that should NEVER trigger the lean-bias flag. PrizePicks posts a
+// single balanced flat-payout line for fantasy score (no alternate ladder),
+// so a heavy one-side tilt across the board reflects model behavior, not
+// the kind of base-rate trap that the bias detector is designed to surface.
+// These are CORE markets that feed the headline rate.
+const BIAS_EXEMPT: ReadonlySet<PropType> = new Set([
+  "pitcher_fantasy_score",
+  "hitter_fantasy_score",
+]);
 
 type Filter = "all" | "pitcher" | "hitter" | PropType;
 
 // Per-prop lean tilt. Returns true when >= BIAS_MIN_SAMPLES rows exist for
-// the prop AND one direction holds > BIAS_THRESHOLD share.
+// the prop AND one direction holds > BIAS_THRESHOLD share. Fantasy-score
+// props are exempt — see BIAS_EXEMPT above.
 function isBiased(results: EvaluatedResult[], pt: PropType): boolean {
+  if (BIAS_EXEMPT.has(pt)) return false;
   let over = 0;
   let under = 0;
   for (const r of results) {

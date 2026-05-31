@@ -29,16 +29,18 @@ const NO_LEAN_THRESHOLD = 0.1;
 
 // Map every prop_type to the column in player_game_logs that holds its actual.
 const ACTUAL_COLUMN: Record<PropType, string> = {
-  strikeouts:         "actual_strikeouts",
-  hits_allowed:       "actual_hits_allowed",
-  walks:              "actual_walks",
-  earned_runs:        "actual_earned_runs",
-  outs_recorded:      "actual_outs_recorded",
-  hitter_hits:        "actual_hits",
-  hitter_total_bases: "actual_total_bases",
-  hitter_rbis:        "actual_rbis",
-  hitter_runs:        "actual_runs",
-  hitter_home_runs:   "actual_home_runs",
+  strikeouts:             "actual_strikeouts",
+  hits_allowed:           "actual_hits_allowed",
+  walks:                  "actual_walks",
+  earned_runs:            "actual_earned_runs",
+  outs_recorded:          "actual_outs_recorded",
+  pitcher_fantasy_score:  "actual_pitcher_fantasy_score",
+  hitter_hits:            "actual_hits",
+  hitter_total_bases:     "actual_total_bases",
+  hitter_rbis:            "actual_rbis",
+  hitter_runs:            "actual_runs",
+  hitter_home_runs:       "actual_home_runs",
+  hitter_fantasy_score:   "actual_hitter_fantasy_score",
 };
 
 // Minimum line value to count as a "main market" line. Anything below is an
@@ -51,13 +53,15 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
 //   - hitter_runs:      no real main market line above 0.5; rate is base-rate noise.
 //   - hitter_rbis:      same — most listed lines are 0.5 alternates.
 const MIN_LINE: Partial<Record<PropType, number>> = {
-  strikeouts:         3.5,   // bumped from 2.5 — 2.5 was still alternate-ish
-  hits_allowed:       3.5,
-  walks:              1.5,
-  earned_runs:        1.5,
-  outs_recorded:      10.5,  // pitchers going past 4 IP — filters short relievers
-  hitter_hits:        1.5,
-  hitter_total_bases: 1.5,
+  strikeouts:             3.5,   // bumped from 2.5 — 2.5 was still alternate-ish
+  hits_allowed:           3.5,
+  walks:                  1.5,
+  earned_runs:            1.5,
+  outs_recorded:          10.5,  // pitchers going past 4 IP — filters short relievers
+  pitcher_fantasy_score:  6.0,   // floor for a real outing — short relief stints filtered
+  hitter_hits:            1.5,
+  hitter_total_bases:     1.5,
+  hitter_fantasy_score:   4.0,   // ~1 hit + run/RBI floor — filters bench/pinch appearances
 };
 
 const ALL_PROP_TYPES = Object.keys(ACTUAL_COLUMN) as PropType[];
@@ -310,7 +314,8 @@ export default async function ResultsPage() {
         Hit = projection&apos;s lean direction matches actual vs. line. Props
         within {NO_LEAN_THRESHOLD} of the line are skipped (no lean). Main
         market lines only. Excluded entirely: home runs, runs, RBIs (one-sided
-        markets or no main line above 0.5).
+        markets or no main line above 0.5). Fantasy score uses the official
+        PrizePicks scoring formula and PrizePicks lines only.
       </footer>
     </main>
   );
