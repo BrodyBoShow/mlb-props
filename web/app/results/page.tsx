@@ -1,149 +1,211 @@
 import Link from "next/link";
 import { getSupabaseClient } from "@/lib/supabase";
-import ResultsBoard, { type GameResult, type PlayerResult } from "./ResultsBoard";
+import ResultsBoard, {
+  type EvaluatedResult,
+  type PropType,
+  type Verdict,
+} from "./ResultsBoard";
 
+// Always read fresh — graded rows land throughout the day as games finish.
 export const dynamic = "force-dynamic";
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// Look at this many days of history. 7 keeps the table readable while still
+// giving enough rows for a stable hit-rate signal once data accumulates.
+const LOOKBACK_DAYS = 7;
 
-// Raw shape of a player_game_logs row joined to players + games.
-type LogRow = {
-  player_id: number;
-  game_id: number;
-  game_date: string;
-  player_type: string;
-  projection: number | null;
-  actual_strikeouts: number | null;
-  actual_hits: number | null;
-  players: { full_name: string | null } | null;
-  games: { home_team: string; away_team: string } | null;
+// Bookmaker preference. We score against ONE book per prop so the hit rate
+// is consistent — comparing model leans across mixed books would muddy the
+// signal. DraftKings is the widest US listing; PrizePicks is the DFS fallback.
+// Anything else is accepted as last resort.
+const BOOK_PREFERENCE = ["draftkings", "prizepicks"] as const;
+
+// Skip props where projection is within this much of the line. Too close to
+// call a lean direction either way.
+const NO_LEAN_THRESHOLD = 0.1;
+
+// Map every prop_type to the column in player_game_logs that holds its actual.
+const ACTUAL_COLUMN: Record<PropType, string> = {
+  strikeouts:         "actual_strikeouts",
+  hits_allowed:       "actual_hits_allowed",
+  walks:              "actual_walks",
+  earned_runs:        "actual_earned_runs",
+  outs_recorded:      "actual_outs_recorded",
+  hitter_hits:        "actual_hits",
+  hitter_total_bases: "actual_total_bases",
+  hitter_rbis:        "actual_rbis",
+  hitter_runs:        "actual_runs",
+  hitter_home_runs:   "actual_home_runs",
 };
 
-async function getResults(dateOverride?: string): Promise<{
-  date: string | null;
-  prevDate: string | null;
-  nextDate: string | null;
-  games: GameResult[];
+const ALL_PROP_TYPES = Object.keys(ACTUAL_COLUMN) as PropType[];
+
+// ── raw row shapes ───────────────────────────────────────────────────────────
+
+type ProjectionRow = {
+  player_id: number;
+  prop_type: string;
+  projection: number;
+  projection_date: string;
+  players: { full_name: string | null } | null;
+};
+
+type LineRow = {
+  player_id: number;
+  prop_type: string;
+  bookmaker: string;
+  line: number;
+  game_date: string;
+};
+
+// player_game_logs rows hold every actual column. We index dynamically by
+// the prop_type → column map above, so the row shape is just an indexable bag.
+type LogRow = {
+  player_id: number;
+  game_date: string;
+  [key: string]: number | string | null;
+};
+
+// ── scoring ──────────────────────────────────────────────────────────────────
+
+function classify(projection: number, line: number, actual: number): Verdict {
+  if (Math.abs(projection - line) < NO_LEAN_THRESHOLD) return "skip";
+  if (projection > line) {
+    // Over lean — correct if actual > line.
+    return actual > line ? "correct" : "wrong";
+  }
+  // Under lean — correct if actual < line.
+  return actual < line ? "correct" : "wrong";
+}
+
+// ── data fetch ───────────────────────────────────────────────────────────────
+
+async function getResults(): Promise<{
+  results: EvaluatedResult[];
+  dateRange: { start: string; end: string } | null;
 }> {
   const supabase = getSupabaseClient();
-  const empty = { date: null, prevDate: null, nextDate: null, games: [] };
 
-  // Resolve date — override or find the latest graded date.
-  let selectedDate: string;
-  if (dateOverride) {
-    selectedDate = dateOverride;
-  } else {
-    const { data: latest } = await supabase
-      .from("player_game_logs")
-      .select("game_date")
-      .order("game_date", { ascending: false })
-      .limit(1);
-    if (!latest?.[0]?.game_date) return empty;
-    selectedDate = latest[0].game_date;
+  // Anchor the window on the most recent graded date (so weekends/off-days
+  // don't show an empty page). Compute start by stepping back LOOKBACK_DAYS.
+  const { data: latest } = await supabase
+    .from("player_game_logs")
+    .select("game_date")
+    .order("game_date", { ascending: false })
+    .limit(1);
+
+  if (!latest?.[0]?.game_date) return { results: [], dateRange: null };
+
+  const endDate = latest[0].game_date as string;
+  const start = new Date(`${endDate}T00:00:00`);
+  start.setDate(start.getDate() - (LOOKBACK_DAYS - 1));
+  const startDate = start.toISOString().slice(0, 10);
+
+  // Fetch the three tables in parallel for the window.
+  const [{ data: projData }, { data: lineData }, { data: logData }] =
+    await Promise.all([
+      supabase
+        .from("projections")
+        .select(
+          "player_id, prop_type, projection, projection_date, players(full_name)"
+        )
+        .gte("projection_date", startDate)
+        .lte("projection_date", endDate),
+
+      supabase
+        .from("lines")
+        .select("player_id, prop_type, bookmaker, line, game_date")
+        .gte("game_date", startDate)
+        .lte("game_date", endDate),
+
+      supabase
+        .from("player_game_logs")
+        .select(
+          "player_id, game_date, " +
+            Object.values(ACTUAL_COLUMN).join(", ")
+        )
+        .gte("game_date", startDate)
+        .lte("game_date", endDate),
+    ]);
+
+  const projections = (projData ?? []) as unknown as ProjectionRow[];
+  const lines = (lineData ?? []) as unknown as LineRow[];
+  const logs = (logData ?? []) as unknown as LogRow[];
+
+  // ── reduce lines to one per (player, prop, date) by book preference ────
+  const linesByKey = new Map<string, LineRow>();
+  const bookRank = (b: string): number => {
+    const i = BOOK_PREFERENCE.indexOf(b as (typeof BOOK_PREFERENCE)[number]);
+    return i === -1 ? Number.POSITIVE_INFINITY : i;
+  };
+  for (const l of lines) {
+    const key = `${l.player_id}|${l.prop_type}|${l.game_date}`;
+    const existing = linesByKey.get(key);
+    if (!existing || bookRank(l.bookmaker) < bookRank(existing.bookmaker)) {
+      linesByKey.set(key, l);
+    }
   }
 
-  // Fetch logs + prev/next grade dates in parallel.
-  const [
-    { data: logData },
-    { data: prevData },
-    { data: nextData },
-  ] = await Promise.all([
-    supabase
-      .from("player_game_logs")
-      .select(
-        "player_id, game_id, game_date, player_type, projection, actual_strikeouts, actual_hits, players(full_name), games(home_team, away_team)"
-      )
-      .eq("game_date", selectedDate)
-      .order("game_id"),
+  // ── logs keyed by (player, date) — we extract actuals per prop_type ────
+  const logsByKey = new Map<string, LogRow>();
+  for (const l of logs) {
+    logsByKey.set(`${l.player_id}|${l.game_date}`, l);
+  }
 
-    supabase
-      .from("player_game_logs")
-      .select("game_date")
-      .lt("game_date", selectedDate)
-      .order("game_date", { ascending: false })
-      .limit(1),
+  // ── join projections → lines → logs ────────────────────────────────────
+  const results: EvaluatedResult[] = [];
+  for (const p of projections) {
+    const propType = p.prop_type as PropType;
+    const actualCol = ACTUAL_COLUMN[propType];
+    if (!actualCol) continue;
 
-    supabase
-      .from("player_game_logs")
-      .select("game_date")
-      .gt("game_date", selectedDate)
-      .order("game_date", { ascending: true })
-      .limit(1),
-  ]);
+    const line = linesByKey.get(
+      `${p.player_id}|${p.prop_type}|${p.projection_date}`
+    );
+    if (!line) continue;
 
-  const rows = (logData ?? []) as unknown as LogRow[];
-  if (rows.length === 0) return { date: selectedDate, prevDate: null, nextDate: null, games: [] };
+    const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
+    if (!log) continue;
 
-  const prevDate = prevData?.[0]?.game_date ?? null;
-  const nextDate = nextData?.[0]?.game_date ?? null;
+    const actualRaw = log[actualCol];
+    if (actualRaw === null || actualRaw === undefined) continue;
+    const actual = Number(actualRaw);
+    if (!Number.isFinite(actual)) continue;
 
-  // Group by game_id, build PlayerResult per row.
-  // Math lives here in the server component — diff and hit are computed once.
-  const gameMap = new Map<number, GameResult>();
-
-  for (const r of rows) {
-    if (!gameMap.has(r.game_id)) {
-      gameMap.set(r.game_id, {
-        gameId: r.game_id,
-        matchup: r.games
-          ? `${r.games.away_team} @ ${r.games.home_team}`
-          : `Game ${r.game_id}`,
-        players: [],
-      });
-    }
-
-    const isPitcher = r.player_type === "pitcher";
-    // Use the prop that matches the player type.
-    const actual = isPitcher
-      ? (r.actual_strikeouts ?? null)
-      : (r.actual_hits ?? null);
-    const projection = r.projection ?? null;
-
-    // Skip rows where we lack a graded actual or projection.
-    if (actual === null || projection === null) continue;
-
-    const diff = actual - projection;
-
-    gameMap.get(r.game_id)!.players.push({
-      playerId: r.player_id,
-      name: r.players?.full_name ?? "Unknown player",
-      playerType: isPitcher ? "pitcher" : "hitter",
-      projection,
+    const verdict = classify(p.projection, line.line, actual);
+    results.push({
+      playerId: p.player_id,
+      playerName: p.players?.full_name ?? "Unknown player",
+      propType,
+      gameDate: p.projection_date,
+      projection: p.projection,
+      line: line.line,
+      bookmaker: line.bookmaker,
       actual,
-      diff: Math.round(diff * 10) / 10,
-      hit: actual >= projection,
+      lean: p.projection > line.line ? "over" : p.projection < line.line ? "under" : "none",
+      verdict,
     });
   }
 
-  // Sort games by game_id (already ordered from the query) and pitchers before hitters within each.
-  const games = [...gameMap.values()].map((g) => ({
-    ...g,
-    players: [
-      ...g.players.filter((p) => p.playerType === "pitcher"),
-      ...g.players.filter((p) => p.playerType === "hitter"),
-    ],
-  }));
+  // Newest first; stable secondary sort by player name.
+  results.sort((a, b) => {
+    if (a.gameDate !== b.gameDate) return a.gameDate < b.gameDate ? 1 : -1;
+    return a.playerName.localeCompare(b.playerName);
+  });
 
-  return { date: selectedDate, prevDate, nextDate, games };
+  return { results, dateRange: { start: startDate, end: endDate } };
 }
 
-function formatDateLong(iso: string): string {
+// ── page ─────────────────────────────────────────────────────────────────────
+
+function formatDate(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
+    month: "short",
     day: "numeric",
   });
 }
 
-export default async function ResultsPage({
-  searchParams,
-}: {
-  searchParams?: { date?: string };
-}) {
-  const rawDate = searchParams?.date;
-  const dateOverride = rawDate && DATE_RE.test(rawDate) ? rawDate : undefined;
-
-  const { date, prevDate, nextDate, games } = await getResults(dateOverride);
+export default async function ResultsPage() {
+  const { results, dateRange } = await getResults();
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -151,8 +213,8 @@ export default async function ResultsPage({
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Results</h1>
           <p className="mt-1 text-sm text-slate-400">
-            {date
-              ? `Projection accuracy · ${formatDateLong(date)}`
+            {dateRange
+              ? `Hit rate vs DraftKings line · ${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`
               : "No graded results yet"}
           </p>
         </div>
@@ -164,21 +226,18 @@ export default async function ResultsPage({
         </Link>
       </header>
 
-      {date && games.length > 0 ? (
-        <ResultsBoard
-          date={date}
-          prevDate={prevDate}
-          nextDate={nextDate}
-          games={games}
-        />
+      {results.length > 0 ? (
+        <ResultsBoard results={results} />
       ) : (
         <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
-          No graded results yet — check back after today&apos;s games finish.
+          No evaluable results yet — need projections + lines + graded actuals
+          on the same day. Check back once a few full slates accumulate.
         </div>
       )}
 
       <footer className="mt-10 text-center text-xs text-slate-600">
-        Projections are statistical estimates, not guarantees.
+        Hit = projection&apos;s lean direction matches actual vs. line. Props
+        within {NO_LEAN_THRESHOLD} of the line are skipped (no lean).
       </footer>
     </main>
   );

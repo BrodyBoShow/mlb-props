@@ -244,6 +244,31 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Results page — line-lean hit rate (web/app/results/):
+- Replaced the old "actual >= projection" metric (which showed 40% the
+  user flagged) with the metric that actually matters for betting:
+  whether the projection's lean direction vs the book line matched the
+  actual outcome.
+- Scoring (web/app/results/page.tsx::classify):
+    over lean  (proj > line):  correct if actual > line, else wrong
+    under lean (proj < line):  correct if actual < line, else wrong
+    no lean    (|proj-line| < 0.1):  skip (too close to call)
+- Joins three tables in memory over a 7-day window anchored on the
+  latest graded date: projections + lines + player_game_logs.
+  Single book per (player, prop, date): DraftKings preferred,
+  PrizePicks fallback, any other book as last resort -- so the hit
+  rate is consistent and not mixing books with different vig.
+- ACTUAL_COLUMN maps every prop_type to its column in
+  player_game_logs (e.g. strikeouts -> actual_strikeouts,
+  hitter_total_bases -> actual_total_bases). All 10 prop types.
+- Display: OverallCard (correct / wrong / skip / total + headline %),
+  PerPropCard (per-prop hit rate), filter chips (All / Pitcher /
+  Hitter / each individual prop type that has rows), and a flat
+  results table sorted newest-first. The overall card recomputes
+  against the filtered set so the headline matches the table.
+- Old per-day ResultsBoard removed; date navigation gone in favor of
+  the 7-day window. /results link in the home header is unchanged.
+
 Team K% via MLB Stats API (engine/stats.py):
 - _team_k_pcts(year) now sources team batting K% from the MLB Stats API
   teams_stats endpoint (group=hitting, stats=season). Same authoritative
