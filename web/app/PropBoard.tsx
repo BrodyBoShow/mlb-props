@@ -11,10 +11,25 @@ export type PropType =
   | "earned_runs"
   | "outs_recorded";
 
+// One pitcher row. Projection is always present; edge fields are optional —
+// most pitchers won't have a betting line, and all values are pre-computed by
+// the engine (the frontend does ZERO math).
+export type Pitcher = {
+  name: string;
+  projection: number;
+  line?: number;
+  edge?: number;
+  fairOverProb?: number;
+  modelOverProb?: number;
+  overPrice?: number;
+  underPrice?: number;
+  bookmaker?: string;
+};
+
 export type GameGroup = {
   game_id: number;
   matchup: string;
-  pitchers: { name: string; projection: number }[];
+  pitchers: Pitcher[];
 };
 
 export type ByProp = Record<PropType, GameGroup[]>;
@@ -28,6 +43,43 @@ const PROPS: { key: PropType; label: string; unit: string }[] = [
   { key: "earned_runs",   label: "Earned Runs",   unit: "ER"   },
   { key: "outs_recorded", label: "Outs Recorded", unit: "outs" },
 ];
+
+// Edge threshold for calling a side a real lean vs. roughly even.
+const EDGE_THRESHOLD = 0.1;
+
+// ── edge sub-component ──────────────────────────────────────────────────────
+// Pure display. Receives the pre-computed edge + line and picks colors/labels.
+
+function EdgeDetail({ pitcher }: { pitcher: Pitcher }) {
+  // No line for this pitcher → render nothing (the common case).
+  if (pitcher.edge === undefined || pitcher.line === undefined) {
+    return null;
+  }
+
+  const edge = pitcher.edge;
+  const signed = `${edge >= 0 ? "+" : "−"}${Math.abs(edge).toFixed(2)}`;
+
+  let edgeNode;
+  if (edge > EDGE_THRESHOLD) {
+    edgeNode = (
+      <span className="text-emerald-400">▲ Edge {signed}</span>
+    );
+  } else if (edge < -EDGE_THRESHOLD) {
+    edgeNode = (
+      <span className="text-red-400">▼ Edge {signed}</span>
+    );
+  } else {
+    edgeNode = <span className="text-slate-500">~Even</span>;
+  }
+
+  return (
+    <div className="mt-1 text-xs tabular-nums">
+      <span className="text-slate-500">Line {pitcher.line}</span>
+      <span className="mx-1.5 text-slate-600">·</span>
+      {edgeNode}
+    </div>
+  );
+}
 
 // ── component ─────────────────────────────────────────────────────────────────
 
@@ -46,7 +98,7 @@ export default function PropBoard({
   return (
     <>
       {/* prop selector tabs */}
-      <div className="mb-6 flex gap-2 overflow-x-auto pb-1">
+      <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
         {PROPS.map((p) => (
           <button
             key={p.key}
@@ -62,6 +114,13 @@ export default function PropBoard({
           </button>
         ))}
       </div>
+
+      {/* edge legend */}
+      <p className="mb-6 text-xs leading-relaxed text-slate-500">
+        Edge = model probability vs. book implied probability.{" "}
+        <span className="text-emerald-400">Positive</span> = model favors the
+        over. Most pitchers have no line until closer to game time.
+      </p>
 
       {/* game cards */}
       {groups.length === 0 ? (
@@ -82,10 +141,13 @@ export default function PropBoard({
                 {g.pitchers.map((p, i) => (
                   <li
                     key={`${g.game_id}-${i}`}
-                    className="flex items-center justify-between px-5 py-3"
+                    className="flex items-start justify-between px-5 py-3"
                   >
-                    <span className="text-slate-100">{p.name}</span>
-                    <span className="rounded-md bg-emerald-500/10 px-2.5 py-1 text-sm font-semibold text-emerald-400 tabular-nums">
+                    <div className="min-w-0">
+                      <span className="text-slate-100">{p.name}</span>
+                      <EdgeDetail pitcher={p} />
+                    </div>
+                    <span className="ml-3 shrink-0 rounded-md bg-emerald-500/10 px-2.5 py-1 text-sm font-semibold text-emerald-400 tabular-nums">
                       {p.projection.toFixed(1)} {activeMeta.unit}
                     </span>
                   </li>
