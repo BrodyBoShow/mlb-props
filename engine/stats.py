@@ -77,12 +77,24 @@ def _mlb_name_to_abbr() -> dict:
 def _team_k_pcts(year: int) -> dict:
     """FanGraphs season team batting K%, keyed by FanGraphs abbreviation. Cached per year.
 
-    FanGraphs 403s the GitHub Actions runner intermittently. We retry up to
-    3 times with a 2-second backoff (the requests.Session UA monkey-patch at
-    the top of this module supplies a browser User-Agent on every attempt).
-    If all attempts fail, fall back to the hardcoded 2024 season table so
-    opp_k_rate is never silently constant in graded rows.
+    Three things can go wrong with FanGraphs on GitHub Actions:
+      1. 403 response (mitigated by the browser-UA monkey-patch above).
+      2. Transient failure (mitigated by 3 retries with 2-second backoff).
+      3. Success but with an unexpected keyspace -- e.g. FanGraphs returns
+         full team names ('Orioles'), trailing-whitespace abbrs, or a
+         different abbreviation scheme. Without validation every team
+         silently falls through to the league-average warning, which is
+         what was happening on the Actions runner.
+
+    We validate that the returned dict's keys overlap TEAM_NAME_MAP.values()
+    by at least HEALTHY_MATCH teams. If not, log what FanGraphs returned and
+    use the 2024 fallback table instead. opp_k_rate is therefore never
+    silently constant: FanGraphs (current-season real values) > 2024 table
+    (last-season real per-team values) > nothing.
     """
+    expected_abbrs = set(TEAM_NAME_MAP.values())
+    HEALTHY_MATCH = 20  # of 30 -- tolerates a few minor renames
+
     last_err: Exception | None = None
     for attempt in range(1, 4):
         try:
@@ -93,10 +105,24 @@ def _team_k_pcts(year: int) -> dict:
                 # FanGraphs returns fraction (0.22) or percent (22.0) -- normalise.
                 k_col = df["K%"]
                 scale = 1.0 if float(k_col.max()) <= 1.0 else 100.0
-                result = {str(row["Team"]): float(row["K%"]) / scale for _, row in df.iterrows()}
-                if attempt > 1:
-                    print(f"  FanGraphs team_batting({year}) succeeded on attempt {attempt}")
-                return result
+                # Strip whitespace defensively on the way in.
+                result = {
+                    str(row["Team"]).strip(): float(row["K%"]) / scale
+                    for _, row in df.iterrows()
+                }
+                overlap = len(set(result.keys()) & expected_abbrs)
+                if overlap >= HEALTHY_MATCH:
+                    if attempt > 1:
+                        print(f"  FanGraphs team_batting({year}) succeeded on attempt {attempt}")
+                    return result
+                # FanGraphs answered but the keyspace doesn't match ours.
+                sample = sorted(result.keys())[:8]
+                print(
+                    f"  WARNING: FanGraphs team_batting({year}) returned an "
+                    f"unrecognized keyspace ({overlap}/30 matched our abbrs; "
+                    f"sample keys: {sample}); using 2024 fallback table"
+                )
+                return dict(_TEAM_K_PCT_2024)
         except Exception as exc:
             last_err = exc
             print(f"  FanGraphs team_batting({year}) attempt {attempt}/3 failed: {exc}")

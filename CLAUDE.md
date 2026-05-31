@@ -244,6 +244,20 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+FanGraphs keyspace validation (engine/stats.py, follow-up to the 403 hardening):
+- The 403 hardening (UA shim + retry + 2024 fallback) covered the failure
+  case. The Actions log surfaced a different failure: FanGraphs returns a
+  response but with keys that don't match TEAM_NAME_MAP's FanGraphs abbrs
+  (e.g. full team names, trailing whitespace, alternate abbreviations).
+  Every team then silently fell through to the league-average warning.
+- _team_k_pcts now validates that the returned dict's keys overlap
+  TEAM_NAME_MAP.values() by >= 20 of 30 teams. If not, it logs the actual
+  sample keys ('sample keys: [...]') and falls back to _TEAM_K_PCT_2024.
+- Keys are also .strip()'d defensively in case FanGraphs decorates with
+  whitespace. grade.py is unchanged — it already routes opp_k_rate through
+  stats._opp_k_rate, which now resolves real per-team values regardless of
+  whether FanGraphs succeeds with a sane keyspace or the fallback activates.
+
 FanGraphs 403 hardening (engine/stats.py):
 - Module-level monkey-patch on requests.Session.request installs a browser
   User-Agent + Accept-Language header as defaults on every requests call so
