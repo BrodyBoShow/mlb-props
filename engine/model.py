@@ -19,10 +19,10 @@ import pybaseball
 import statsapi
 from xgboost import XGBRegressor
 
+from constants import LEAGUE_AVG_K_PCT, STRIKEOUT_EVENTS
+
 MIN_TRAINING_ROWS = 50
 PROP_TYPE = "strikeouts"
-STRIKEOUT_EVENTS = {"strikeout", "strikeout_double_play"}
-LEAGUE_AVG_K_PCT = 0.22   # ~22% of PAs end in a K in modern MLB
 
 FEATURE_COLS = ["last5_k_rate", "last30_k_rate", "is_home", "days_rest", "opp_k_rate"]
 
@@ -141,7 +141,7 @@ def train() -> XGBRegressor | None:
         return None
 
     if len(rows) < MIN_TRAINING_ROWS:
-        print(f"  {len(rows)} rows in player_game_logs (need ≥ {MIN_TRAINING_ROWS}) — skipping training")
+        print(f"  {len(rows)} rows in player_game_logs (need >= {MIN_TRAINING_ROWS}) -- skipping training")
         return None
 
     print(f"  {len(rows)} training rows found")

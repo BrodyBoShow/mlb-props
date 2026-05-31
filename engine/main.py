@@ -93,10 +93,22 @@ def main() -> None:
         print("  no trained model — using baseline only")
         projections = base_projections
 
-    # ── upsert ────────────────────────────────────────────────────────────────
-    print("Upserting projections...")
+    # ── upsert strikeout projections ──────────────────────────────────────────
+    print("Upserting strikeout projections...")
     n_proj = db.upsert_projections(projections)
-    print(f"  upserted {n_proj} projections")
+    print(f"  upserted {n_proj} strikeout projections")
+
+    # ── additional prop types (MLB Stats API game-log baseline) ───────────────
+    for builder, label in [
+        (baseline.build_hits_allowed_projections, "hits_allowed"),
+        (baseline.build_walks_projections, "walks"),
+        (baseline.build_earned_runs_projections, "earned_runs"),
+        (baseline.build_outs_recorded_projections, "outs_recorded"),
+    ]:
+        print(f"Building {label} projections...")
+        rows = builder(starters)
+        n = db.upsert_projections(rows)
+        print(f"  upserted {n} {label} projections")
 
     print("Done.")
 

@@ -10,8 +10,7 @@ from datetime import date, timedelta
 import statsapi
 
 import db
-
-LEAGUE_AVG_K_PCT = 0.22   # default until enriched in step 10
+from constants import LEAGUE_AVG_K_PCT
 
 
 def _boxscore(game_id: int) -> dict:
