@@ -110,6 +110,13 @@ def main() -> None:
         n_proj = db.upsert_projections(projections)
         print(f"  upserted {n_proj} strikeout projections")
 
+        # Sanity check: a normal slate has 28-32 starters. Fewer than 20
+        # strikeout projections means fetch_starters()/lookup_player() is
+        # silently dropping pitchers — surface it without crashing.
+        if len(projections) < 20:
+            print(f"  WARNING: only {len(projections)} strikeout projections — "
+                  f"expected 25+. Check fetch_starters() and lookup_player().")
+
         # ── additional prop types (MLB Stats API game-log baseline) ───────────
         other_prop_rows: list[dict] = []
         for builder, label in [
@@ -143,6 +150,7 @@ def main() -> None:
                  if k in ("player_id", "full_name", "team", "position", "bats", "throws")}
                 for p in lineup_players
             ])
+            hitter_hit_rows: list[dict] = []
             for builder, label in [
                 (baseline.build_hitter_hits_projections,        "hitter_hits"),
                 (baseline.build_hitter_total_bases_projections, "hitter_total_bases"),
@@ -152,9 +160,18 @@ def main() -> None:
             ]:
                 print(f"Building {label} projections...")
                 rows = builder(lineup_players)
+                if label == "hitter_hits":
+                    hitter_hit_rows = rows
                 all_projections.extend(rows)
                 n = db.upsert_projections(rows)
                 print(f"  upserted {n} {label} projections")
+
+            # Sanity check: a full slate of confirmed lineups yields 200+ hitter
+            # projections (18 batters/game x ~15 games). Far fewer means
+            # fetch_lineups() is dropping players — surface it without crashing.
+            if len(hitter_hit_rows) < 100:
+                print(f"  WARNING: only {len(hitter_hit_rows)} hitter projections — "
+                      f"expected 200+. Check fetch_lineups().")
 
             # Include hitters in the line fetch so edges cover them too.
             hitter_name_to_id = {

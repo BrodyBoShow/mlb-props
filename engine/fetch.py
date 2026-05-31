@@ -59,6 +59,19 @@ def _fetch_starters_today() -> tuple[dict, ...]:
             active = [m for m in matches if m.get("active") is True]
             candidates = active if active else matches
 
+            # Narrow to pitchers ONLY. Some names are shared across active
+            # players (e.g. two "Luis Garcia"), and a position player can
+            # otherwise be resolved instead of the pitcher. Apply this BEFORE
+            # the exact-match / sole-candidate logic so it shrinks the pool
+            # first. (fetch_lineups does the opposite — it wants batters.)
+            pitchers = [
+                m for m in candidates
+                if (m.get("primaryPosition") or {}).get("abbreviation")
+                in ("P", "SP", "RP")
+            ]
+            if pitchers:
+                candidates = pitchers
+
             # lookup_player is fuzzy. Prefer an exact full-name hit; otherwise
             # only trust a sole result. Multiple fuzzy matches with no exact
             # hit are ambiguous — skip rather than risk the wrong MLBAM id.
