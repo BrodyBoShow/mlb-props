@@ -2,3 +2,5 @@ MLB-StatsAPI
 pybaseball
 supabase
 python-dotenv
+xgboost
+joblib

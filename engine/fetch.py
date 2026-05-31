@@ -66,6 +66,7 @@ def _fetch_starters_today() -> tuple[dict, ...]:
                     "player_id": pid,
                     "game_id": game_id,
                     "full_name": person.get("fullName"),
+                    "home_away": "home" if key == "home_probable_pitcher" else "away",
                     "team": (person.get("currentTeam") or {}).get("name"),
                     "position": (person.get("primaryPosition") or {}).get("abbreviation"),
                     "bats": (person.get("batSide") or {}).get("code"),
