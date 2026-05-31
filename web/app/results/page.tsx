@@ -56,10 +56,17 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
 // Excluded entirely:          home runs, runs, RBIs (one-sided markets).
 const MIN_LINE: Partial<Record<PropType, number>> = {
   strikeouts:             3.5,
-  hits_allowed:           3.5,
-  outs_recorded:          10.5,  // pitchers going past 4 IP -- filters short relievers
-  pitcher_fantasy_score:  6.0,   // floor for a real outing
-  hitter_fantasy_score:   4.0,   // ~1 hit + run/RBI floor -- filters bench appearances
+  // Hits allowed: lowered from 3.5 to 2.5. Back-end-rotation arms with
+  // 5 IP expected lines posted at 2.5 were being dropped; the result was
+  // 0/0 rows for hits_allowed even when projections + logs both existed.
+  // 2.5 still excludes any 1.5 alternates posted on DFS books.
+  hits_allowed:           2.5,
+  // Outs recorded: ParlayAPI returns 0 player_pitcher_outs lines from
+  // every book we ingest. Effectively never evaluated -- the per-prop
+  // card surfaces this clearly with "no lines yet".
+  outs_recorded:          10.5,
+  pitcher_fantasy_score:  6.0,
+  hitter_fantasy_score:   4.0,
 };
 
 // Model Tracker props: evaluated as actual-vs-projection (no book line). This
