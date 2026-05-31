@@ -36,7 +36,8 @@ PROP_TO_MARKET = {
 MARKET_TO_PROP = {v: k for k, v in PROP_TO_MARKET.items()}
 
 # Sharp baseline (pinnacle) + major US books + main DFS apps.
-BOOKMAKERS = ["pinnacle", "draftkings", "fanduel", "prizepicks", "underdog", "betr", "sleeper"]
+BOOKMAKERS = ["pinnacle", "draftkings", "fanduel",
+              "prizepicks", "underdog", "betr", "sleeper"]
 
 
 def fetch_pitcher_lines(
@@ -60,7 +61,7 @@ def fetch_pitcher_lines(
         return []
 
     try:
-        client = ParlayAPI(api_key)
+        client = ParlayAPI(api_key=api_key)
         raw = client.props(
             "baseball_mlb",
             markets=list(PROP_TO_MARKET.values()),
@@ -100,6 +101,17 @@ def fetch_pitcher_lines(
             "game_date":   game_date_str,
         })
         per_prop[prop_type] += 1
+
+    # Deduplicate: keep one row per (player_id, prop_type, bookmaker, game_date)
+    # ParlayAPI returns main + alt lines — keep the first (main line).
+    seen: set[tuple] = set()
+    deduped: list[dict] = []
+    for r in rows:
+        key = (r["player_id"], r["prop_type"], r["bookmaker"], r["game_date"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(r)
+    rows = deduped
 
     summary = ", ".join(f"{p}: {n}" for p, n in per_prop.items())
     print(f"  fetched {len(rows)} lines ({summary})")
