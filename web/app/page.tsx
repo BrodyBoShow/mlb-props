@@ -44,23 +44,26 @@ type EdgeRow = {
 
 async function getLatestSlate(): Promise<{
   date: string | null;
+  updatedAt: string | null;
   byProp: ByProp;
 }> {
   const supabase = getSupabaseClient();
 
   // Which slate to show: the most recent projection_date present.
+  // Also grab updated_at so we can show a "last updated" timestamp.
   const { data: latest } = await supabase
     .from("projections")
-    .select("projection_date")
-    .order("projection_date", { ascending: false })
+    .select("projection_date, updated_at")
+    .order("updated_at", { ascending: false })
     .limit(1);
 
   const date = latest?.[0]?.projection_date ?? null;
+  const updatedAt = latest?.[0]?.updated_at ?? null;
   if (!date) {
     const empty = Object.fromEntries(
       ALL_PROP_TYPES.map((p) => [p, []])
     ) as unknown as ByProp;
-    return { date: null, byProp: empty };
+    return { date: null, updatedAt: null, byProp: empty };
   }
 
   // Fetch all 5 prop types in one query — no math, just reading.
@@ -128,7 +131,7 @@ async function getLatestSlate(): Promise<{
     })
   ) as unknown as ByProp;
 
-  return { date, byProp };
+  return { date, updatedAt, byProp };
 }
 
 function formatDate(iso: string): string {
@@ -139,20 +142,37 @@ function formatDate(iso: string): string {
   });
 }
 
+function formatUpdatedAt(iso: string): string {
+  return new Date(iso).toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  });
+}
+
 export default async function Home() {
-  const { date, byProp } = await getLatestSlate();
+  const { date, updatedAt, byProp } = await getLatestSlate();
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
       <header className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">
-          MLB Pitcher Props
+          MLB Props
         </h1>
         <p className="mt-1 text-sm text-slate-400">
           {date
-            ? `Probable starters · ${formatDate(date)}`
+            ? `Pitchers & hitters · ${formatDate(date)}`
             : "No projections available yet."}
         </p>
+        {updatedAt && (
+          <p className="mt-0.5 text-sm text-slate-400">
+            Last updated: {formatUpdatedAt(updatedAt)}
+          </p>
+        )}
       </header>
 
       {date ? (

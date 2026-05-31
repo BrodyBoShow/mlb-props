@@ -2,8 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "MLB Strikeout Projections",
-  description: "Today's probable-pitcher strikeout projections.",
+  title: "MLB Props",
+  description: "Today's MLB pitcher and hitter prop projections.",
 };
 
 export default function RootLayout({

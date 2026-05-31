@@ -1,13 +1,114 @@
-"""MLB Stats API pitching game-log fetcher.
+"""MLB Stats API data fetchers and team-rate helpers.
 
 Pure fetch layer — no Statcast, no DB code, no math beyond unit conversion.
 All functions return plain Python dicts shaped for downstream consumers.
+
+Also owns team K-rate helpers (_opp_k_rate and friends) because they are
+data-fetching utilities, not model logic. grade.py and model.py import from
+here so the logic lives in exactly one place.
 """
 
 from datetime import date, timedelta
 from functools import lru_cache
 
+import pybaseball
 import statsapi
+
+from constants import LEAGUE_AVG_K_PCT
+
+
+# ─── team K-rate helpers ─────────────────────────────────────────────────────
+
+@lru_cache(maxsize=1)
+def _mlb_name_to_abbr() -> dict:
+    """Full team name (MLB Stats API) -> abbreviation, e.g. 'New York Yankees' -> 'NYY'."""
+    try:
+        resp = statsapi.get("teams", {"sportId": 1, "activeStatus": "Yes"})
+        return {t["name"]: t["abbreviation"] for t in resp.get("teams", [])}
+    except Exception:
+        return {}
+
+
+@lru_cache(maxsize=4)
+def _team_k_pcts(year: int) -> dict:
+    """FanGraphs season team batting K%, keyed by FanGraphs abbreviation. Cached per year."""
+    try:
+        df = pybaseball.team_batting(year, qual=0)
+        if df is None or df.empty or "K%" not in df.columns:
+            return {}
+        # FanGraphs sometimes returns fraction (0.22) or percent (22.0) — normalise.
+        k_col = df["K%"]
+        scale = 1.0 if float(k_col.max()) <= 1.0 else 100.0
+        return {str(row["Team"]): float(row["K%"]) / scale for _, row in df.iterrows()}
+    except Exception:
+        return {}
+
+
+# MLB Stats API full team name -> FanGraphs team abbreviation (the key
+# _team_k_pcts uses). The statsapi abbreviation often differs from FanGraphs'
+# (e.g. statsapi 'AZ' vs FanGraphs 'ARI'), so mapping the full name straight to
+# the FanGraphs key avoids silent fallbacks. Covers all 30 teams.
+TEAM_NAME_MAP = {
+    "Arizona Diamondbacks":  "ARI",
+    "Atlanta Braves":        "ATL",
+    "Baltimore Orioles":     "BAL",
+    "Boston Red Sox":        "BOS",
+    "Chicago Cubs":          "CHC",
+    "Chicago White Sox":     "CWS",
+    "Cincinnati Reds":       "CIN",
+    "Cleveland Guardians":   "CLE",
+    "Colorado Rockies":      "COL",
+    "Detroit Tigers":        "DET",
+    "Houston Astros":        "HOU",
+    "Kansas City Royals":    "KC",
+    "Los Angeles Angels":    "LAA",
+    "Los Angeles Dodgers":   "LAD",
+    "Miami Marlins":         "MIA",
+    "Milwaukee Brewers":     "MIL",
+    "Minnesota Twins":       "MIN",
+    "New York Mets":         "NYM",
+    "New York Yankees":      "NYY",
+    "Oakland Athletics":     "OAK",   # pre-2025 (FanGraphs historical key)
+    "Athletics":             "ATH",   # 2025+ rebrand; statsapi current full name
+    "Philadelphia Phillies": "PHI",
+    "Pittsburgh Pirates":    "PIT",
+    "San Diego Padres":      "SD",
+    "San Francisco Giants":  "SF",
+    "Seattle Mariners":      "SEA",
+    "St. Louis Cardinals":   "STL",
+    "Tampa Bay Rays":        "TB",
+    "Texas Rangers":         "TEX",
+    "Toronto Blue Jays":     "TOR",
+    "Washington Nationals":  "WSH",
+}
+
+
+@lru_cache(maxsize=128)
+def _opp_k_rate(opp_team_full_name: str, year: int) -> float:
+    """K% of the opposing team as batters (0-1). Falls back to league average.
+
+    Resolution order: TEAM_NAME_MAP (full name -> FanGraphs abbr), then the
+    statsapi abbreviation, then a WARNING + league-average fallback so any
+    unmatched team surfaces in the Actions log instead of silently degrading.
+    """
+    k_pcts = _team_k_pcts(year)
+
+    # 1. Mapped FanGraphs abbreviation (preferred -- covers all 30 teams).
+    mapped = TEAM_NAME_MAP.get(opp_team_full_name)
+    if mapped and mapped in k_pcts:
+        return k_pcts[mapped]
+
+    # 2. Original name -> statsapi abbreviation.
+    abbr = _mlb_name_to_abbr().get(opp_team_full_name)
+    if abbr and abbr in k_pcts:
+        return k_pcts[abbr]
+
+    # 3. No match -- surface it so the mismatch is visible, then fall back.
+    print(
+        f"  WARNING: no FanGraphs K% match for team '{opp_team_full_name}' "
+        f"(mapped={mapped}, abbr={abbr}) -- using league average"
+    )
+    return LEAGUE_AVG_K_PCT
 
 
 def _parse_innings(ip_str: str) -> int:

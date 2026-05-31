@@ -10,7 +10,7 @@ from datetime import date, timedelta
 import statsapi
 
 import db
-import model
+import stats
 
 
 def _parse_innings(ip_str: str) -> int:
@@ -130,7 +130,7 @@ def grade_yesterday(grade_date: date | None = None) -> list[dict]:
         # box score's authoritative home_away to pick it.
         side = result["home_away"]
         opp_team = proj["away_team"] if side == "home" else proj["home_team"]
-        opp_k_rate = model._opp_k_rate(opp_team or "", year)
+        opp_k_rate = stats._opp_k_rate(opp_team or "", year)
 
         # Days rest: difference to this pitcher's most recent prior start in
         # the logs, capped at 10. Defaults to 5 when there's no prior entry.

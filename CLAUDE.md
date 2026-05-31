@@ -74,10 +74,11 @@ Steps 1-14 complete. Working pipeline + frontend:
   (service_role) to bypass RLS; falls back to SUPABASE_ANON_KEY.
 - engine/constants.py — shared constants (STRIKEOUT/HIT/WALK_EVENTS,
   LOOKBACK_DAYS, RECENT_*, LEAGUE_AVG_K_PCT). Imported by baseline, model, grade.
-- engine/stats.py — MLB Stats API game-log fetcher. get_pitcher_starts() is
-  lru_cached(maxsize=64) so all 4 non-strikeout prop builders share one API call
-  per pitcher per run. get_hitter_games() (step 14) is lru_cached(maxsize=512)
-  so all 5 hitter builders share one API call per batter. No Statcast, no DB code.
+- engine/stats.py — MLB Stats API game-log fetcher AND team K-rate helpers
+  (Chunk C refactor: TEAM_NAME_MAP, _mlb_name_to_abbr, _team_k_pcts, _opp_k_rate
+  moved here from model.py — they are data-fetch utilities, not model logic).
+  get_pitcher_starts() lru_cached(maxsize=64); get_hitter_games() lru_cached
+  (maxsize=512); _opp_k_rate lru_cached(maxsize=128). No Statcast, no DB code.
 - engine/baseline.py — weighted rolling strikeout projection (Statcast/pybaseball)
   + 4 pitcher builders via stats.py: hits_allowed, walks, earned_runs,
   outs_recorded. Step 14 adds 5 hitter builders via stats.get_hitter_games():
@@ -227,7 +228,24 @@ Hardening Chunk B complete (this session):
 - main.py: run header (=== pipeline run YYYY-MM-DD HH:MM UTC ===) at start
   of main() and run summary (pitcher count + lineup players) after Done.
 
-Next: Chunk C — presentation polish.
+Hardening Chunk C complete (this session — step 15):
+- layout.tsx: title updated to "MLB Props", description updated.
+- page.tsx: h1 "MLB Pitcher Props" -> "MLB Props"; subtitle "Probable starters"
+  -> "Pitchers & hitters"; "Last updated: <ET timestamp>" added below subtitle,
+  drawn from projections.updated_at. formatUpdatedAt() renders in America/New_York.
+- stats.py: TEAM_NAME_MAP, _mlb_name_to_abbr, _team_k_pcts, _opp_k_rate moved
+  here from model.py. model.py now imports them from stats. grade.py updated to
+  import stats._opp_k_rate instead of model._opp_k_rate. Pure refactor, no
+  behavior change.
+- requirements.txt: all 8 packages pinned (Chunk B).
+
+Step 15 (hardening A+B+C) is complete. The model improves automatically over
+the season as player_game_logs accumulates graded data: XGBoost activates once
+player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
+5+ graded starts exist. No code changes needed for either to kick in.
+
+Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
+WARNING lines.
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
