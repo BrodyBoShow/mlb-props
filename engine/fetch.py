@@ -30,6 +30,10 @@ def fetch_games(date_str: str | None = None) -> list[dict]:
                 "home_team": g["home_name"],
                 "away_team": g["away_name"],
                 "status": g.get("status"),
+                # First-pitch ISO timestamp (UTC, Z-suffixed). Used by the
+                # frontend to sort game cards chronologically. Defensive get:
+                # statsapi sometimes omits game_datetime for TBD slots.
+                "start_time": g.get("game_datetime"),
             }
         )
     return games

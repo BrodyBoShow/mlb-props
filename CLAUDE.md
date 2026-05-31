@@ -244,6 +244,22 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Chronological game ordering on the frontend (web/app/page.tsx):
+- games table gained a start_time timestamptz column (first-pitch UTC).
+  Populated by engine/fetch.py from statsapi schedule's game_datetime.
+  Migration SQL (run once in Supabase SQL editor):
+    alter table games
+      add column if not exists start_time timestamptz;
+- page.tsx now selects games(home_team, away_team, start_time) and stores
+  startTime on each GameGroup. After grouping, the games array for every
+  prop type is sorted ascending by start_time. Games with null start_time
+  (TBD slots) sort to the end via Number.POSITIVE_INFINITY.
+- Sort happens server-side once, so order is identical across all 10 prop
+  tabs (Strikeouts, Hits Allowed, ..., Home Runs) with no client work.
+  Matches MLB's schedule page ordering (10:35 AM ET → 4:20 PM ET, etc.).
+- Live/in-progress games keep their chronological position — no special
+  reordering by status.
+
 Live game status on the frontend (web/app/useLiveGameStatus.ts + PropBoard.tsx):
 - useLiveGameStatus(date) is a client hook that polls the MLB Stats API
   (statsapi.mlb.com/api/v1/schedule?sportId=1&date=...&hydrate=linescore)

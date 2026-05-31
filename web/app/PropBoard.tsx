@@ -37,6 +37,9 @@ export type Pitcher = {
 export type GameGroup = {
   game_id: number;
   matchup: string;
+  // First-pitch ISO timestamp from the games table. The slate is sorted by
+  // this server-side in page.tsx; null entries (TBD) sort to the end.
+  startTime: string | null;
   pitchers: Pitcher[];
 };
 

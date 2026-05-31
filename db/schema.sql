@@ -16,6 +16,7 @@ create table if not exists games (
     home_team  text not null,
     away_team  text not null,
     status     text,                  -- scheduled, live, final
+    start_time timestamptz,           -- first pitch in UTC; used to sort cards chronologically
     created_at timestamptz default now()
 );
 

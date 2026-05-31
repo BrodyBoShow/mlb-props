@@ -30,7 +30,10 @@ type ProjectionRow = {
   projection: number;
   confidence: number | null;
   players: { full_name: string | null } | null;
-  games: { home_team: string; away_team: string } | null;
+  // start_time is the first-pitch UTC timestamp from the games table — used
+  // to order the cards chronologically so the slate matches MLB's schedule
+  // page. Nullable for slots statsapi reported as TBD.
+  games: { home_team: string; away_team: string; start_time: string | null } | null;
 };
 
 // Shape of an edge row from the edges table. All values are pre-computed by
@@ -92,7 +95,7 @@ async function getSlate(dateOverride?: string): Promise<{
     supabase
       .from("projections")
       .select(
-        "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team)"
+        "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team, start_time)"
       )
       .eq("projection_date", selectedDate)
       .in("prop_type", ALL_PROP_TYPES)
@@ -148,6 +151,12 @@ async function getSlate(dateOverride?: string): Promise<{
   }
 
   // Group by prop_type → game_id → players. Pure presentation — no math.
+  // After grouping we sort each prop's games chronologically by start_time so
+  // the slate order matches MLB's schedule page and stays identical across
+  // every tab. Games with no start_time (TBD slots) sort to the end.
+  const startTimeFor = (g: GameGroup): number =>
+    g.startTime ? new Date(g.startTime).getTime() : Number.POSITIVE_INFINITY;
+
   const byProp = Object.fromEntries(
     ALL_PROP_TYPES.map((propType) => {
       const byGame = new Map<number, GameGroup>();
@@ -159,6 +168,7 @@ async function getSlate(dateOverride?: string): Promise<{
             matchup: r.games
               ? `${r.games.away_team} @ ${r.games.home_team}`
               : `Game ${r.game_id}`,
+            startTime: r.games?.start_time ?? null,
             pitchers: [],
           });
         }
@@ -179,7 +189,10 @@ async function getSlate(dateOverride?: string): Promise<{
           bookmaker: e?.bookmaker,
         });
       }
-      return [propType, [...byGame.values()]];
+      const sorted = [...byGame.values()].sort(
+        (a, b) => startTimeFor(a) - startTimeFor(b)
+      );
+      return [propType, sorted];
     })
   ) as unknown as ByProp;
 
