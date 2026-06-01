@@ -244,6 +244,31 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Future-preview starter-ids false warning (this session):
+- Every cron run printed:
+    "WARNING: games table missing starter_id columns -- upserted without
+     them. Run db/migrations/add_starter_ids.sql"
+  even though both columns existed in the live DB (confirmed via
+  information_schema). Two stacked bugs:
+- BUG 1 (engine/main.py): _run_future_previews() upserted games BEFORE
+  players. games.home_starter_id / away_starter_id are FK columns
+  pointing at players(player_id), so the games upsert violated the FK
+  constraint when the probable pitcher for a future date hadn't been
+  upserted yet. Reordered to match _setup_games_and_pitchers (players
+  first, then games).
+- BUG 2 (engine/db.py): upsert_games's defensive "column missing"
+  fallback was triggered by `any(col in msg for col in _STARTER_COLS)`
+  — too broad. FK-violation messages also mention the column name, so
+  the FK error was being silently swallowed, the starter columns
+  stripped, and the misleading warning printed. Tightened the check
+  to require PGRST204 / "Could not find" in the message in addition
+  to the starter-column name. FK errors now re-raise correctly (which
+  is also no longer reachable thanks to fix 1).
+- Verified: pipeline run produced clean "future preview ..." lines
+  with no WARNING. 12/12 sampled future game rows have at least one
+  starter id populated; the few Nones are genuine (probables not yet
+  announced for those teams).
+
 "Last updated" reflects refresh-only runs (this session):
 - web/app/page.tsx: the timestamp shown under "Last updated" used to
   read only projections.updated_at, which is bumped solely by full-

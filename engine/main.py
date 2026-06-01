@@ -399,8 +399,14 @@ def _run_future_previews() -> None:
             if not games:
                 print(f"  future preview {date_str}: no games found")
                 continue
-            db.upsert_games(games)
 
+            # IMPORTANT: upsert players BEFORE games. games.home_starter_id
+            # and games.away_starter_id are FK columns referencing
+            # players(player_id), so inserting a games row with a starter
+            # id that isn't yet in `players` violates the FK constraint.
+            # _setup_games_and_pitchers() (the main-pipeline path) already
+            # does this in the correct order — same order here keeps the
+            # future-preview path consistent.
             starters = fetch.fetch_starters_for_date(date_str)
             players = [
                 {
@@ -414,6 +420,7 @@ def _run_future_previews() -> None:
             ]
             if players:
                 db.upsert_players(players)
+            db.upsert_games(games)
             print(
                 f"  future preview {date_str}: {len(games)} games, "
                 f"{len(starters)} probable starters"

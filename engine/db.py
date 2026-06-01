@@ -62,7 +62,14 @@ def upsert_games(rows: list[dict]) -> int:
             client.table("games").upsert(batch, on_conflict="game_id").execute()
         except Exception as exc:
             msg = str(exc)
-            if any(col in msg for col in _STARTER_COLS):
+            # ONLY treat this as "column missing" when PostgREST explicitly
+            # says so (PGRST204). Plain string matching on _STARTER_COLS was
+            # too broad — a foreign-key violation message also mentions the
+            # column name and used to trigger this fallback, hiding the real
+            # cause (e.g. players upserted after games in future-preview).
+            mentions_starter = any(col in msg for col in _STARTER_COLS)
+            is_pgrst204 = "PGRST204" in msg or "Could not find" in msg
+            if mentions_starter and is_pgrst204:
                 stripped = [
                     {k: v for k, v in r.items() if k not in _STARTER_COLS}
                     for r in batch
