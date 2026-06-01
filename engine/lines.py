@@ -93,15 +93,18 @@ PRIZEPICKS_ONLY_PROPS = {"pitcher_fantasy_score", "hitter_fantasy_score"}
 # the API side, so widening this list only costs response bytes — there's no
 # per-book quota or rate-limit hit. The wider the list, the better our
 # coverage when DK/FD don't post a particular prop.
+#
+# Removed after the engine/_probe_books.py diagnostic (1804 raw rows across
+# all 12 markets): betmgm, espnbet, pointsbet returned 0 rows on every
+# market we ingest. ParlayAPI accepts the names without erroring but
+# returns nothing for them on MLB props — most likely a tier/availability
+# limit, not a name-aliasing bug. Re-add if a future probe shows coverage.
 BOOKMAKERS = [
     "pinnacle",
     "draftkings",
     "fanduel",
-    "betmgm",
     "caesars",
     "bet365",
-    "espnbet",
-    "pointsbet",
     "prizepicks",
     "underdog",
     "betr",
