@@ -111,14 +111,18 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   // Paginate projections + edges past Supabase's 1000-row server cap via the
   // shared fetchAllPages helper in @/lib/supabase.
   //
-  // Six parallel reads: projections (paginated), edges (paginated),
-  // updated_at, prev-projection, next-projection, next-game. nextDate is the
-  // first of next-projection or next-game so the › arrow works on future
-  // dates that don't yet have projections (the future-preview slate).
+  // Seven parallel reads: projections (paginated), edges (paginated),
+  // projections.updated_at, lines.fetched_at, prev-projection,
+  // next-projection, next-game. nextDate is the first of next-projection or
+  // next-game so the › arrow works on future dates that don't yet have
+  // projections (the future-preview slate). updatedAt takes the MAX of
+  // projections.updated_at and lines.fetched_at so refresh-only runs (which
+  // only touch lines) still bump the "Last updated" timestamp.
   const [
     projData,
     edgeData,
     { data: updatedAtData },
+    { data: lineUpdatedData },
     { data: prevData },
     { data: nextProjData },
     { data: nextGameData },
@@ -155,12 +159,23 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
       "home-edges",
     ),
 
-    // Most-recently-written row for the "Last updated" timestamp.
+    // Most-recently-written projection row for this slate. Refresh-only
+    // cron runs (which skip the baseline + XGBoost path) do NOT touch
+    // projections.updated_at, so by itself this can lag behind reality.
     supabase
       .from("projections")
       .select("updated_at")
       .eq("projection_date", selectedDate)
       .order("updated_at", { ascending: false })
+      .limit(1),
+
+    // Most-recently-fetched line row for this slate. Refresh runs DO bump
+    // this, so combining the two via MAX gives a true "last touched" time.
+    supabase
+      .from("lines")
+      .select("fetched_at")
+      .eq("game_date", selectedDate)
+      .order("fetched_at", { ascending: false })
       .limit(1),
 
     // Closest available date before selectedDate (for the ‹ arrow). Stays
@@ -196,7 +211,21 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     `[home-diag] fetched (paginated): projections=${rows.length} edges=${edgeData.length}`,
   );
 
-  const updatedAt = updatedAtData?.[0]?.updated_at ?? null;
+  // Take the MAX of projections.updated_at and lines.fetched_at so the
+  // displayed "Last updated" reflects whichever side was touched most
+  // recently. Refresh-only runs bump lines.fetched_at but not
+  // projections.updated_at; full runs bump both. Plain ISO-8601 string
+  // comparison is correct here since Supabase returns both in UTC ISO.
+  const projUpdatedAt =
+    (updatedAtData?.[0]?.updated_at as string | undefined) ?? null;
+  const lineUpdatedAt =
+    (lineUpdatedData?.[0]?.fetched_at as string | undefined) ?? null;
+  const updatedAt =
+    projUpdatedAt && lineUpdatedAt
+      ? projUpdatedAt > lineUpdatedAt
+        ? projUpdatedAt
+        : lineUpdatedAt
+      : (projUpdatedAt ?? lineUpdatedAt);
   const prevDate = prevData?.[0]?.projection_date ?? null;
   const nextDate =
     nextProjData?.[0]?.projection_date ??

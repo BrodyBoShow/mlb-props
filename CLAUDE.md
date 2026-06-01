@@ -244,6 +244,20 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+"Last updated" reflects refresh-only runs (this session):
+- web/app/page.tsx: the timestamp shown under "Last updated" used to
+  read only projections.updated_at, which is bumped solely by full-
+  projection runs. Refresh-only crons (which the 6/day cron schedule
+  fires 5 out of 6 times) only touch lines + edges, so the displayed
+  time would freeze at the most recent full run — even when fresh
+  lines had been ingested 10 minutes ago.
+- Added a parallel lines.fetched_at query to the existing Promise.all
+  block (now 7 parallel reads instead of 6) and compute updatedAt as
+  MAX(projections.updated_at, lines.fetched_at). Both columns are
+  stored as UTC ISO-8601 strings in Supabase so plain string
+  comparison gives the correct max.
+- Verified: tsc --noEmit clean.
+
 Home-page default-date + stale-banner fix (this session):
 - web/app/page.tsx: getSlate() now resolves the default date as the
   EARLIEST projection_date >= todayET (ascending), falling back to the
