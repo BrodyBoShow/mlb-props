@@ -417,11 +417,49 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         lean,
         gameId: proj.game_id,
         matchup,
+        gradedStarts: 0, // enriched below in ONE query for the top-5
       };
     })
     .filter((p): p is FeaturedPlay => p !== null)
     .sort((a, b) => b.edge - a.edge)
     .slice(0, 5);
+
+  // ── graded-start counts for the featured plays ──────────────────────────
+  // player_game_logs has NO prop_type column — actuals live as columns on
+  // one row per (player_id, game_id). So a "graded start" for a given prop
+  // is a row where that prop's actual column is non-null. We map each
+  // featured pitcher prop to its actual column, fetch those columns for the
+  // (≤5) featured players in ONE query, and count non-null per player+prop.
+  // Volume is tiny (≤5 players × a few dozen games), well under the 1000-row
+  // cap, so no pagination needed.
+  const FEATURED_ACTUAL_COL: Partial<Record<PropType, string>> = {
+    strikeouts:    "actual_strikeouts",
+    hits_allowed:  "actual_hits_allowed",
+    outs_recorded: "actual_outs_recorded",
+  };
+  const featuredPlayerIds = [...new Set(featuredPlays.map((p) => p.playerId))];
+  if (featuredPlayerIds.length > 0) {
+    const { data: gradeRows } = await supabase
+      .from("player_game_logs")
+      .select("player_id, actual_strikeouts, actual_hits_allowed, actual_outs_recorded")
+      .eq("player_type", "pitcher")
+      .in("player_id", featuredPlayerIds);
+
+    // counts keyed by `${player_id}|${prop_type}`
+    const gradedCounts: Record<string, number> = {};
+    for (const row of (gradeRows ?? []) as Array<Record<string, unknown>>) {
+      const pid = row.player_id;
+      for (const [prop, col] of Object.entries(FEATURED_ACTUAL_COL)) {
+        if (row[col] !== null && row[col] !== undefined) {
+          const key = `${pid}|${prop}`;
+          gradedCounts[key] = (gradedCounts[key] ?? 0) + 1;
+        }
+      }
+    }
+    for (const p of featuredPlays) {
+      p.gradedStarts = gradedCounts[`${p.playerId}|${p.propType}`] ?? 0;
+    }
+  }
 
   return {
     date: selectedDate,

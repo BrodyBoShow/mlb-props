@@ -32,6 +32,22 @@ function fmtEdge(edge: number): string {
   return `+${edge.toFixed(2)}`;
 }
 
+// Honest, tiered confidence framing from the count of graded starts backing
+// this pitcher+prop. We deliberately do NOT inflate or hide thin samples —
+// a 1-start play reads "limited history" in muted slate so the user weighs
+// it accordingly, while an 8+-start play reads with quiet emerald confidence.
+function confidenceLabel(n: number): {
+  text: string;
+  tone: "strong" | "moderate" | "limited";
+} {
+  if (n >= 8) return { text: `${n} starts tracked`, tone: "strong" };
+  if (n >= 4) return { text: `${n} starts tracked`, tone: "moderate" };
+  return {
+    text: n === 0 ? "New — limited history" : `${n} start${n === 1 ? "" : "s"} tracked`,
+    tone: "limited",
+  };
+}
+
 function FeaturedPlayCard({ play }: { play: FeaturedPlay }) {
   const isOver = play.lean === "over";
   const arrow = isOver ? "▲" : "▼";
@@ -79,6 +95,34 @@ function FeaturedPlayCard({ play }: { play: FeaturedPlay }) {
       <p className="mt-3 text-[10px] uppercase tracking-wider text-slate-500">
         Book: {BOOK_LABEL[play.bookmaker] ?? play.bookmaker}
       </p>
+
+      {/* confidence — how much graded history backs this play */}
+      <ConfidenceLine count={play.gradedStarts} />
+    </div>
+  );
+}
+
+function ConfidenceLine({ count }: { count: number }) {
+  const { text, tone } = confidenceLabel(count);
+  const textColor =
+    tone === "strong"
+      ? "text-emerald-400/70"
+      : tone === "moderate"
+        ? "text-slate-400"
+        : "text-slate-500";
+  const dotColor =
+    tone === "strong"
+      ? "bg-emerald-500"
+      : tone === "moderate"
+        ? "bg-slate-400"
+        : "bg-slate-600";
+
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} />
+      <span className={`text-[10px] uppercase tracking-wide ${textColor}`}>
+        {text}
+      </span>
     </div>
   );
 }

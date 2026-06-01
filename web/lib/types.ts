@@ -128,6 +128,11 @@ export type FeaturedPlay = {
   lean: "over" | "under";
   gameId: number;
   matchup: string;
+  // Count of graded game logs backing this pitcher+prop. A "graded start"
+  // = a player_game_logs row where the prop's actual column is non-null.
+  // Surfaced on the card so users can weigh edges with thin history
+  // differently from edges with a real track record. 0 = no history yet.
+  gradedStarts: number;
 };
 
 // Live status for one MLB game. The MLB Stats API gamePk matches our

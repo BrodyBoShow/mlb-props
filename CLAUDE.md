@@ -269,6 +269,38 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Featured Plays confidence indicator (this session):
+- Adds a graded-history count to each Featured Plays card so users can
+  weigh edges with thin history differently from edges with a track
+  record. Honest framing — low/no-sample plays say "limited history",
+  not a fake-confident number. Does NOT filter plays by count (edge
+  threshold still governs qualification).
+- SCHEMA NOTE (verified against live DB): player_game_logs has NO
+  prop_type column. Actuals are stored as COLUMNS on one row per
+  (player_id, game_id) — actual_strikeouts / actual_hits_allowed /
+  actual_outs_recorded. So a "graded start" for a prop = a row where
+  that prop's actual column is non-null. The spec's prop_type-keyed
+  count was adapted accordingly (the spec flagged this possibility).
+- web/lib/types.ts: FeaturedPlay gains gradedStarts: number.
+- web/app/page.tsx getSlate(): after building the top-5 featuredPlays,
+  ONE query fetches actual_strikeouts/hits_allowed/outs_recorded for
+  the (≤5) featured player_ids (player_type=pitcher). Counts non-null
+  per player+prop into gradedCounts keyed `${playerId}|${propType}`,
+  then sets p.gradedStarts. Volume is tiny (≤5 players × a few dozen
+  games) so no pagination needed.
+- web/app/FeaturedPlays.tsx: confidenceLabel(n) tiers — >=8 strong
+  (emerald), >=4 moderate (slate-400), else limited (slate-500; 0 ->
+  "New — limited history", 1 -> "1 start tracked"). New ConfidenceLine
+  sub-component renders a 6px dot + uppercase text-[10px] below the
+  BOOK line, color-matched to tone.
+- Cross-checked live: the 60 graded pitcher rows are 60 distinct
+  pitchers with exactly 1 start each (early season). The actual
+  featured pitchers for 2026-06-01 (Avila, Madden, Drohan, Freeland)
+  have 0 graded rows yet, so today's cards honestly render
+  "New — limited history" in muted slate — exactly the intended
+  thin-sample honesty.
+- Verified: npm run build passes; tsc clean.
+
 Park-factor tag on game card headers (this session):
 - web/lib/constants.ts: PARK_FACTORS_HITS table (mirror of
   engine/constants.py PARK_FACTORS_HITS, 31 entries) + getParkProfile
