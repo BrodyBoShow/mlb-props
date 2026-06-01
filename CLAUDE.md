@@ -244,6 +244,61 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Audit cleanup pass (Groups 1-5, this session):
+- GROUP 1 (critical bugs):
+  * web/app/page.tsx ALL_PROP_TYPES now includes both fantasy_score props
+    — PropBoard.tsx already had the tabs but they were rendering empty
+    because the home query excluded them.
+  * web/app/useLiveBoxScores.ts: totalBases is NOT exposed by the MLB
+    boxscore batting object. Live overlay now derives it from
+    hits + doubles + 2*triples + 3*homeRuns (same formula grade.py uses).
+  * engine/grade.py: _parse_innings was duplicated; deleted local copy
+    and imported from engine/stats.py (single source of truth).
+  * NOT removed: scikit-learn — per CLAUDE.md it's a runtime dep of
+    XGBoost 3.x even though no engine .py imports it directly.
+- GROUP 2 (engine efficiency):
+  * db.get_game_logs() takes since_date floor; main.py + test_model.py
+    pass a 60-day window so calibration no longer fetches the full
+    season every cron run.
+  * grade.grade_yesterday()/grade_hitters_yesterday() accept a
+    projections kwarg. main._grade_previous_slate fetches projections
+    once and passes to both — eliminates a duplicate
+    get_projections_for_date round-trip.
+  * baseline.build_strikeout_projections() accepts bulk_df from
+    model._fetch_bulk_statcast. model.predict() returns (rows, bulk_df).
+    When there's no trained model, main.py does a standalone bulk fetch
+    for the baseline so both paths benefit from the one-call pattern.
+- GROUP 3 (frontend types/constants):
+  * web/lib/types.ts: single source for PropType, Pitcher, GameGroup,
+    ByProp, Verdict, EvaluatedResult, TrackerResult, StatLine,
+    LiveStatsMap, GameStatus.
+  * web/lib/constants.ts: single source for ALL_PROP_TYPES,
+    TRACKER_PROPS (Set form), HITTER_PROPS, EDGE_THRESHOLD, PROP_LABELS.
+  * web/lib/supabase.ts: hoists fetchAllPages paginator so both
+    page.tsx files share one Range-header pagination implementation.
+  * PropBoard.tsx, ResultsBoard.tsx, useLiveBoxScores.ts,
+    useLiveGameStatus.ts, both page.tsx files import from shared.
+    Each file re-exports the names it previously owned so external
+    imports keep working. npx tsc --noEmit passes clean.
+- GROUP 4 (engine hygiene):
+  * constants.py: drop unused HIT_EVENTS, WALK_EVENTS,
+    BASELINE_LOOKBACK_GAMES.
+  * baseline.py: drop unused LEAGUE_AVG_K_PCT import.
+  * edge.py: drop "caesars" from CONSENSUS_BOOKS (never ingested).
+  * model.py: tighten stats import to just _opp_k_rate; drop F401 noqa.
+  * calibrate.py: docstring now reflects _ACTUAL_COL covers all 12
+    prop types.
+- GROUP 5 (workflow):
+  * refresh.yml sanity grep targets strings unique to the CURRENT
+    refactor (_fetch_bulk_statcast / _team_k_pcts).
+  * Added pip cache via actions/setup-python's cache: "pip" mode,
+    keyed on engine/requirements.txt.
+  * Added timeout-minutes: 20 to cap a hung pybaseball request.
+- Verification: full pipeline ran locally; bulk Statcast fetch:
+  117,320 pitches covering 550 pitchers in one call; 30 pitcher
+  projections × 6 prop types + 270 hitter projections × 6 prop types,
+  312 lines ingested, 153 edges computed, no errors.
+
 Engine refactor (Statcast bulk fetch, constants centralization, main.py shape):
 - engine/model.py — XGBoost predict() now does ONE bulk pybaseball.statcast()
   call covering the whole STATCAST_LOOKBACK_DAYS window, then filters the
