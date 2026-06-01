@@ -15,7 +15,6 @@ import pybaseball
 
 import stats
 from constants import (
-    LEAGUE_AVG_K_PCT,
     LOOKBACK_DAYS,
     OLDER_WEIGHT,
     RECENT_STARTS,

@@ -8,13 +8,14 @@ This is a practical "hit rate" signal, not isotonic regression (that requires
 hundreds of rows; we'll add it once enough data has accumulated). The design
 is the same: read graded logs, emit confidence rows, no DB writes here.
 
-Limitations (to revisit once player_game_logs is richer):
-  - Only strikeouts projections receive confidence scores today, because
-    player_game_logs only stores actual_strikeouts. When the grading job
-    stores actuals for the other four props, add a mapping here.
+Coverage: _ACTUAL_COL maps all 12 prop types (5 pitcher main + 5 hitter main
++ pitcher_fantasy_score + hitter_fantasy_score) to their respective actual
+columns in player_game_logs. Each prop activates per player once they have
+MIN_GRADED_STARTS graded games for it.
 
-Graceful degradation: if game_logs is empty, or no pitcher has enough graded
-starts, this returns [] and the caller leaves confidence NULL in the DB.
+Graceful degradation: if game_logs is empty, or no player has enough graded
+games for a given prop, this returns [] for that player/prop and the caller
+leaves confidence NULL in the DB.
 """
 
 from collections import defaultdict

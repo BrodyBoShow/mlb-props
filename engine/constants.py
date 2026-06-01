@@ -3,12 +3,6 @@
 # Strikeout event types (Statcast)
 STRIKEOUT_EVENTS = {"strikeout", "strikeout_double_play"}
 
-# Hit event types (Statcast)
-HIT_EVENTS = {"single", "double", "triple", "home_run"}
-
-# Walk event types (Statcast)
-WALK_EVENTS = {"walk", "intent_walk"}
-
 # Baseline projection parameters
 LOOKBACK_DAYS = 30       # days of history to pull for each pitcher
 RECENT_STARTS = 5        # starts that receive the heavier weight
@@ -52,7 +46,3 @@ EDGE_THRESHOLD = 0.1
 # prop) pair. Pitchers below this stay NULL in the confidence column.
 MIN_GRADED_STARTS = 5
 
-# ─── Baseline rolling-window (baseline.py imports RECENT_STARTS directly;
-# this is a forward-compat alias for the same value at a more descriptive
-# name. Both refer to the same number of recent games.) ──────────────────────
-BASELINE_LOOKBACK_GAMES = RECENT_STARTS

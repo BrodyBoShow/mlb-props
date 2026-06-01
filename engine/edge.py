@@ -20,8 +20,9 @@ from constants import MIN_STD, PROP_CV
 
 # Books we trust to form a fair-probability baseline when Pinnacle is absent.
 # DFS apps (PrizePicks/Underdog/etc.) carry no two-sided vig to remove, so
-# they never seed the baseline.
-CONSENSUS_BOOKS = ["draftkings", "fanduel", "caesars"]
+# they never seed the baseline. Caesars is NOT ingested by lines.py so it
+# would never appear in book_lines — kept out of the list.
+CONSENSUS_BOOKS = ["draftkings", "fanduel"]
 
 # PROP_CV (coefficient of variation for the normal approximation) and MIN_STD
 # (scale floor) now live in engine/constants.py so the same values can be

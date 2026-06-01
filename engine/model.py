@@ -32,7 +32,7 @@ from constants import (
     STATCAST_LOOKBACK_DAYS,
     STRIKEOUT_EVENTS,
 )
-from stats import TEAM_NAME_MAP, _mlb_name_to_abbr, _opp_k_rate, _team_k_pcts  # noqa: F401
+from stats import _opp_k_rate
 
 PROP_TYPE = "strikeouts"
 
