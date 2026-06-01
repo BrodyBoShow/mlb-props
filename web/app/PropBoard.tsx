@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
+import DateNav from "./DateNav";
 import { useLiveGameStatus } from "./useLiveGameStatus";
 import { useLiveBoxScores } from "./useLiveBoxScores";
 import type {
@@ -181,73 +181,6 @@ function ProjectionBadge({
         · proj {pitcher.projection.toFixed(1)}
       </span>
     </span>
-  );
-}
-
-// ── date navigation sub-component ────────────────────────────────────────────
-// Renders a row with prev/next arrows around the current date.
-// Arrows are Links when a date exists, greyed non-clickable spans otherwise.
-
-function formatDateLong(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
-
-const arrowBase =
-  "flex h-10 w-10 items-center justify-center rounded-lg text-xl transition-colors select-none";
-
-function DateNav({
-  currentDate,
-  prevDate,
-  nextDate,
-}: {
-  currentDate: string;
-  prevDate: string | null;
-  nextDate: string | null;
-}) {
-  return (
-    <div className="mb-5 flex items-center justify-between">
-      {prevDate ? (
-        <Link
-          href={`/?date=${prevDate}`}
-          className={`${arrowBase} bg-slate-800 text-slate-200 hover:bg-slate-700`}
-          aria-label="Previous day"
-        >
-          ‹
-        </Link>
-      ) : (
-        <span
-          className={`${arrowBase} cursor-not-allowed bg-slate-800/40 text-slate-700`}
-          aria-disabled="true"
-        >
-          ‹
-        </span>
-      )}
-
-      <span className="text-center text-sm font-semibold text-slate-200">
-        {formatDateLong(currentDate)}
-      </span>
-
-      {nextDate ? (
-        <Link
-          href={`/?date=${nextDate}`}
-          className={`${arrowBase} bg-slate-800 text-slate-200 hover:bg-slate-700`}
-          aria-label="Next day"
-        >
-          ›
-        </Link>
-      ) : (
-        <span
-          className={`${arrowBase} cursor-not-allowed bg-slate-800/40 text-slate-700`}
-          aria-disabled="true"
-        >
-          ›
-        </span>
-      )}
-    </div>
   );
 }
 

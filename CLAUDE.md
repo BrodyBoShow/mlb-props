@@ -244,6 +244,66 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Future-slate browsing (this session):
+- engine/fetch.py: refactored to a _resolved_schedule(date_str) helper
+  cached via lru_cache(maxsize=8). One pass per date does the schedule
+  fetch + per-pitcher statsapi.lookup_player resolution, returning
+  (schedule, starter_records, starter_ids_by_game). fetch_games(),
+  fetch_starters(), fetch_starters_for_date() and fetch_probable_pitchers
+  all consume this so the same date doesn't trigger duplicate lookups
+  in one cron run.
+- engine/fetch.py: fetch_games() now populates home_starter_id and
+  away_starter_id from the resolved schedule when the lookup succeeds.
+  These keys are OMITTED (not set to None) when resolution fails so the
+  upsert never clobbers a previously-known starter on a transient
+  lookup miss.
+- engine/fetch.py: new fetch_starters_for_date(date_str) — same shape as
+  fetch_starters() but for an arbitrary date string. Powers future-slate
+  previews. Not lru_cached itself; the underlying _resolved_schedule
+  cache handles it.
+- engine/db.py: upsert_games() now groups rows by their key signature
+  before upserting so a heterogeneous batch (some games with starter_ids,
+  some without) doesn't accidentally NULL the column via PostgREST's
+  union-of-keys behavior. Also catches PGRST204 "missing column" on the
+  starter_id keys and retries stripped of them, so the engine keeps
+  working before the migration is applied.
+- engine/main.py: new _run_future_previews() helper called at the end of
+  main() after _run_calibration. Iterates days_ahead in (1, 2, 3) and
+  for each calls fetch_games + fetch_starters_for_date + db.upsert_*
+  inside its own try/except so one bad date never sinks the others.
+  Wrapped by an outer try/except in main() so the previews are decoupled
+  from the projection pipeline.
+- db/schema.sql: games table now defines home_starter_id and
+  away_starter_id as nullable FKs to players(player_id).
+- db/migrations/add_starter_ids.sql: one-time manual migration to apply
+  the two new columns to the live Supabase schema:
+    ALTER TABLE games
+      ADD COLUMN IF NOT EXISTS home_starter_id integer
+        REFERENCES players(player_id),
+      ADD COLUMN IF NOT EXISTS away_starter_id integer
+        REFERENCES players(player_id);
+- web/app/DateNav.tsx: extracted the date-navigation component out of
+  PropBoard.tsx so both PropBoard and FutureSlate can share it.
+- web/app/FutureSlate.tsx: new client component. Renders DateNav + a
+  muted info banner ("Projections not yet available · Probable starters
+  shown where announced") + one card per game with the matchup, start
+  time, and home/away probable starter (or "TBD"). Used when the date
+  has games in the DB but no projections yet.
+- web/app/page.tsx: getSlate() now runs 6 parallel reads (the previous
+  5 + a "next game date" query against games). nextDate is computed as
+  the first of next-projection-date OR next-game-date so the › arrow
+  works on future-preview dates. When the projections result is empty
+  for selectedDate, a follow-up games query loads futureGames with the
+  home_starter/away_starter joins (uses the explicit FK names
+  games_home_starter_id_fkey / games_away_starter_id_fkey to disambiguate
+  the two FKs that both reference players). hasAny gates rendering
+  between PropBoard / FutureSlate / empty state.
+- Verified: pipeline runs end-to-end pre-migration (graceful warnings
+  on every games upsert, but projections + lines + edges + future
+  previews all succeed). Locally: 3 future dates populated — 06-01 (9
+  games, 17 starters), 06-02 (15 games, 27), 06-03 (15 games, 28).
+  Frontend build clean: npm run build passes, tsc --noEmit clean.
+
 Six-run cron + lines-only refresh mode (this session):
 - .github/workflows/refresh.yml: cron is now 6/day (1/5/11/14/17/18 UTC =
   9pm/1am/7am/10am/1pm/2pm ET). First run of the day does a full

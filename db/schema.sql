@@ -11,13 +11,19 @@ create table if not exists players (
 
 -- games: one row per scheduled game
 create table if not exists games (
-    game_id    integer primary key,   -- official MLB game id
-    game_date  date not null,
-    home_team  text not null,
-    away_team  text not null,
-    status     text,                  -- scheduled, live, final
-    start_time timestamptz,           -- first pitch in UTC; used to sort cards chronologically
-    created_at timestamptz default now()
+    game_id          integer primary key,   -- official MLB game id
+    game_date        date not null,
+    home_team        text not null,
+    away_team        text not null,
+    status           text,                  -- scheduled, live, final
+    start_time       timestamptz,           -- first pitch in UTC; used to sort cards chronologically
+    -- Probable starters resolved from statsapi.schedule via fetch._resolved_schedule.
+    -- Populated by engine/main._run_future_previews for next-3-day previews and
+    -- by every refresh run for today/yesterday so the frontend's FutureSlate
+    -- component can render matchup + probable-pitcher cards before projections.
+    home_starter_id  integer references players(player_id),
+    away_starter_id  integer references players(player_id),
+    created_at       timestamptz default now()
 );
 
 -- player_game_logs: one row per pitcher per game, graded after the game is final.

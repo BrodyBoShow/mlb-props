@@ -376,6 +376,52 @@ def _run_calibration(all_projections: list[dict]) -> None:
     print(f"  updated {n_conf} confidence scores")
 
 
+def _run_future_previews() -> None:
+    """Populate games + probable starters for the next 3 days.
+
+    Fast — no Statcast, no projections, no lines. Safe to run on every
+    cron pass. The frontend uses these rows to render a "tomorrow's
+    slate" preview (matchups + probable pitchers) on dates that don't
+    yet have projections.
+
+    Each future date is wrapped in its own try/except so a single bad
+    schedule fetch doesn't take down the others. Lookup failures for an
+    individual starter are absorbed inside fetch.py (the row simply
+    omits home_starter_id / away_starter_id, which upsert_games handles
+    via the per-key-signature grouping in db.upsert_games).
+    """
+    today = date.today()
+    for days_ahead in (1, 2, 3):
+        future_date = today + timedelta(days=days_ahead)
+        date_str = future_date.strftime("%Y-%m-%d")
+        try:
+            games = fetch.fetch_games(date_str)
+            if not games:
+                print(f"  future preview {date_str}: no games found")
+                continue
+            db.upsert_games(games)
+
+            starters = fetch.fetch_starters_for_date(date_str)
+            players = [
+                {
+                    k: v for k, v in s.items()
+                    if k in (
+                        "player_id", "full_name", "team",
+                        "position", "bats", "throws", "player_type",
+                    )
+                }
+                for s in starters
+            ]
+            if players:
+                db.upsert_players(players)
+            print(
+                f"  future preview {date_str}: {len(games)} games, "
+                f"{len(starters)} probable starters"
+            )
+        except Exception as exc:
+            print(f"  future preview {date_str} failed: {exc} -- skipping")
+
+
 # ─── entrypoint ──────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -404,6 +450,15 @@ def main() -> None:
 
         _run_lines_and_edges(name_to_id, all_projections)
         _run_calibration(all_projections)
+
+        # Future-slate previews are decorative (powers the
+        # "tomorrow's slate" cards on the frontend) so any failure
+        # here is absorbed without affecting the main pipeline.
+        print("Populating future-slate previews...")
+        try:
+            _run_future_previews()
+        except Exception as exc:
+            print(f"  future previews failed ({exc}) -- skipping")
 
         print("Done.")
         print(

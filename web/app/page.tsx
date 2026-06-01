@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
 import { ALL_PROP_TYPES } from "@/lib/constants";
-import type { ByProp, GameGroup, PropType } from "@/lib/types";
+import type { ByProp, GameGroup } from "@/lib/types";
 import PropBoard from "./PropBoard";
+import FutureSlate, { type FutureGame } from "./FutureSlate";
 
 // Always read fresh from the DB at request time — the cron updates rows
 // throughout the day. No caching of stale projections.
@@ -39,24 +40,28 @@ type EdgeRow = {
   under_price: number | null;
 };
 
-// Empty result used when there's no data to show.
-const emptyResult = (date: string | null = null) => ({
-  date,
-  updatedAt: null as string | null,
-  prevDate: null as string | null,
-  nextDate: null as string | null,
-  byProp: Object.fromEntries(
-    ALL_PROP_TYPES.map((p) => [p, []])
-  ) as unknown as ByProp,
-});
-
-async function getSlate(dateOverride?: string): Promise<{
+type SlateResult = {
   date: string | null;
   updatedAt: string | null;
   prevDate: string | null;
   nextDate: string | null;
   byProp: ByProp;
-}> {
+  futureGames: FutureGame[] | null;
+};
+
+// Empty result used when there's no data to show.
+const emptyResult = (date: string | null = null): SlateResult => ({
+  date,
+  updatedAt: null,
+  prevDate: null,
+  nextDate: null,
+  byProp: Object.fromEntries(
+    ALL_PROP_TYPES.map((p) => [p, []])
+  ) as unknown as ByProp,
+  futureGames: null,
+});
+
+async function getSlate(dateOverride?: string): Promise<SlateResult> {
   const supabase = getSupabaseClient();
 
   // Resolve the date to display.
@@ -75,42 +80,50 @@ async function getSlate(dateOverride?: string): Promise<{
 
   // Paginate projections + edges past Supabase's 1000-row server cap via the
   // shared fetchAllPages helper in @/lib/supabase.
+  //
+  // Six parallel reads: projections (paginated), edges (paginated),
+  // updated_at, prev-projection, next-projection, next-game. nextDate is the
+  // first of next-projection or next-game so the › arrow works on future
+  // dates that don't yet have projections (the future-preview slate).
+  const [
+    projData,
+    edgeData,
+    { data: updatedAtData },
+    { data: prevData },
+    { data: nextProjData },
+    { data: nextGameData },
+  ] = await Promise.all([
+    fetchAllPages<ProjectionRow>(
+      (from, to) =>
+        supabase
+          .from("projections")
+          .select(
+            "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team, start_time)",
+          )
+          .eq("projection_date", selectedDate)
+          .in("prop_type", ALL_PROP_TYPES)
+          .order("projection", { ascending: false })
+          .range(from, to) as unknown as PromiseLike<{
+            data: ProjectionRow[] | null;
+            error: unknown;
+          }>,
+      "home-projections",
+    ),
 
-  // Run all five reads in parallel: projections (paginated), edges
-  // (paginated), updated_at, prev, next.
-  const [projData, edgeData, { data: updatedAtData }, { data: prevData }, { data: nextData }] =
-    await Promise.all([
-      fetchAllPages<ProjectionRow>(
-        (from, to) =>
-          supabase
-            .from("projections")
-            .select(
-              "game_id, player_id, prop_type, projection, confidence, players(full_name), games(home_team, away_team, start_time)",
-            )
-            .eq("projection_date", selectedDate)
-            .in("prop_type", ALL_PROP_TYPES)
-            .order("projection", { ascending: false })
-            .range(from, to) as unknown as PromiseLike<{
-              data: ProjectionRow[] | null;
-              error: unknown;
-            }>,
-        "home-projections",
-      ),
-
-      fetchAllPages<EdgeRow>(
-        (from, to) =>
-          supabase
-            .from("edges")
-            .select(
-              "player_id, prop_type, bookmaker, line, fair_over_prob, model_over_prob, edge, over_price, under_price",
-            )
-            .eq("game_date", selectedDate)
-            .range(from, to) as unknown as PromiseLike<{
-              data: EdgeRow[] | null;
-              error: unknown;
-            }>,
-        "home-edges",
-      ),
+    fetchAllPages<EdgeRow>(
+      (from, to) =>
+        supabase
+          .from("edges")
+          .select(
+            "player_id, prop_type, bookmaker, line, fair_over_prob, model_over_prob, edge, over_price, under_price",
+          )
+          .eq("game_date", selectedDate)
+          .range(from, to) as unknown as PromiseLike<{
+            data: EdgeRow[] | null;
+            error: unknown;
+          }>,
+      "home-edges",
+    ),
 
     // Most-recently-written row for the "Last updated" timestamp.
     supabase
@@ -120,7 +133,9 @@ async function getSlate(dateOverride?: string): Promise<{
       .order("updated_at", { ascending: false })
       .limit(1),
 
-    // Closest available date before selectedDate (for the ‹ arrow).
+    // Closest available date before selectedDate (for the ‹ arrow). Stays
+    // on the projections table — going BACK from a future-preview date
+    // should land on the most recent date with real projections.
     supabase
       .from("projections")
       .select("projection_date")
@@ -128,12 +143,21 @@ async function getSlate(dateOverride?: string): Promise<{
       .order("projection_date", { ascending: false })
       .limit(1),
 
-    // Closest available date after selectedDate (for the › arrow).
+    // Closest available projection date after selectedDate (preferred for ›).
     supabase
       .from("projections")
       .select("projection_date")
       .gt("projection_date", selectedDate)
       .order("projection_date", { ascending: true })
+      .limit(1),
+
+    // Closest available game date after selectedDate (› fallback so a user
+    // on the last projection date can still page into the future previews).
+    supabase
+      .from("games")
+      .select("game_date")
+      .gt("game_date", selectedDate)
+      .order("game_date", { ascending: true })
       .limit(1),
   ]);
 
@@ -142,13 +166,38 @@ async function getSlate(dateOverride?: string): Promise<{
     `[home-diag] fetched (paginated): projections=${rows.length} edges=${edgeData.length}`,
   );
 
-  // If the requested date has no data (e.g. a future date with no runs yet),
-  // return an empty shell so the UI can still show the date + disabled arrows.
-  if (rows.length === 0) return emptyResult(selectedDate);
-
   const updatedAt = updatedAtData?.[0]?.updated_at ?? null;
   const prevDate = prevData?.[0]?.projection_date ?? null;
-  const nextDate = nextData?.[0]?.projection_date ?? null;
+  const nextDate =
+    nextProjData?.[0]?.projection_date ??
+    nextGameData?.[0]?.game_date ??
+    null;
+
+  // No projections for this date → check if it's a future-preview slate
+  // (games + probable starters populated by engine._run_future_previews
+  // ahead of the projection run). Render the FutureSlate component if so.
+  if (rows.length === 0) {
+    const { data: futureGameRows } = await supabase
+      .from("games")
+      .select(
+        "game_id, game_date, home_team, away_team, start_time, " +
+          "home_starter:players!games_home_starter_id_fkey(full_name), " +
+          "away_starter:players!games_away_starter_id_fkey(full_name)",
+      )
+      .eq("game_date", selectedDate)
+      .order("start_time", { ascending: true });
+
+    return {
+      date: selectedDate,
+      updatedAt: null,
+      prevDate,
+      nextDate,
+      byProp: Object.fromEntries(
+        ALL_PROP_TYPES.map((p) => [p, []]),
+      ) as unknown as ByProp,
+      futureGames: (futureGameRows as FutureGame[] | null) ?? null,
+    };
+  }
 
   // Index edges by (player_id, prop_type) for an O(1) join.
   const edgeRows = edgeData;
@@ -204,7 +253,14 @@ async function getSlate(dateOverride?: string): Promise<{
     })
   ) as unknown as ByProp;
 
-  return { date: selectedDate, updatedAt, prevDate, nextDate, byProp };
+  return {
+    date: selectedDate,
+    updatedAt,
+    prevDate,
+    nextDate,
+    byProp,
+    futureGames: null,
+  };
 }
 
 function formatDate(iso: string): string {
@@ -236,12 +292,18 @@ export default async function Home({
   const dateOverride =
     rawDate && DATE_RE.test(rawDate) ? rawDate : undefined;
 
-  const { date, updatedAt, prevDate, nextDate, byProp } =
+  const { date, updatedAt, prevDate, nextDate, byProp, futureGames } =
     await getSlate(dateOverride);
 
   // Show a stale-data banner when the latest projection date isn't today in ET.
   const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  const isStale = date !== null && date < todayET;
+  const isStale = date !== null && updatedAt !== null && date < todayET;
+
+  // hasAny: at least one prop type has at least one game. If every prop list
+  // is empty we're on a future-preview date even though we have a `date`.
+  const hasAny =
+    date !== null &&
+    Object.values(byProp).some((games) => games.length > 0);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -271,12 +333,19 @@ export default async function Home({
         </div>
       )}
 
-      {date ? (
+      {hasAny ? (
         <PropBoard
-          date={date}
+          date={date!}
           prevDate={prevDate}
           nextDate={nextDate}
           byProp={byProp}
+        />
+      ) : date && futureGames !== null ? (
+        <FutureSlate
+          date={date}
+          prevDate={prevDate}
+          nextDate={nextDate}
+          games={futureGames}
         />
       ) : (
         <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">

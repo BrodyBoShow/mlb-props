@@ -2,6 +2,13 @@
 
 Every function returns plain Python dicts/lists shaped to match the column
 names in db/schema.sql, so db.py can upsert them without any reshaping.
+
+Design note: fetch_games() and fetch_starters() / fetch_starters_for_date()
+all derive from the same statsapi.schedule() response, and the per-pitcher
+statsapi.lookup_player() resolution is expensive (one HTTP round-trip per
+probable pitcher name). _resolved_schedule() runs the schedule + lookup
+pass ONCE per date_str and caches the result via lru_cache, so the three
+callers that need it for the same date share the work for free.
 """
 
 from datetime import date
@@ -10,100 +17,97 @@ from functools import lru_cache
 import statsapi
 
 
-def fetch_games(date_str: str | None = None) -> list[dict]:
-    """Today's (or a given date's) games, shaped for the `games` table.
+# ─── shared schedule + starter resolution ────────────────────────────────────
 
-    date_str: optional 'YYYY-MM-DD'. Defaults to today's slate.
-    Returns [] on any statsapi outage so the pipeline degrades gracefully.
+def _resolve_pitcher(name: str, current_year: int) -> dict | None:
+    """Resolve a probable-pitcher name to its statsapi person dict.
+
+    Returns None on any ambiguity or miss — caller treats that as "starter
+    not yet known" rather than crashing. Apply the pitcher-position filter
+    BEFORE picking among candidates so a position player with the same name
+    (e.g. two 'Luis Garcia's) can never be selected over the actual pitcher.
+    """
+    matches = statsapi.lookup_player(name, season=current_year)
+    if not matches:
+        return None
+
+    active = [m for m in matches if m.get("active") is True]
+    candidates = active if active else matches
+
+    pitchers = [
+        m for m in candidates
+        if (m.get("primaryPosition") or {}).get("abbreviation") in ("P", "SP", "RP")
+    ]
+    if pitchers:
+        candidates = pitchers
+
+    # lookup_player is fuzzy — prefer an exact full-name hit; otherwise trust
+    # a sole result. Multiple fuzzy matches with no exact hit are ambiguous;
+    # skip rather than risk the wrong MLBAM id.
+    exact = [
+        m for m in candidates
+        if (m.get("fullName") or "").lower() == name.lower()
+    ]
+    if exact:
+        return exact[0]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    print(
+        f"  WARNING: ambiguous lookup for '{name}' "
+        f"({len(candidates)} matches) — skipping"
+    )
+    return None
+
+
+@lru_cache(maxsize=8)
+def _resolved_schedule(date_str: str | None):
+    """Fetch statsapi.schedule() + resolve every probable pitcher in it.
+
+    Returns (schedule, starter_records, starter_ids_by_game).
+      schedule              -- raw list from statsapi.schedule(); [] on error.
+      starter_records       -- one dedup'd dict per probable pitcher with
+                               player_id/game_id/full_name/bio fields, the
+                               same shape the baseline + grader consume.
+      starter_ids_by_game   -- {game_id: {"home": pid|None, "away": pid|None}}
+                               used by fetch_games() to populate games.
+                               home_starter_id / games.away_starter_id.
+
+    Cached by date_str so fetch_games + fetch_starters + fetch_starters_for_
+    date for the same day share the lookup pass. lru_cache returns mutable
+    objects — callers MUST copy before mutating (every caller below does).
     """
     try:
         schedule = statsapi.schedule(date=date_str) if date_str else statsapi.schedule()
     except Exception as exc:
-        print(f"  WARNING: statsapi.schedule() failed in fetch_games: {exc}")
-        return []
-    games = []
-    for g in schedule:
-        games.append(
-            {
-                "game_id": g["game_id"],
-                "game_date": g["game_date"],          # 'YYYY-MM-DD'
-                "home_team": g["home_name"],
-                "away_team": g["away_name"],
-                "status": g.get("status"),
-                # First-pitch ISO timestamp (UTC, Z-suffixed). Used by the
-                # frontend to sort game cards chronologically. Defensive get:
-                # statsapi sometimes omits game_datetime for TBD slots.
-                "start_time": g.get("game_datetime"),
-            }
+        print(
+            f"  WARNING: statsapi.schedule() failed for "
+            f"{date_str or 'today'}: {exc}"
         )
-    return games
+        return [], [], {}
 
-
-@lru_cache(maxsize=1)
-def _fetch_starters_today() -> tuple[dict, ...]:
-    """Probable starters for today, each linked to the game they start in.
-
-    Returns rich records: player_id, game_id, plus bio fields. This is the
-    single source both fetch_probable_pitchers (players-table rows) and the
-    baseline (which needs game_id per pitcher) derive from. lru_cached so one
-    pipeline run hits the schedule + lookups only once.
-    """
-    try:
-        schedule = statsapi.schedule()
-    except Exception as exc:
-        print(f"  WARNING: statsapi.schedule() failed in _fetch_starters_today: {exc}")
-        return ()
-    records: list[dict] = []
-    seen: set[int] = set()
     current_year = date.today().year
+    records: list[dict] = []
+    starter_ids_by_game: dict[int, dict[str, int | None]] = {}
+    seen: set[int] = set()
 
     for g in schedule:
         game_id = g["game_id"]
+        starter_ids_by_game[game_id] = {"home": None, "away": None}
+
         for key in ("home_probable_pitcher", "away_probable_pitcher"):
             name = (g.get(key) or "").strip()
             if not name:
                 continue
 
-            matches = statsapi.lookup_player(name, season=current_year)
-            if not matches:
-                continue
-
-            # Restrict to active MLB players when the API exposes the flag.
-            active = [m for m in matches if m.get("active") is True]
-            candidates = active if active else matches
-
-            # Narrow to pitchers ONLY. Some names are shared across active
-            # players (e.g. two "Luis Garcia"), and a position player can
-            # otherwise be resolved instead of the pitcher. Apply this BEFORE
-            # the exact-match / sole-candidate logic so it shrinks the pool
-            # first. (fetch_lineups does the opposite — it wants batters.)
-            pitchers = [
-                m for m in candidates
-                if (m.get("primaryPosition") or {}).get("abbreviation")
-                in ("P", "SP", "RP")
-            ]
-            if pitchers:
-                candidates = pitchers
-
-            # lookup_player is fuzzy. Prefer an exact full-name hit; otherwise
-            # only trust a sole result. Multiple fuzzy matches with no exact
-            # hit are ambiguous — skip rather than risk the wrong MLBAM id.
-            exact = [
-                m for m in candidates
-                if (m.get("fullName") or "").lower() == name.lower()
-            ]
-            if exact:
-                person = exact[0]
-            elif len(candidates) == 1:
-                person = candidates[0]
-            else:
-                print(
-                    f"  WARNING: ambiguous lookup for '{name}' "
-                    f"({len(candidates)} matches) — skipping"
-                )
+            person = _resolve_pitcher(name, current_year)
+            if person is None:
                 continue
 
             pid = person["id"]
+            side = "home" if key == "home_probable_pitcher" else "away"
+            starter_ids_by_game[game_id][side] = pid
+
             if pid in seen:
                 continue
             seen.add(pid)
@@ -112,27 +116,87 @@ def _fetch_starters_today() -> tuple[dict, ...]:
                     "player_id": pid,
                     "game_id": game_id,
                     "full_name": person.get("fullName"),
-                    "home_away": "home" if key == "home_probable_pitcher" else "away",
+                    "home_away": side,
                     "team": (person.get("currentTeam") or {}).get("name"),
                     "position": (person.get("primaryPosition") or {}).get("abbreviation"),
                     "bats": (person.get("batSide") or {}).get("code"),
                     "throws": (person.get("pitchHand") or {}).get("code"),
+                    "player_type": "pitcher",
                 }
             )
 
-    return tuple(records)
+    return schedule, records, starter_ids_by_game
 
+
+# ─── games ───────────────────────────────────────────────────────────────────
+
+def fetch_games(date_str: str | None = None) -> list[dict]:
+    """Today's (or a given date's) games, shaped for the `games` table.
+
+    date_str: optional 'YYYY-MM-DD'. Defaults to today's slate.
+    Returns [] on any statsapi outage so the pipeline degrades gracefully.
+
+    home_starter_id / away_starter_id are populated when the probable
+    starter resolves cleanly; otherwise the key is OMITTED from the row
+    (NOT set to None) so the upsert never clobbers a previously-set value
+    with NULL on a later cron tick where the lookup failed transiently.
+    """
+    schedule, _records, starter_ids_by_game = _resolved_schedule(date_str)
+    games: list[dict] = []
+    for g in schedule:
+        game_id = g["game_id"]
+        sids = starter_ids_by_game.get(game_id, {})
+        row: dict = {
+            "game_id": game_id,
+            "game_date": g["game_date"],          # 'YYYY-MM-DD'
+            "home_team": g["home_name"],
+            "away_team": g["away_name"],
+            "status": g.get("status"),
+            # First-pitch ISO timestamp (UTC, Z-suffixed). Used by the
+            # frontend to sort game cards chronologically. Defensive get:
+            # statsapi sometimes omits game_datetime for TBD slots.
+            "start_time": g.get("game_datetime"),
+        }
+        if sids.get("home") is not None:
+            row["home_starter_id"] = sids["home"]
+        if sids.get("away") is not None:
+            row["away_starter_id"] = sids["away"]
+        games.append(row)
+    return games
+
+
+# ─── starters ────────────────────────────────────────────────────────────────
 
 def fetch_starters() -> list[dict]:
-    """Probable starters linked to their game_id (player_id, game_id, bio)."""
-    return [dict(r) for r in _fetch_starters_today()]
+    """Probable starters for TODAY, linked to their game_id.
+
+    Returns one dict per pitcher with player_id, game_id, full_name, bio
+    fields. Single source the baseline and grader both consume.
+    """
+    _sched, records, _sids = _resolved_schedule(None)
+    return [dict(r) for r in records]
+
+
+def fetch_starters_for_date(date_str: str) -> list[dict]:
+    """Probable starters for an arbitrary date (future-slate previews).
+
+    Same shape as fetch_starters() but for a specific date string. Used by
+    main._run_future_previews to pre-populate games + probable pitchers for
+    the next 3 days so the frontend can show "tomorrow's slate" before
+    projections exist. Returns [] gracefully on any statsapi outage.
+    """
+    _sched, records, _sids = _resolved_schedule(date_str)
+    return [dict(r) for r in records]
 
 
 def fetch_probable_pitchers() -> list[dict]:
-    """Probable starting pitchers shaped for the `players` table."""
-    cols = ("player_id", "full_name", "team", "position", "bats", "throws")
-    return [{c: r[c] for c in cols} for r in _fetch_starters_today()]
+    """Today's probable starting pitchers shaped for the `players` table."""
+    _sched, records, _sids = _resolved_schedule(None)
+    cols = ("player_id", "full_name", "team", "position", "bats", "throws", "player_type")
+    return [{c: r[c] for c in cols} for r in records]
 
+
+# ─── lineups (unchanged) ─────────────────────────────────────────────────────
 
 def fetch_lineups(date_str: str | None = None) -> list[dict]:
     """Confirmed batting lineups for today's (or a given date's) games.
@@ -198,7 +262,11 @@ if __name__ == "__main__":
     games = fetch_games()
     print(f"Games: {len(games)}")
     for g in games[:5]:
-        print(f"  [{g['game_id']}] {g['away_team']} @ {g['home_team']}  ({g['status']})")
+        sids = (
+            f"  starters: home={g.get('home_starter_id')} "
+            f"away={g.get('away_starter_id')}"
+        )
+        print(f"  [{g['game_id']}] {g['away_team']} @ {g['home_team']}  ({g['status']}){sids}")
 
     starters = fetch_starters()
     print(f"\nProbable starters: {len(starters)}")

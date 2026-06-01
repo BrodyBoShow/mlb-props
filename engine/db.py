@@ -33,11 +33,52 @@ def upsert_players(rows: list[dict]) -> int:
     return len(rows)
 
 
+_STARTER_COLS = ("home_starter_id", "away_starter_id")
+
+
 def upsert_games(rows: list[dict]) -> int:
-    """Upsert game rows on game_id. Returns the number of rows sent."""
+    """Upsert game rows on game_id. Returns the number of rows sent.
+
+    Rows are grouped by their key signature before upserting so a payload
+    where some games carry home_starter_id / away_starter_id and others
+    don't never accidentally NULLs the missing column via PostgREST's
+    union-of-keys behavior — a transient lookup_player miss on one game
+    must not clobber a previously-known starter on another.
+
+    Defensive: if the games table is on a pre-migration schema (the
+    home_starter_id / away_starter_id columns haven't been added yet)
+    PostgREST returns PGRST204 with the offending column name. We strip
+    the starter columns and retry once so the pipeline keeps working
+    until the user applies db/migrations/add_starter_ids.sql.
+    """
     if not rows:
         return 0
-    _client().table("games").upsert(rows, on_conflict="game_id").execute()
+    groups: dict[frozenset, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(frozenset(r.keys()), []).append(r)
+    client = _client()
+    for batch in groups.values():
+        try:
+            client.table("games").upsert(batch, on_conflict="game_id").execute()
+        except Exception as exc:
+            msg = str(exc)
+            if any(col in msg for col in _STARTER_COLS):
+                stripped = [
+                    {k: v for k, v in r.items() if k not in _STARTER_COLS}
+                    for r in batch
+                ]
+                if stripped[0]:
+                    client.table("games").upsert(
+                        stripped, on_conflict="game_id"
+                    ).execute()
+                print(
+                    "  WARNING: games table missing starter_id columns -- "
+                    "upserted without them. Run "
+                    "db/migrations/add_starter_ids.sql to enable future-slate "
+                    "starter rendering."
+                )
+            else:
+                raise
     return len(rows)
 
 
