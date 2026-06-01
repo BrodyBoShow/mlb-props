@@ -4,6 +4,8 @@ import { ALL_PROP_TYPES, EDGE_THRESHOLD, MIN_LINE, REAL_BOOKS, SHARP_MIN_LINE } 
 import type { ByProp, FeaturedPlay, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
+import LiveUpdated from "./LiveUpdated";
+import AutoRefresh from "./AutoRefresh";
 
 // ── Featured-play filter constants ───────────────────────────────────────────
 // Tight filters — featuring a marginal play on the top of the home page is
@@ -760,6 +762,9 @@ export default async function Home({
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
+      {/* Soft-refreshes the server component on an interval (tab-aware) so a
+          new cron run appears without a manual reload. Renders nothing. */}
+      <AutoRefresh />
       <header className="mb-8 flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">MLB Props</h1>
@@ -769,6 +774,8 @@ export default async function Home({
           {updatedAt && (
             <p className="mt-0.5 text-sm text-slate-400">
               Last updated: {formatUpdatedAt(updatedAt)}
+              {/* relative ticking counter — honest, counts up from updatedAt */}
+              <LiveUpdated iso={updatedAt} />
             </p>
           )}
         </div>

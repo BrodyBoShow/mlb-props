@@ -269,6 +269,39 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Live-feel: auto-refresh + relative timestamp (this session):
+- Goal: new cron data appears without a manual reload, and "Last
+  updated" feels alive — without ever overstating freshness.
+- Step 0: "Last updated" is server-rendered in the page header from
+  updatedAt = MAX(projections.updated_at, lines.fetched_at), formatted
+  in America/New_York. Existing live polls (useLiveGameStatus /
+  useLiveBoxScores) use useEffect + setInterval(60s). Page is
+  force-dynamic.
+- PART A — web/app/LiveUpdated.tsx (client): appends a relative
+  ticking counter next to the UNCHANGED absolute timestamp. "just now"
+  (<60s), "updated Nm ago", "updated Nh ago", "updated Nd ago".
+  Recomputes every 30s from the real updatedAt — only counts UP from
+  the actual value, never to "now". Pulsing emerald dot (same
+  animate-ping as the LIVE chip). Returns null on SSR + first paint
+  (label starts null, filled in useEffect) so there's no hydration
+  mismatch on the time-dependent string.
+- PART B — web/app/AutoRefresh.tsx (client, renders null): calls
+  router.refresh() every 150s (2.5 min, slower than the 60s in-game
+  polls). Soft-refresh re-runs the force-dynamic server component
+  (getSlate re-fetches projections/lines/edges) while PRESERVING client
+  state — the selected prop tab (PropBoard useState) and the live
+  box-score / game-status hooks persist, and the URL is untouched so
+  ?date= persists. Paused while document.visibilityState==='hidden';
+  one catch-up router.refresh() on regaining focus. When a new run has
+  landed, updatedAt advances and the relative counter resets to "just
+  now"; otherwise the displayed time is unchanged.
+- Honesty guardrail: the absolute timestamp always reflects the real
+  max(updated_at, fetched_at); the relative counter only counts up from
+  it. Nothing fabricates a fresher time.
+- Verified: relativeLabel correct across 10s..3d ranges; tsc clean;
+  npm run build passes. Frontend-only (page.tsx + 2 new components); no
+  engine touched.
+
 Sharp badge — edge-derived direction + relabel (this session):
 - Bug (visible in prod): the badge fired on ~Even rows (Alcantara SO
   SHARP 4/4 next to ~Even) and its direction could contradict the edge
