@@ -269,6 +269,41 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Pitcher recent-form spark dots (this session):
+- Adds a quiet L5 dot row to pitcher cards showing the last ≤5 graded
+  actuals for the active prop vs tonight's line (over=green, under=red,
+  push=slate), oldest→newest.
+- DATA NOTE (verified live): player_game_logs has NO prop_type column
+  and the per-game `projection` column was dropped earlier, so the
+  dots compare each graded ACTUAL against the current book LINE (the
+  market benchmark), not a historical projection. All five main pitcher
+  actual columns are 60/60 non-null on graded rows
+  (actual_strikeouts / _hits_allowed / _outs_recorded / _walks /
+  _earned_runs) — so spark rows appear on all FIVE of those prop tabs.
+  Hitter + fantasy tabs get no spark row (no clean actual column in
+  SPARK_ACTUAL_COL).
+- web/lib/types.ts: FormDot = "over"|"under"|"push"; Pitcher gains
+  recentForm?: FormDot[].
+- web/app/page.tsx getSlate(): ONE paginated read (fetchAllPages) of
+  every slate pitcher's recent graded games (newest-first), bucketed
+  per player. sparkFor(playerId, prop, line) takes the ≤5 most recent
+  non-null actuals for that prop's column, maps each vs the line, and
+  reverses to oldest→newest. recentForm is computed PER (pitcher, prop)
+  inside the byProp build, so each prop tab carries its own dots — no
+  client recompute, no stale dots on tab switch. undefined when no
+  line / no history / non-spark prop.
+- web/app/PropBoard.tsx: RecentFormDots sub-component — "L5" label
+  (text-[9px] slate-600) + a row of h-1.5 w-1.5 dots, with a title
+  tooltip spelling the sequence ("Last 5 starts vs tonight's line:
+  O-U-O-O-U"). Rendered under ConfidenceBar in the info column.
+  Returns null when recentForm is empty.
+- Cross-checked live: over/under/push computation confirmed against
+  direct DB (10 K vs 4.5 -> over, 3 K vs 4.5 -> under, etc.). Today's
+  starters have 0 graded history yet (early season) so no dots show
+  on the current slate — the correct "no history -> no spark row"
+  behavior; dots populate automatically as graded games accumulate.
+- Verified: npm run build passes; tsc clean.
+
 Featured Plays confidence indicator (this session):
 - Adds a graded-history count to each Featured Plays card so users can
   weigh edges with thin history differently from edges with a track

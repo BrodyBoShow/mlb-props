@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
 import { ALL_PROP_TYPES } from "@/lib/constants";
-import type { ByProp, FeaturedPlay, GameGroup, PropType } from "@/lib/types";
+import type { ByProp, FeaturedPlay, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
 
@@ -50,6 +50,22 @@ const FEATURED_MIN_LINE: Partial<Record<PropType, number>> = {
   strikeouts:    3.5,
   hits_allowed:  2.5,
   outs_recorded: 10.5,
+};
+
+// ── Recent-form spark dots ───────────────────────────────────────────────────
+// Maps each pitcher prop that gets an L5 spark row to its actual column in
+// player_game_logs. Verified live (2026-06): all five are 60/60 non-null on
+// graded pitcher rows, so all five get spark rows. Hitter / fantasy props are
+// absent here, so sparkFor returns undefined for them (no spark on those tabs).
+// player_game_logs has NO prop_type column and the per-game `projection`
+// column was dropped earlier — so the dots compare each graded ACTUAL against
+// tonight's book LINE (the market's expectation), not a historical projection.
+const SPARK_ACTUAL_COL: Partial<Record<PropType, string>> = {
+  strikeouts:    "actual_strikeouts",
+  hits_allowed:  "actual_hits_allowed",
+  outs_recorded: "actual_outs_recorded",
+  walks:         "actual_walks",
+  earned_runs:   "actual_earned_runs",
 };
 
 // Always read fresh from the DB at request time — the cron updates rows
@@ -316,6 +332,76 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     edgeByKey.set(`${e.player_id}|${e.prop_type}`, e);
   }
 
+  // ── Recent-form (L5 spark dots) ─────────────────────────────────────────
+  // ONE bulk read of every slate pitcher's recent graded games, newest-first.
+  // Paginated via fetchAllPages because the lesson of the 1000-row cap is not
+  // one we relearn — ~30 pitchers × up to ~15 games is one page today but the
+  // paginator costs nothing to be safe. Pitcher ids are collected from the
+  // strikeouts rows (every projected pitcher has a strikeouts projection).
+  type RecentGameRow = {
+    player_id: number;
+    game_date: string;
+    [col: string]: number | string | null;
+  };
+  const pitcherIds = [
+    ...new Set(rows.filter((r) => r.prop_type === "strikeouts").map((r) => r.player_id)),
+  ];
+  const recentByPlayer = new Map<number, RecentGameRow[]>();
+  if (pitcherIds.length > 0) {
+    const recentGames = await fetchAllPages<RecentGameRow>(
+      (from, to) =>
+        supabase
+          .from("player_game_logs")
+          .select(
+            "player_id, game_date, actual_strikeouts, actual_hits_allowed, " +
+              "actual_outs_recorded, actual_walks, actual_earned_runs",
+          )
+          .in("player_id", pitcherIds)
+          .eq("player_type", "pitcher")
+          .order("game_date", { ascending: false })
+          .range(from, to) as unknown as PromiseLike<{
+            data: RecentGameRow[] | null;
+            error: unknown;
+          }>,
+      "recent-pitcher-form",
+    );
+    // Global desc order preserves per-player desc order, so just bucket in
+    // encounter order — each player's array stays newest→oldest.
+    for (const g of recentGames) {
+      const arr = recentByPlayer.get(g.player_id);
+      if (arr) arr.push(g);
+      else recentByPlayer.set(g.player_id, [g]);
+    }
+  }
+
+  // Compute the L5 dots for one (pitcher, prop): each of the last ≤5 graded
+  // actuals vs tonight's line, oldest→newest. undefined when there's no
+  // current line (nothing to compare against), no actual column for the prop
+  // (hitter/fantasy), or no graded history.
+  function sparkFor(
+    playerId: number,
+    propType: PropType,
+    line: number | undefined,
+  ): FormDot[] | undefined {
+    if (line === undefined || line === null) return undefined;
+    const col = SPARK_ACTUAL_COL[propType];
+    if (!col) return undefined;
+    const games = recentByPlayer.get(playerId);
+    if (!games || games.length === 0) return undefined;
+
+    const dots: FormDot[] = [];   // newest→oldest while collecting
+    for (const g of games) {
+      const v = g[col];
+      if (v === null || v === undefined) continue;
+      const actual = Number(v);
+      if (!Number.isFinite(actual)) continue;
+      dots.push(actual > line ? "over" : actual < line ? "under" : "push");
+      if (dots.length >= 5) break;
+    }
+    if (dots.length === 0) return undefined;
+    return dots.reverse();   // oldest→newest for left-to-right display
+  }
+
   // Group by prop_type → game_id → players. Pure presentation — no math.
   // After grouping we sort each prop's games chronologically by start_time so
   // the slate order matches MLB's schedule page and stays identical across
@@ -354,6 +440,9 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           overPrice: e?.over_price ?? undefined,
           underPrice: e?.under_price ?? undefined,
           bookmaker: e?.bookmaker,
+          // L5 recent-form dots for THIS prop vs this prop's current line.
+          // undefined on hitter/fantasy tabs and when there's no line/history.
+          recentForm: sparkFor(r.player_id, propType, e?.line),
         });
       }
       const sorted = [...byGame.values()].sort(

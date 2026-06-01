@@ -9,6 +9,7 @@ import { useLiveBoxScores } from "./useLiveBoxScores";
 import type {
   ByProp,
   FeaturedPlay,
+  FormDot,
   GameStatus,
   Pitcher,
   PropType,
@@ -266,6 +267,47 @@ function ConfidenceBar({ confidence }: { confidence: number | undefined }) {
   );
 }
 
+// ── recent-form spark dots ───────────────────────────────────────────────────
+// A quiet L5 row: the pitcher's last ≤5 graded actuals for THIS prop vs
+// tonight's line, oldest→newest (rightmost = most recent). Pre-computed
+// server-side per (pitcher, prop), so switching tabs shows the right dots.
+// Renders nothing when there's no form data (no line / no history / hitter
+// or fantasy prop) — feature 2's confidence line already conveys "no history".
+
+const FORM_DOT_CLASS: Record<FormDot, string> = {
+  over:  "bg-emerald-500/80",
+  under: "bg-red-500/70",
+  push:  "bg-slate-600",
+};
+
+function RecentFormDots({ form }: { form: FormDot[] | undefined }) {
+  if (!form || form.length === 0) return null;
+
+  // Tooltip spells out the sequence, e.g. "O-U-O-O-U" (oldest→newest).
+  const seq = form
+    .map((d) => (d === "over" ? "O" : d === "under" ? "U" : "P"))
+    .join("-");
+
+  return (
+    <div
+      className="mt-1 flex items-center gap-1.5"
+      title={`Last ${form.length} starts vs tonight's line: ${seq}`}
+    >
+      <span className="text-[9px] uppercase tracking-wider text-slate-600">
+        L5
+      </span>
+      <div className="flex items-center gap-1">
+        {form.map((d, i) => (
+          <span
+            key={i}
+            className={`h-1.5 w-1.5 rounded-full ${FORM_DOT_CLASS[d]}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── game header sub-component ────────────────────────────────────────────────
 // Shows the matchup title + a status line beneath: date + live/scheduled/final.
 // `status` is undefined when the live fetch hasn't populated yet (or failed) —
@@ -487,6 +529,7 @@ export default function PropBoard({
                         <span className="text-slate-100">{p.name}</span>
                         <EdgeDetail pitcher={p} />
                         <ConfidenceBar confidence={p.confidence} />
+                        <RecentFormDots form={p.recentForm} />
                       </div>
                       <ProjectionBadge
                         pitcher={p}
