@@ -10,6 +10,7 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -24,13 +25,15 @@ jobs:
           git log --oneline -3
           echo "=== engine file mtimes ==="
           ls -la engine/model.py engine/stats.py engine/fetch.py engine/main.py
-          echo "=== sanity grep (these strings only exist in post-b636a28 / post-201729c code) ==="
-          grep -n "pitcher rows after type filter" engine/model.py || echo "MISSING: model.py is stale"
-          grep -n "unrecognized keyspace" engine/stats.py || echo "MISSING: stats.py is stale"
+          echo "=== sanity grep — strings unique to the current refactor ==="
+          grep -n "_fetch_bulk_statcast" engine/model.py || echo "MISSING: model.py is stale"
+          grep -n "_team_k_pcts" engine/stats.py || echo "MISSING: stats.py is stale"
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: engine/requirements.txt
 
       - name: Install dependencies
         run: pip install -r engine/requirements.txt
