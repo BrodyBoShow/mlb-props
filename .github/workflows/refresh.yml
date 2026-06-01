@@ -50,4 +50,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           PARLAY_API_KEY: ${{ secrets.PARLAY_API_KEY }}
+          # Optional — when set, engine/weather.py populates the
+          # temperature_f / wind / precipitation columns on grade rows.
+          # When absent, those columns log NULL and one reminder line
+          # is printed; the pipeline runs the same either way.
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
         run: python engine/main.py
