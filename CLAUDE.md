@@ -269,6 +269,46 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Sharp-money agreement badge (feature 5) (this session):
+- Report from step 0: getSlate fetches edges (ONE baseline book per prop:
+  pinnacle or "consensus") + projections + lines.fetched_at TIMESTAMP —
+  NOT per-book line rows. So a new bounded fetch was needed. The `lines`
+  table DOES store per-book rows keyed (player_id, prop_type, bookmaker,
+  game_date), so no engine/migration change — frontend-only.
+- Badge = how many REAL two-sided books (pinnacle/draftkings/fanduel/
+  bet365/caesars) the model leans the SAME way against. Distinct from the
+  edge number (edge = gap size; sharp = multi-book agreement that the gap
+  exists). DFS apps excluded (flat single-number lines).
+- web/lib/types.ts: SharpAgreement {agree, total, direction, books};
+  Pitcher.sharpAgreement? + FeaturedPlay.sharpAgreement?.
+- web/lib/constants.ts: REAL_BOOKS (5-book two-sided subset of
+  engine/lines.py BOOKMAKERS) + BOOK_DISPLAY label map. Sync comments.
+- web/app/page.tsx getSlate(): ONE ISOLATED, paginated (fetchAllPages),
+  failure-tolerant query for REAL_BOOKS lines on the slate date (~2.2k
+  rows after the 1000-cap → 3 pages). sharpByKey indexes
+  `${player_id}|${prop_type}` -> Map<book, line> (unique constraint
+  means one line per book; keep-first defensively). computeSharp(pid,
+  prop, proj): per-book lean (proj>line=over, proj<line=under,
+  proj==line=push counts in total only); strict-majority direction
+  (even split → undefined); returns {agree,total,direction,books} only
+  when >= 2 books agree. Attached to every prop row + featured play.
+- web/app/SharpBadge.tsx (new): tiers full (agree>=3 && agree===total →
+  emerald ◆) vs partial (agree>=2 → muted slate); returns null below 2.
+  Text "SHARP N/N"; tooltip lists the actual agreeing book display names
+  + direction.
+- web/app/PropBoard.tsx: badge inline next to the pitcher name, PITCHER
+  prop tabs only (!isHitter). web/app/FeaturedPlays.tsx: badge on the
+  Book attribution row (right-aligned).
+- Cross-checked vs raw DB: Griffin Jax SO proj 3.9 vs five 4.5 lines →
+  SHARP 5/5 under (full); Sandy Alcantara SO 3.4 vs four 3.5 → 4/4
+  under; partial 2/2 cases confirmed; 27 single-real-book props →
+  no badge; even-split → no badge. Frontend-only; FEATURE_COLS still 11;
+  tsc clean; npm run build passes.
+- Minor note: no MIN_LINE filter applied (spec scoped it to "real books
+  that actually posted a line"). A rare alt-only case (e.g. two 0.5 K
+  lines) can yield a thin "SHARP 2/2"; harmless + honest-literal. Books
+  posting both a main and alt line are deduped by the unique constraint.
+
 Opposing-lineup context line (feature 4, Option A) (this session):
 - Report from step 1: NO current-slate table carried opponent context.
   projections/edges/games/lines all have zero opp columns (verified

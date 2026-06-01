@@ -4,6 +4,7 @@ import { useState } from "react";
 import DateNav from "./DateNav";
 import FeaturedPlays from "./FeaturedPlays";
 import ParkTag from "./ParkTag";
+import SharpBadge from "./SharpBadge";
 import { useLiveGameStatus } from "./useLiveGameStatus";
 import { useLiveBoxScores } from "./useLiveBoxScores";
 import type {
@@ -562,7 +563,15 @@ export default function PropBoard({
                       className="flex items-start justify-between px-5 py-3"
                     >
                       <div className="min-w-0">
-                        <span className="text-slate-100">{p.name}</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-slate-100">{p.name}</span>
+                          {/* Sharp badge on pitcher prop tabs only — subtle,
+                              inline. Renders nothing unless 2+ real books
+                              agree with the model's lean. */}
+                          {!isHitter && (
+                            <SharpBadge sharp={p.sharpAgreement} />
+                          )}
+                        </div>
                         <EdgeDetail pitcher={p} />
                         <ConfidenceBar confidence={p.confidence} />
                         <RecentFormDots form={p.recentForm} />

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES } from "@/lib/constants";
+import { ALL_PROP_TYPES, REAL_BOOKS } from "@/lib/constants";
 import type { ByProp, FeaturedPlay, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
@@ -431,6 +431,89 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
   }
 
+  // ── sharp-money agreement (feature 5) ───────────────────────────────────
+  // The frontend's main reads only fetch the EDGES baseline line (one book
+  // per prop) — not per-book lines. So we add ONE isolated, paginated query
+  // for REAL_BOOKS lines on the slate date. fetchAllPages is failure-tolerant
+  // (logs + returns partial on any error), so a transient failure can't blank
+  // the board — the badge just won't render. The lines table + these columns
+  // already exist, so no migration risk here.
+  type SharpLineRow = {
+    player_id: number;
+    prop_type: string;
+    bookmaker: string;
+    line: number;
+  };
+  const sharpLines = await fetchAllPages<SharpLineRow>(
+    (from, to) =>
+      supabase
+        .from("lines")
+        .select("player_id, prop_type, bookmaker, line")
+        .eq("game_date", selectedDate)
+        .in("bookmaker", REAL_BOOKS as string[])
+        .range(from, to) as unknown as PromiseLike<{
+          data: SharpLineRow[] | null;
+          error: unknown;
+        }>,
+    "sharp-lines",
+  );
+
+  // Index: `${player_id}|${prop_type}` -> Map<bookmaker, line>. The lines
+  // table has a unique (player_id, prop_type, bookmaker, game_date) key so
+  // there's exactly one line per real book per prop — no alt-line double
+  // count. We still keep-first defensively.
+  const sharpByKey = new Map<string, Map<string, number>>();
+  for (const r of sharpLines) {
+    if (r.line === null || r.line === undefined) continue;
+    const key = `${r.player_id}|${r.prop_type}`;
+    let books = sharpByKey.get(key);
+    if (!books) {
+      books = new Map<string, number>();
+      sharpByKey.set(key, books);
+    }
+    if (!books.has(r.bookmaker)) books.set(r.bookmaker, Number(r.line));
+  }
+
+  // Compute multi-book agreement for one (player, prop) vs the model
+  // projection. Returns undefined unless >= 2 real books lean the model's
+  // way — honest: 0-1 real books can't be a consensus. The "model lean vs
+  // book B" is proj>line→over, proj<line→under; a proj==line book is a push
+  // (counts toward total, agrees with neither side). The agreed direction is
+  // the strict majority of non-push leans; an even split yields no majority
+  // and therefore no badge.
+  function computeSharp(
+    playerId: number,
+    propType: PropType,
+    projection: number | undefined,
+  ): import("@/lib/types").SharpAgreement | undefined {
+    if (projection === undefined || projection === null) return undefined;
+    const books = sharpByKey.get(`${playerId}|${propType}`);
+    if (!books || books.size < 2) return undefined;   // need 2+ real books
+
+    const overBooks: string[] = [];
+    const underBooks: string[] = [];
+    for (const [book, line] of books) {
+      if (projection > line) overBooks.push(book);
+      else if (projection < line) underBooks.push(book);
+      // proj === line → push: counted in total, not in either direction
+    }
+    const total = books.size;
+    let direction: "over" | "under";
+    let agreeing: string[];
+    if (overBooks.length > underBooks.length) {
+      direction = "over";
+      agreeing = overBooks;
+    } else if (underBooks.length > overBooks.length) {
+      direction = "under";
+      agreeing = underBooks;
+    } else {
+      return undefined;   // even split (or all pushes) → no consensus
+    }
+    if (agreeing.length < 2) return undefined;
+
+    return { agree: agreeing.length, total, direction, books: agreeing };
+  }
+
   // Group by prop_type → game_id → players. Pure presentation — no math.
   // After grouping we sort each prop's games chronologically by start_time so
   // the slate order matches MLB's schedule page and stays identical across
@@ -478,6 +561,9 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           oppContext: oppKByPlayer.has(r.player_id)
             ? { kRate: oppKByPlayer.get(r.player_id)!, lhh: null, rhh: null }
             : undefined,
+          // Multi-book sharp agreement for THIS prop (feature 5). undefined
+          // unless >= 2 real books lean the model's way.
+          sharpAgreement: computeSharp(r.player_id, propType, r.projection),
         });
       }
       const sorted = [...byGame.values()].sort(
@@ -542,6 +628,8 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         gameId: proj.game_id,
         matchup,
         gradedStarts: 0, // enriched below in ONE query for the top-5
+        // Multi-book sharp agreement for this featured pitcher+prop (feature 5).
+        sharpAgreement: computeSharp(e.player_id, propType, proj.projection),
       };
     })
     .filter((p): p is FeaturedPlay => p !== null)

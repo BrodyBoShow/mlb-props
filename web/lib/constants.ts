@@ -44,6 +44,29 @@ export const HITTER_PROPS: ReadonlySet<PropType> = new Set([
 // Mirrored from engine/constants.py EDGE_THRESHOLD — keep in sync.
 export const EDGE_THRESHOLD = 0.1;
 
+// Real, two-sided sportsbooks — the only books that count toward sharp-money
+// agreement (feature 5). DFS apps (prizepicks/underdog/sleeper/betr) post flat
+// single-number lines, not two-sided over/under markets, so they're excluded.
+// This is the SUBSET of engine/lines.py BOOKMAKERS that have de-viggable
+// markets — mirrors the FEATURED_BOOKS set in web/app/page.tsx; keep in sync.
+export const REAL_BOOKS: readonly string[] = [
+  "pinnacle",
+  "draftkings",
+  "fanduel",
+  "bet365",
+  "caesars",
+];
+
+// Display names for the real books (tooltips / labels). Keep in sync with
+// REAL_BOOKS above and BOOK_LABEL in web/app/FeaturedPlays.tsx.
+export const BOOK_DISPLAY: Record<string, string> = {
+  pinnacle:   "Pinnacle",
+  draftkings: "DraftKings",
+  fanduel:    "FanDuel",
+  bet365:     "Bet365",
+  caesars:    "Caesars",
+};
+
 // ── Park factors ─────────────────────────────────────────────────────────────
 // Hit park factor for each home venue. 1.0 = neutral; > 1 = hitter-friendly;
 // < 1 = pitcher-friendly. Values mirror engine/constants.py PARK_FACTORS_HITS

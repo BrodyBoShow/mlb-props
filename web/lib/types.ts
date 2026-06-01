@@ -37,6 +37,19 @@ export type OppContext = {
   rhh: number | null;
 };
 
+// Sharp-money agreement (feature 5). Counts how many REAL two-sided books
+// (pinnacle/draftkings/fanduel/bet365/caesars) the model leans the SAME way
+// against — independent multi-book consensus, distinct from the edge size.
+// Only set when agree >= 2; the UI tiers it (agree>=3 && agree===total = full,
+// agree>=2 = partial). DFS apps are excluded entirely (flat single-number
+// lines, not two-sided markets).
+export type SharpAgreement = {
+  agree: number;                 // real books the model leans the same way vs
+  total: number;                 // real books with a line on this prop
+  direction: "over" | "under";   // the majority lean direction
+  books: string[];               // agreeing book keys (for the tooltip)
+};
+
 export type Pitcher = {
   player_id: number;     // MLBAM id — matches boxscore "ID{n}" keys 1:1
   name: string;
@@ -58,6 +71,9 @@ export type Pitcher = {
   // prop tab's row but only RENDERED on the Strikeouts tab. undefined when
   // opp_k_rate isn't available (pre-migration, or a non-model prop).
   oppContext?: OppContext;
+  // Multi-book sharp agreement (feature 5). undefined when fewer than 2 real
+  // books agree with the model's lean (or <2 real books have a line).
+  sharpAgreement?: SharpAgreement;
 };
 
 export type GameGroup = {
@@ -155,6 +171,8 @@ export type FeaturedPlay = {
   // Surfaced on the card so users can weigh edges with thin history
   // differently from edges with a real track record. 0 = no history yet.
   gradedStarts: number;
+  // Multi-book sharp agreement (feature 5) for this featured pitcher+prop.
+  sharpAgreement?: SharpAgreement;
 };
 
 // Live status for one MLB game. The MLB Stats API gamePk matches our

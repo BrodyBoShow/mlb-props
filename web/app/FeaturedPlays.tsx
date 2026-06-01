@@ -1,6 +1,7 @@
 "use client";
 
 import type { FeaturedPlay, PropType } from "@/lib/types";
+import SharpBadge from "./SharpBadge";
 
 // Display names for the three pitcher props that can qualify as a featured
 // play. The filter in page.tsx restricts to these, so we only need labels
@@ -91,10 +92,13 @@ function FeaturedPlayCard({ play }: { play: FeaturedPlay }) {
         </span>
       </div>
 
-      {/* book attribution */}
-      <p className="mt-3 text-[10px] uppercase tracking-wider text-slate-500">
-        Book: {BOOK_LABEL[play.bookmaker] ?? play.bookmaker}
-      </p>
+      {/* book attribution + sharp-money agreement badge */}
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <p className="text-[10px] uppercase tracking-wider text-slate-500">
+          Book: {BOOK_LABEL[play.bookmaker] ?? play.bookmaker}
+        </p>
+        <SharpBadge sharp={play.sharpAgreement} />
+      </div>
 
       {/* confidence — how much graded history backs this play */}
       <ConfidenceLine count={play.gradedStarts} />
