@@ -14,7 +14,7 @@ from functools import lru_cache
 import requests
 import statsapi
 
-from constants import LEAGUE_AVG_K_PCT
+from constants import LEAGUE_AVG_K_PCT, TEAM_NAME_TO_ID
 
 
 # ─── FanGraphs anti-403 shim ─────────────────────────────────────────────────
@@ -362,8 +362,306 @@ def get_hitter_games(
                 "walks":        int(st.get("baseOnBalls", 0)),
                 "hit_by_pitch": hbp,
                 "stolen_bases": int(st.get("stolenBases", 0)),
+                # Extra components for hitter-form helpers. Not used by
+                # the existing baseline builders or fantasy-score logic,
+                # but consumed by get_hitter_form() below.
+                "at_bats":     int(st.get("atBats", 0)),
+                "strikeouts":  int(st.get("strikeOuts", 0)),
+                "plate_appearances": int(st.get("plateAppearances", 0)),
             }
         )
 
     results.sort(key=lambda r: r["game_date"], reverse=True)
     return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Data-foundation metric helpers — pure aggregation over the cached fetchers
+# above. Each returns a dict shaped for one row in player_game_logs. Anything
+# the source data doesn't expose comes back as None so the column stays NULL.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def get_pitcher_rest_metrics(pitcher_id: int, game_date: date) -> dict:
+    """Days of rest, recent workload, and innings load over the last 21d.
+
+    Filters out any start on or after game_date — the model is logging
+    features for THE start on game_date, so days_rest is the gap from the
+    pitcher's PRIOR start to game_date, not the start being graded.
+
+    Reuses get_pitcher_starts (lru_cached) so multiple metric helpers in
+    one grading run only pay the statsapi cost once per pitcher.
+    """
+    raw = get_pitcher_starts(pitcher_id, 30, game_date)
+    # Strict-prior filter: exclude any start dated game_date or later so
+    # the "last start" reference is genuinely the one BEFORE today's.
+    starts: list[dict] = []
+    for s in raw or []:
+        try:
+            sd = date.fromisoformat(s["game_date"])
+        except Exception:
+            continue
+        if sd < game_date:
+            starts.append(s)
+
+    if not starts:
+        return {
+            "pitcher_days_rest":           None,
+            "pitcher_starts_last_21d":     0,
+            "pitcher_pitches_last_3starts": None,
+            "pitcher_innings_last_21d":    0.0,
+        }
+    try:
+        last_date = date.fromisoformat(starts[0]["game_date"])
+        days_rest = (game_date - last_date).days
+    except Exception:
+        days_rest = None
+    cutoff_21 = game_date - timedelta(days=21)
+    recent_21 = [
+        s for s in starts
+        if date.fromisoformat(s["game_date"]) >= cutoff_21
+    ]
+    # Per-start pitch counts aren't in the statsapi gameLog schema we pull —
+    # leave the field None rather than fabricate.
+    return {
+        "pitcher_days_rest":           days_rest,
+        "pitcher_starts_last_21d":     len(recent_21),
+        "pitcher_pitches_last_3starts": None,
+        "pitcher_innings_last_21d":    round(
+            sum(s["outs_recorded"] for s in recent_21) / 3, 1
+        ),
+    }
+
+
+def get_team_schedule_density(team: str, game_date: date) -> dict:
+    """How many games has `team` played in the last 3 / 7 days?
+
+    Uses statsapi.schedule filtered to the team's recent games. Returns
+    None for both fields on any API failure so downstream code can treat
+    them uniformly.
+    """
+    if not team:
+        return {"team_games_last_3d": None, "team_games_last_7d": None}
+    # statsapi.schedule(team=...) requires an int team id, not the name string.
+    team_id = TEAM_NAME_TO_ID.get(team)
+    if team_id is None:
+        return {"team_games_last_3d": None, "team_games_last_7d": None}
+    start = (game_date - timedelta(days=7)).strftime("%Y-%m-%d")
+    end = (game_date - timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        games = statsapi.schedule(start_date=start, end_date=end, team=team_id)
+    except Exception:
+        return {"team_games_last_3d": None, "team_games_last_7d": None}
+    g3_cutoff = game_date - timedelta(days=3)
+    games_3d = 0
+    for g in games or []:
+        try:
+            gd = date.fromisoformat(g.get("game_date", ""))
+        except Exception:
+            continue
+        if gd >= g3_cutoff:
+            games_3d += 1
+    return {
+        "team_games_last_3d": games_3d,
+        "team_games_last_7d": len(games or []),
+    }
+
+
+def _compute_ops(games: list[dict]) -> float | None:
+    """Approximate OPS (OBP + SLG) from per-game hitting components.
+
+    Components needed: at_bats, hits, doubles, triples, home_runs, walks,
+    hit_by_pitch. Returns None when at_bats sum is zero.
+    """
+    if not games:
+        return None
+    ab = sum(int(g.get("at_bats") or 0) for g in games)
+    if ab == 0:
+        return None
+    h    = sum(int(g.get("hits") or 0) for g in games)
+    db   = sum(int(g.get("doubles") or 0) for g in games)
+    tp   = sum(int(g.get("triples") or 0) for g in games)
+    hr   = sum(int(g.get("home_runs") or 0) for g in games)
+    bb   = sum(int(g.get("walks") or 0) for g in games)
+    hbp  = sum(int(g.get("hit_by_pitch") or 0) for g in games)
+    singles = max(h - db - tp - hr, 0)
+    tb = singles + 2 * db + 3 * tp + 4 * hr
+    slg = tb / ab
+    obp_denom = ab + bb + hbp
+    obp = (h + bb + hbp) / obp_denom if obp_denom > 0 else 0.0
+    return round(obp + slg, 3)
+
+
+def get_hitter_form(hitter_id: int, game_date: date) -> dict:
+    """Rolling 7- and 15-game batting average + 7-game K rate + 15-game OPS
+    and HR count. Returns all-None when no recent games are on file.
+
+    Filters strictly-prior to game_date — "last 7 / 15 games" must refer
+    to history BEFORE the game we're grading today.
+    """
+    raw = get_hitter_games(hitter_id, 30, game_date)
+    games: list[dict] = []
+    for g in raw or []:
+        try:
+            gd = date.fromisoformat(g["game_date"])
+        except Exception:
+            continue
+        if gd < game_date:
+            games.append(g)
+    if not games:
+        return {
+            "hitter_avg_last7":    None,
+            "hitter_avg_last15":   None,
+            "hitter_k_rate_last7": None,
+            "hitter_ops_last15":   None,
+            "hitter_hr_last15":    None,
+        }
+    last7 = games[:7]
+    last15 = games[:15]
+
+    def batting_avg(gs: list[dict]) -> float | None:
+        ab = sum(int(g.get("at_bats") or 0) for g in gs)
+        if ab == 0:
+            return None
+        h = sum(int(g.get("hits") or 0) for g in gs)
+        return round(h / ab, 3)
+
+    pa7 = sum(int(g.get("plate_appearances") or 0) for g in last7)
+    if pa7 == 0:
+        pa7 = sum(
+            int(g.get("at_bats") or 0)
+            + int(g.get("walks") or 0)
+            + int(g.get("hit_by_pitch") or 0)
+            for g in last7
+        )
+    k7 = sum(int(g.get("strikeouts") or 0) for g in last7)
+
+    return {
+        "hitter_avg_last7":    batting_avg(last7),
+        "hitter_avg_last15":   batting_avg(last15),
+        "hitter_k_rate_last7": round(k7 / pa7, 3) if pa7 > 0 else None,
+        "hitter_ops_last15":   _compute_ops(last15),
+        "hitter_hr_last15":    sum(int(g.get("home_runs") or 0) for g in last15),
+    }
+
+
+def get_pitcher_form(pitcher_id: int, game_date: date) -> dict:
+    """Rolling K rate / ERA / WHIP from the pitcher's last 3 starts.
+
+    Filters strictly-prior to game_date — see get_pitcher_rest_metrics for
+    the same reasoning. The "last 3 starts" reference must exclude the
+    start being graded today.
+    """
+    raw = get_pitcher_starts(pitcher_id, 30, game_date)
+    starts: list[dict] = []
+    for s in raw or []:
+        try:
+            sd = date.fromisoformat(s["game_date"])
+        except Exception:
+            continue
+        if sd < game_date:
+            starts.append(s)
+    if not starts:
+        return {
+            "pitcher_k_rate_last3": None,
+            "pitcher_era_last3":    None,
+            "pitcher_whip_last3":   None,
+        }
+    last3 = starts[:3]
+    outs = sum(int(s["outs_recorded"]) for s in last3)
+    ip = outs / 3 if outs > 0 else 1
+    # Batters faced isn't in the gameLog response; approximate as
+    # outs + hits + walks (ignores HBP / errors — small bias).
+    bf_approx = max(
+        sum(
+            int(s["outs_recorded"])
+            + int(s["hits_allowed"])
+            + int(s["walks"])
+            for s in last3
+        ),
+        1,
+    )
+    return {
+        "pitcher_k_rate_last3": round(
+            sum(int(s["strikeouts"]) for s in last3) / bf_approx, 3
+        ),
+        "pitcher_era_last3":    round(
+            sum(int(s["earned_runs"]) for s in last3) * 9 / ip, 2
+        ),
+        "pitcher_whip_last3":   round(
+            (
+                sum(int(s["hits_allowed"]) for s in last3)
+                + sum(int(s["walks"]) for s in last3)
+            ) / ip, 2
+        ),
+    }
+
+
+def get_bullpen_metrics(team: str, game_date: date) -> dict:
+    """Best-effort opponent-bullpen aggregates.
+
+    Cleanly splitting starter vs reliever stats from the public statsapi
+    endpoints requires per-game role tagging that isn't exposed there.
+    For this data-collection sprint we log None for every bullpen metric
+    — the migration adds the columns so a future, richer fetch (Statcast
+    pitcher_role or a third-party stats API) can backfill without a
+    second migration.
+    """
+    return {
+        "opp_bullpen_era_14d":        None,
+        "opp_bullpen_k_rate_14d":     None,
+        "opp_bullpen_whip_14d":       None,
+        "opp_bullpen_innings_last3d": None,
+    }
+
+
+def get_series_context(team: str, opp: str, game_date: date) -> dict:
+    """Series game number (1/2/3/4...) and getaway-day flag.
+
+    Series game number = N consecutive same-opponent games ending on
+    game_date. Getaway day = the next calendar day has either no game
+    for this team OR a game vs a different opponent.
+    """
+    if not team or not opp:
+        return {"series_game_number": None, "is_getaway_day": None}
+    team_id = TEAM_NAME_TO_ID.get(team)
+    if team_id is None:
+        return {"series_game_number": None, "is_getaway_day": None}
+    window_start = (game_date - timedelta(days=5)).strftime("%Y-%m-%d")
+    window_end   = (game_date + timedelta(days=5)).strftime("%Y-%m-%d")
+    try:
+        sched = statsapi.schedule(
+            start_date=window_start, end_date=window_end, team=team_id
+        )
+    except Exception:
+        return {"series_game_number": None, "is_getaway_day": None}
+
+    by_date: dict[str, str] = {}
+    for g in sched or []:
+        gd = g.get("game_date")
+        away = g.get("away_name") or ""
+        home = g.get("home_name") or ""
+        if not gd:
+            continue
+        other = away if home == team else home
+        by_date[gd] = other
+
+    n = 0
+    cursor = game_date
+    while True:
+        cs = cursor.strftime("%Y-%m-%d")
+        if by_date.get(cs) == opp:
+            n += 1
+            cursor -= timedelta(days=1)
+        else:
+            break
+    series_game_number = n if n > 0 else None
+
+    tomorrow = (game_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    next_opp = by_date.get(tomorrow)
+    is_getaway = next_opp is None or next_opp != opp
+
+    return {
+        "series_game_number": series_game_number,
+        "is_getaway_day":     is_getaway,
+    }

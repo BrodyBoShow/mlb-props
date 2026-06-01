@@ -26,6 +26,105 @@ def et_today() -> _date:
     the engine cares about "today's slate"."""
     return _datetime.now(_ET).date()
 
+
+# ─── Venues — coords + dome flags ────────────────────────────────────────────
+#
+# Latitude / longitude of each MLB home ballpark, keyed on the same full
+# team name string statsapi.schedule and our games.home_team column use.
+# Coords are accurate to ~0.001° (≈ 100 m) which is more than enough for an
+# OpenWeatherMap forecast call. Used by engine/weather.py.
+#
+# A&'s "Athletics" string is whatever the current schedule API returns —
+# the 2025+ Sacramento move keeps the same nominal team name.
+
+VENUE_COORDS: dict[str, tuple[float, float]] = {
+    "Arizona Diamondbacks":   (33.4453, -112.0667),
+    "Atlanta Braves":         (33.8908,  -84.4678),
+    "Baltimore Orioles":      (39.2839,  -76.6217),
+    "Boston Red Sox":         (42.3467,  -71.0972),
+    "Chicago Cubs":           (41.9484,  -87.6553),
+    "Chicago White Sox":      (41.8300,  -87.6339),
+    "Cincinnati Reds":        (39.0975,  -84.5066),
+    "Cleveland Guardians":    (41.4962,  -81.6852),
+    "Colorado Rockies":       (39.7559, -104.9942),
+    "Detroit Tigers":         (42.3390,  -83.0485),
+    "Houston Astros":         (29.7572,  -95.3556),
+    "Kansas City Royals":     (39.0517,  -94.4803),
+    "Los Angeles Angels":     (33.8003, -117.8827),
+    "Los Angeles Dodgers":    (34.0739, -118.2400),
+    "Miami Marlins":          (25.7780,  -80.2196),
+    "Milwaukee Brewers":      (43.0280,  -87.9712),
+    "Minnesota Twins":        (44.9817,  -93.2776),
+    "New York Mets":          (40.7571,  -73.8458),
+    "New York Yankees":       (40.8296,  -73.9262),
+    "Athletics":              (38.5816, -121.4944),   # Sacramento (post-2024)
+    "Oakland Athletics":      (37.7516, -122.2005),   # legacy string fallback
+    "Philadelphia Phillies":  (39.9061,  -75.1665),
+    "Pittsburgh Pirates":     (40.4469,  -80.0057),
+    "San Diego Padres":       (32.7073, -117.1566),
+    "San Francisco Giants":   (37.7786, -122.3893),
+    "Seattle Mariners":       (47.5914, -122.3325),
+    "St. Louis Cardinals":    (38.6226,  -90.1928),
+    "Tampa Bay Rays":         (27.7682,  -82.6534),
+    "Texas Rangers":          (32.7473,  -97.0817),
+    "Toronto Blue Jays":      (43.6414,  -79.3894),
+    "Washington Nationals":   (38.8730,  -77.0074),
+}
+
+
+# MLB Stats API team IDs, keyed on the same full-team-name string we use
+# elsewhere. statsapi.schedule(team=...) REQUIRES an integer id — passing
+# the name string yields a 400 ("teamId=New York Yankees"). Verified via
+# statsapi.lookup_team; these IDs are stable across seasons.
+TEAM_NAME_TO_ID: dict[str, int] = {
+    "Arizona Diamondbacks":   109,
+    "Atlanta Braves":         144,
+    "Baltimore Orioles":      110,
+    "Boston Red Sox":         111,
+    "Chicago Cubs":           112,
+    "Chicago White Sox":      145,
+    "Cincinnati Reds":        113,
+    "Cleveland Guardians":    114,
+    "Colorado Rockies":       115,
+    "Detroit Tigers":         116,
+    "Houston Astros":         117,
+    "Kansas City Royals":     118,
+    "Los Angeles Angels":     108,
+    "Los Angeles Dodgers":    119,
+    "Miami Marlins":          146,
+    "Milwaukee Brewers":      158,
+    "Minnesota Twins":        142,
+    "New York Mets":          121,
+    "New York Yankees":       147,
+    "Athletics":              133,
+    "Oakland Athletics":      133,
+    "Philadelphia Phillies":  143,
+    "Pittsburgh Pirates":     134,
+    "San Diego Padres":       135,
+    "San Francisco Giants":   137,
+    "Seattle Mariners":       136,
+    "St. Louis Cardinals":    138,
+    "Tampa Bay Rays":         139,
+    "Texas Rangers":          140,
+    "Toronto Blue Jays":      141,
+    "Washington Nationals":   120,
+}
+
+
+# Teams whose home venue is a dome or has a closed-roof default. Weather
+# fetches for these are skipped (temperature pinned to 72 / wind 0) since
+# atmospheric conditions don't reach the field.
+IS_DOME: set[str] = {
+    "Tampa Bay Rays",         # Tropicana Field (fixed dome)
+    "Milwaukee Brewers",      # American Family Field (retractable, usually closed)
+    "Arizona Diamondbacks",   # Chase Field (retractable, usually closed in summer)
+    "Houston Astros",         # Minute Maid Park (retractable, usually closed in summer)
+    "Texas Rangers",          # Globe Life Field (retractable, usually closed in summer)
+    "Toronto Blue Jays",      # Rogers Centre (retractable, usually closed in cold months)
+    "Miami Marlins",          # loanDepot park (retractable, usually closed in summer)
+    "Seattle Mariners",       # T-Mobile Park (retractable; default-closed when raining)
+}
+
 # Baseline projection parameters
 LOOKBACK_DAYS = 30       # days of history to pull for each pitcher
 RECENT_STARTS = 5        # starts that receive the heavier weight

@@ -115,7 +115,7 @@ def get_projections_for_date(date_str: str) -> list[dict]:
                 .table("projections")
                 .select(
                     "game_id, player_id, projection, prop_type, "
-                    "games(home_team, away_team), players(team)"
+                    "games(home_team, away_team, start_time), players(team)"
                 )
                 .eq("projection_date", date_str)
                 .range(start, end)
@@ -153,6 +153,9 @@ def get_projections_for_date(date_str: str) -> list[dict]:
                 "home_team": home_team,
                 "away_team": away_team,
                 "home_away": home_away,
+                # start_time is the first-pitch UTC ISO string; consumed by
+                # grade.py for the is_day_game flag + weather lookup.
+                "start_time": game.get("start_time"),
             }
         )
     return rows
@@ -180,6 +183,7 @@ def get_last_game_date(player_id: int, before_date: str) -> str | None:
 
 
 _CONTEXT_COLS = (
+    # Original context columns (add_context_features.sql).
     "lineup_lhh_pct", "lineup_rhh_pct",
     "pitcher_k_vs_lhh", "pitcher_k_vs_rhh",
     "pitcher_fastball_pct", "pitcher_breaking_pct", "pitcher_offspeed_pct",
@@ -191,6 +195,23 @@ _CONTEXT_COLS = (
     "opp_bullpen_era_7day", "opp_bullpen_k_rate_7day",
     "hitter_avg_vs_hand", "park_factor_hits_h",
     "temperature", "wind_speed",
+    # Data-foundation columns (add_data_foundation.sql). Listed here so the
+    # PGRST204 retry strips them when the new migration hasn't been applied;
+    # once applied, the names appear in the table and the retry is a no-op.
+    "pitcher_days_rest", "pitcher_starts_last_21d",
+    "pitcher_pitches_last_3starts", "pitcher_innings_last_21d",
+    "team_games_last_3d", "team_games_last_7d", "hitter_games_last_7d",
+    "is_day_game", "is_getaway_day",
+    "hitter_avg_last7", "hitter_avg_last15", "hitter_k_rate_last7",
+    "hitter_ops_last15", "hitter_hr_last15",
+    "pitcher_k_rate_last3", "pitcher_era_last3", "pitcher_whip_last3",
+    "opp_bullpen_era_14d", "opp_bullpen_k_rate_14d",
+    "opp_bullpen_whip_14d", "opp_bullpen_innings_last3d",
+    "pitcher_k_vs_lhh_30d", "pitcher_k_vs_rhh_30d",
+    "pitcher_whiff_pct_30d", "pitcher_csw_pct_30d",
+    "series_game_number", "is_home_team",
+    "temperature_f", "wind_speed_mph", "wind_dir",
+    "is_dome", "precipitation_pct",
 )
 
 
@@ -225,8 +246,9 @@ def upsert_game_logs(rows: list[dict]) -> int:
             print(
                 "  WARNING: player_game_logs missing context-feature columns "
                 "-- upserted without them. Run "
-                "db/migrations/add_context_features.sql to enable advanced "
-                "matchup features."
+                "db/migrations/add_context_features.sql and "
+                "db/migrations/add_data_foundation.sql to enable advanced "
+                "matchup + data-foundation features."
             )
             return len(rows)
         raise

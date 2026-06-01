@@ -269,6 +269,87 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Data-foundation sprint — log every meaningful feature (this session):
+- Pure data-collection: 31 new nullable columns on player_game_logs.
+  FEATURE_COLS stays at 11; model.train()/predict() behaviour is
+  byte-identical. The model picks these up later in the season once
+  enough rows accumulate to measure importance.
+- db/migrations/add_data_foundation.sql: ALTER TABLE adds 31 columns
+  grouped as rest/fatigue, recent form (hitter + pitcher), bullpen
+  exposure scaffold, 30-day Statcast platoon, series/travel, weather.
+- engine/constants.py: VENUE_COORDS (30 ballparks lat/lon),
+  IS_DOME (8 dome/retractable venues), TEAM_NAME_TO_ID (30 MLB
+  Stats API team ids — statsapi.schedule(team=...) refuses the
+  name string and requires the int id).
+- engine/weather.py: new module. OpenWeatherMap /forecast lookup
+  keyed on the home team. Domes short-circuit to a neutral indoor
+  baseline (72°F / 0 mph). Missing OPENWEATHER_API_KEY logs one
+  reminder line and returns all-None — pipeline keeps running.
+- engine/stats.py: new helpers
+  * get_pitcher_rest_metrics: days_rest, starts_last_21d,
+    innings_last_21d. STRICTLY-prior-to-game_date filter so the
+    just-graded start isn't treated as the "last start".
+  * get_team_schedule_density: games_last_3d / 7d via
+    statsapi.schedule(team=TEAM_NAME_TO_ID[name]).
+  * _compute_ops: OBP+SLG approximation from per-game components.
+  * get_hitter_form: avg_last7 / avg_last15 / k_rate_last7 /
+    ops_last15 / hr_last15. Strict-prior filter.
+  * get_pitcher_form: k_rate_last3 / era_last3 / whip_last3.
+    Strict-prior filter.
+  * get_bullpen_metrics: stub returning all-None (clean role-split
+    from statsapi is hard; columns scaffolded for future fill).
+  * get_series_context: series_game_number (consecutive same-opp
+    games ending on game_date) + is_getaway_day.
+  * get_hitter_games extended to expose at_bats / strikeouts /
+    plate_appearances for the form math.
+- engine/grade.py: extensive new wiring.
+  * Imports time + datetime/timezone + weather.
+  * _pitcher_platoon_30d helper: ONE Statcast call per pitcher,
+    computes k_vs_lhh_30d, k_vs_rhh_30d, whiff_pct_30d, csw_pct_30d.
+    0.5s sleep after each (polite to Savant). 15-20 calls / grading
+    run, ~10s extra on a typical slate.
+  * _is_day_game: < 5 PM ET heuristic from games.start_time.
+  * _parse_game_time: ISO -> UTC datetime, used to ask OWM for the
+    right 3-hour forecast bucket.
+  * grade_yesterday: every pitcher row now writes the full set of
+    20+ new fields (rest, form, platoon-30d, series, day-game,
+    home-team, weather).
+  * grade_hitters_yesterday: every hitter row writes 18+ new fields
+    (form, team density, hitter-specific game count, bullpen
+    scaffold, series, weather).
+  * [data-foundation] sample log line at the end of each grader so
+    each cron's stdout shows the new features landing.
+- engine/db.py:
+  * get_projections_for_date now also returns games.start_time so
+    grade.py can resolve the is_day_game flag and the weather time
+    bucket without a second DB call.
+  * _CONTEXT_COLS extended to include all 31 new columns. The
+    existing PGRST204 retry already strips by membership in this
+    tuple, so the pipeline runs cleanly both before and after
+    add_data_foundation.sql is applied.
+- db/schema.sql: 31 new column definitions appended to
+  player_game_logs alongside the prior context columns.
+- Verified end-to-end:
+  * Sample pitcher row has real values: days_rest=5 (5-day rotation),
+    starts_last_21d=3, innings_last_21d=14.7, k_vs_lhh_30d=0.261,
+    k_vs_rhh_30d=0.207, whiff_pct=0.19, csw_pct=0.252,
+    series_game_number=3, is_getaway_day=True.
+  * Sample hitter row: avg_last7=0.32, avg_last15=0.25,
+    k_rate_last7=0.276, ops_last15=0.762, hr_last15=3,
+    games_last_7d=8 (doubleheader showing up).
+  * 32/32 graded pitchers have non-null values for every non-weather
+    feature; 31/32 for the platoon splits (one had < 20 PAs vs side).
+  * Weather columns: temperature_f, wind_speed_mph, precipitation_pct
+    populate for the 8 dome rows (neutral baseline); the other 24
+    log NULL until OPENWEATHER_API_KEY is added — pipeline never
+    crashes on the missing key.
+  * model.FEATURE_COLS still has exactly 11 entries. train()
+    behaviour unchanged.
+  * PGRST204 retry path tested: upserting one of the new rows before
+    the migration is applied strips the new columns and persists the
+    actuals; updated WARNING message references both
+    add_context_features.sql and add_data_foundation.sql.
+
 Featured Plays section (this session):
 - web/lib/types.ts: new FeaturedPlay type (player + matchup + proj +
   line + signed-positive edge + lean direction + book + ids).

@@ -5,7 +5,8 @@ pitcher to their actual stats, and returns rows ready to upsert into
 player_game_logs. No DB writes here — returns list[dict] only.
 """
 
-from datetime import date, timedelta
+import time
+from datetime import date, datetime, timedelta, timezone
 
 import statsapi
 
@@ -14,6 +15,7 @@ import pybaseball
 import db
 import fetch
 import stats
+import weather
 from constants import (
     LEAGUE_AVG_K_PCT,
     get_park_factor_hits,
@@ -21,6 +23,102 @@ from constants import (
 )
 from fantasy_score import hitter_fantasy_score, pitcher_fantasy_score
 from stats import _parse_innings
+
+
+# Sleep between per-pitcher 30-day Statcast calls (Step 5). Polite to the
+# Baseball Savant endpoint and keeps the grading job comfortably under the
+# 20-minute Actions cap with a typical 15-20 pitcher slate.
+_STATCAST_SLEEP_S = 0.5
+
+
+def _pitcher_platoon_30d(player_id: int, end_date_str: str, start_date_str: str) -> dict:
+    """30-day platoon splits + whiff% + CSW% for one pitcher (Statcast).
+
+    Filtered from a single statcast_pitcher() call. Each field is None
+    when the input is too sparse to compute (< 20 PAs for the split,
+    no pitches in the window, etc.) — never fabricated.
+    """
+    try:
+        sc = pybaseball.statcast_pitcher(start_date_str, end_date_str, player_id)
+    except Exception as exc:
+        print(f"  30d statcast fetch failed for player {player_id}: {exc}")
+        return {
+            "pitcher_k_vs_lhh_30d":  None,
+            "pitcher_k_vs_rhh_30d":  None,
+            "pitcher_whiff_pct_30d": None,
+            "pitcher_csw_pct_30d":   None,
+        }
+    if sc is None or sc.empty:
+        return {
+            "pitcher_k_vs_lhh_30d":  None,
+            "pitcher_k_vs_rhh_30d":  None,
+            "pitcher_whiff_pct_30d": None,
+            "pitcher_csw_pct_30d":   None,
+        }
+
+    def k_rate(side_df) -> float | None:
+        if len(side_df) < 20:
+            return None
+        ks = side_df["events"].isin(
+            ["strikeout", "strikeout_double_play"]
+        ).sum()
+        pas = side_df["events"].notna().sum()
+        return round(float(ks / pas), 3) if pas > 0 else None
+
+    lhh = sc[sc["stand"] == "L"]
+    rhh = sc[sc["stand"] == "R"]
+    k_vs_lhh = k_rate(lhh)
+    k_vs_rhh = k_rate(rhh)
+
+    # Whiff% = whiffs / swings. Swings = whiffs + foul + foul_tip + hit_into_play.
+    desc = sc["description"]
+    whiffs = desc.isin(["swinging_strike", "swinging_strike_blocked"]).sum()
+    swings = desc.isin(
+        ["swinging_strike", "swinging_strike_blocked",
+         "foul", "foul_tip", "hit_into_play"]
+    ).sum()
+    whiff_pct = round(float(whiffs / swings), 3) if swings > 0 else None
+
+    # CSW% = (called strikes + whiffs) / total pitches.
+    called = desc.isin(["called_strike"]).sum()
+    csw_pct = round(float((called + whiffs) / len(sc)), 3) if len(sc) > 0 else None
+
+    return {
+        "pitcher_k_vs_lhh_30d":  k_vs_lhh,
+        "pitcher_k_vs_rhh_30d":  k_vs_rhh,
+        "pitcher_whiff_pct_30d": whiff_pct,
+        "pitcher_csw_pct_30d":   csw_pct,
+    }
+
+
+def _is_day_game(start_time_iso: str | None) -> bool | None:
+    """Heuristic: before 5 PM ET is a day game.
+
+    start_time_iso is the games.start_time UTC ISO string. Returns None
+    if it's missing — the column stays NULL rather than default false.
+    """
+    if not start_time_iso:
+        return None
+    try:
+        ts = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    # Convert to ET (UTC-4 standard / UTC-5 DST). Python's zoneinfo would
+    # be more correct but ET-summer is UTC-4 and MLB regular season is
+    # entirely DST, so this approximation is safe for our purposes.
+    et = ts.astimezone(timezone(timedelta(hours=-4)))
+    return et.hour < 17
+
+
+def _parse_game_time(start_time_iso: str | None) -> datetime | None:
+    """Parse games.start_time -> UTC datetime, None on any failure."""
+    if not start_time_iso:
+        return None
+    try:
+        ts = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
+        return ts.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 # Pitch-type sets (mirrored from engine/model.py — same Statcast codes).
@@ -372,6 +470,43 @@ def grade_yesterday(
         # API call per graded pitcher; bounded at ~15-20 per day.
         pitch_mix = _pitcher_pitch_mix(player_id, yesterday_str)
 
+        # ── data-foundation features (Step 2-7 of the sprint) ─────────────
+        # Each helper is independently None-safe so a single statsapi miss
+        # for one pitcher doesn't take down the whole batch.
+
+        # Rest & fatigue (reuses cached gameLog under the hood).
+        rest = stats.get_pitcher_rest_metrics(player_id, yesterday)
+
+        # Team schedule density — pitcher's own team (proj['home_team'] if
+        # side == 'home' else away_team).
+        own_team = proj["home_team"] if side == "home" else proj["away_team"]
+        team_density = stats.get_team_schedule_density(own_team or "", yesterday)
+
+        # Pitcher rolling 3-start form.
+        pform = stats.get_pitcher_form(player_id, yesterday)
+
+        # 30-day Statcast platoon + plate-discipline (Step 5). This is the
+        # historical fill for the predict-time-only k_vs_lhh/rhh features
+        # — finally giving the model real training signal on platoon.
+        start_30 = (yesterday - timedelta(days=30)).strftime("%Y-%m-%d")
+        platoon_30 = _pitcher_platoon_30d(player_id, yesterday_str, start_30)
+        time.sleep(_STATCAST_SLEEP_S)   # polite to Savant
+
+        # Series / game context.
+        opp_team_for_series = (
+            proj["away_team"] if side == "home" else proj["home_team"]
+        )
+        series = stats.get_series_context(
+            own_team or "", opp_team_for_series or "", yesterday
+        )
+        start_time_iso = proj.get("start_time")
+        is_day = _is_day_game(start_time_iso)
+
+        # Weather (dome-aware; NULL when no API key).
+        wx = weather.get_game_weather(
+            proj["home_team"] or "", _parse_game_time(start_time_iso)
+        )
+
         rows.append({
             "player_id":             player_id,
             "game_id":               game_id,
@@ -387,7 +522,7 @@ def grade_yesterday(
             "home_away":             side,
             "opp_k_rate":            opp_k_rate,
             "days_rest":             days_rest,
-            # Context features for advanced modeling — all nullable.
+            # Existing context features — all nullable.
             "lineup_lhh_pct":        hand_split["lineup_lhh_pct"],
             "lineup_rhh_pct":        hand_split["lineup_rhh_pct"],
             "park_factor_k":         park_k,
@@ -397,6 +532,33 @@ def grade_yesterday(
             "pitcher_offspeed_pct":  pitch_mix["pitcher_offspeed_pct"],
             "pitcher_avg_velo":      pitch_mix["pitcher_avg_velo"],
             "pitcher_pitches_last_start": pitch_mix["pitcher_pitches_last_start"],
+            # Data-foundation: rest & workload
+            "pitcher_days_rest":           rest["pitcher_days_rest"],
+            "pitcher_starts_last_21d":     rest["pitcher_starts_last_21d"],
+            "pitcher_pitches_last_3starts": rest["pitcher_pitches_last_3starts"],
+            "pitcher_innings_last_21d":    rest["pitcher_innings_last_21d"],
+            "team_games_last_3d":          team_density["team_games_last_3d"],
+            "team_games_last_7d":          team_density["team_games_last_7d"],
+            # Data-foundation: pitcher form
+            "pitcher_k_rate_last3":        pform["pitcher_k_rate_last3"],
+            "pitcher_era_last3":           pform["pitcher_era_last3"],
+            "pitcher_whip_last3":          pform["pitcher_whip_last3"],
+            # Data-foundation: platoon splits (logged historically now)
+            "pitcher_k_vs_lhh_30d":        platoon_30["pitcher_k_vs_lhh_30d"],
+            "pitcher_k_vs_rhh_30d":        platoon_30["pitcher_k_vs_rhh_30d"],
+            "pitcher_whiff_pct_30d":       platoon_30["pitcher_whiff_pct_30d"],
+            "pitcher_csw_pct_30d":         platoon_30["pitcher_csw_pct_30d"],
+            # Data-foundation: series / game context
+            "series_game_number":          series["series_game_number"],
+            "is_getaway_day":              series["is_getaway_day"],
+            "is_day_game":                 is_day,
+            "is_home_team":                side == "home",
+            # Data-foundation: weather
+            "temperature_f":               wx["temperature_f"],
+            "wind_speed_mph":              wx["wind_speed_mph"],
+            "wind_dir":                    wx["wind_dir"],
+            "precipitation_pct":           wx["precipitation_pct"],
+            "is_dome":                     wx["is_dome"],
         })
         win_marker = "W" if actual_win else "—"
         print(
@@ -411,15 +573,17 @@ def grade_yesterday(
 
     print(f"  graded {len(rows)} / {len(by_pitcher)} projected pitchers")
     if rows:
-        context_features = [
-            "lineup_lhh_pct", "pitcher_k_vs_lhh",
-            "pitcher_fastball_pct", "park_factor_k",
-        ]
         sample = rows[0]
-        logged = {k: sample.get(k) for k in context_features}
+        new_feats = [
+            "pitcher_days_rest", "pitcher_starts_last_21d",
+            "pitcher_k_rate_last3", "pitcher_k_vs_lhh_30d",
+            "pitcher_whiff_pct_30d", "series_game_number",
+            "temperature_f", "is_day_game",
+        ]
+        logged = {k: sample.get(k) for k in new_feats}
         print(
-            f"  context features sample (player {sample['player_id']}): "
-            f"{logged}"
+            f"  [data-foundation] sample pitcher row (player "
+            f"{sample['player_id']}): {logged}"
         )
     return rows
 
@@ -582,6 +746,43 @@ def grade_hitters_yesterday(
         else:
             recent_avg = 0.250
 
+        # ── data-foundation features (Step 2-7 of the sprint) ─────────────
+        own_team_hitter = (
+            proj["home_team"] if result["home_away"] == "home"
+            else proj["away_team"]
+        )
+        opp_team_hitter = (
+            proj["away_team"] if result["home_away"] == "home"
+            else proj["home_team"]
+        )
+
+        # Rolling form (avg, K rate, OPS, HR over last 7-15 games).
+        hform = stats.get_hitter_form(player_id, yesterday)
+
+        # Team schedule density (own team).
+        td = stats.get_team_schedule_density(own_team_hitter or "", yesterday)
+        # Hitter-specific games_last_7d: the hitter's actual game count.
+        hitter_recent7 = [
+            g for g in hitter_games
+            if (yesterday - timedelta(days=7)).strftime("%Y-%m-%d")
+               <= g["game_date"] <= yesterday.strftime("%Y-%m-%d")
+        ]
+
+        # Opponent bullpen aggregates (currently all-None — column scaffold).
+        bp = stats.get_bullpen_metrics(opp_team_hitter or "", yesterday)
+
+        # Series + day-game.
+        series = stats.get_series_context(
+            own_team_hitter or "", opp_team_hitter or "", yesterday
+        )
+        start_time_iso = proj.get("start_time")
+        is_day = _is_day_game(start_time_iso)
+
+        # Weather (dome-aware, NULL when no key).
+        wx = weather.get_game_weather(
+            proj["home_team"] or "", _parse_game_time(start_time_iso)
+        )
+
         rows.append({
             "player_id":          player_id,
             "game_id":            game_id,
@@ -598,13 +799,39 @@ def grade_hitters_yesterday(
             "stolen_bases":       result["stolen_bases"],
             "actual_hitter_fantasy_score": actual_hitter_fp,
             "home_away":          result["home_away"],
-            # Context features for advanced modeling — all nullable.
+            # Existing context features — all nullable.
             "opp_sp_k_rate_last5": sp_stats["opp_sp_k_rate_last5"],
             "opp_sp_era_last5":    sp_stats["opp_sp_era_last5"],
             "opp_sp_whip_last5":   sp_stats["opp_sp_whip_last5"],
             "opp_sp_hand":         opp_sp_hand,
             "park_factor_hits_h":  park_h,
             "hitter_avg_vs_hand":  round(float(recent_avg), 3),
+            # Data-foundation: schedule density + day-game
+            "team_games_last_3d":  td["team_games_last_3d"],
+            "team_games_last_7d":  td["team_games_last_7d"],
+            "hitter_games_last_7d": len(hitter_recent7),
+            "is_day_game":         is_day,
+            # Data-foundation: hitter form
+            "hitter_avg_last7":    hform["hitter_avg_last7"],
+            "hitter_avg_last15":   hform["hitter_avg_last15"],
+            "hitter_k_rate_last7": hform["hitter_k_rate_last7"],
+            "hitter_ops_last15":   hform["hitter_ops_last15"],
+            "hitter_hr_last15":    hform["hitter_hr_last15"],
+            # Data-foundation: opp bullpen (scaffold — all None for now)
+            "opp_bullpen_era_14d":        bp["opp_bullpen_era_14d"],
+            "opp_bullpen_k_rate_14d":     bp["opp_bullpen_k_rate_14d"],
+            "opp_bullpen_whip_14d":       bp["opp_bullpen_whip_14d"],
+            "opp_bullpen_innings_last3d": bp["opp_bullpen_innings_last3d"],
+            # Data-foundation: series + travel
+            "series_game_number":  series["series_game_number"],
+            "is_getaway_day":      series["is_getaway_day"],
+            "is_home_team":        result["home_away"] == "home",
+            # Data-foundation: weather
+            "temperature_f":       wx["temperature_f"],
+            "wind_speed_mph":      wx["wind_speed_mph"],
+            "wind_dir":            wx["wind_dir"],
+            "precipitation_pct":   wx["precipitation_pct"],
+            "is_dome":             wx["is_dome"],
         })
         print(
             f"  hitter {player_id}: projected {proj['projection']}"
@@ -617,4 +844,16 @@ def grade_hitters_yesterday(
         )
 
     print(f"  graded {len(rows)} / {len(by_hitter)} projected hitters")
+    if rows:
+        sample = rows[0]
+        new_feats = [
+            "hitter_avg_last7", "hitter_avg_last15", "hitter_k_rate_last7",
+            "hitter_ops_last15", "hitter_hr_last15", "hitter_games_last_7d",
+            "series_game_number", "temperature_f", "is_day_game",
+        ]
+        logged = {k: sample.get(k) for k in new_feats}
+        print(
+            f"  [data-foundation] sample hitter row (player "
+            f"{sample['player_id']}): {logged}"
+        )
     return rows

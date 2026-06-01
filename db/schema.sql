@@ -91,6 +91,50 @@ create table if not exists player_game_logs (
     park_factor_hits_h    numeric,
     temperature           numeric,
     wind_speed            numeric,
+    -- ── data-foundation columns (db/migrations/add_data_foundation.sql) ──
+    -- Pure data-collection: every column is nullable. FEATURE_COLS in
+    -- engine/model.py stays at 11 — these feed the model later (mid-season)
+    -- once enough graded rows accumulate to measure feature importance.
+    -- Rest & fatigue (pitcher)
+    pitcher_days_rest          integer,
+    pitcher_starts_last_21d    integer,
+    pitcher_pitches_last_3starts integer,
+    pitcher_innings_last_21d   numeric,
+    -- Rest & fatigue (team / hitter)
+    team_games_last_3d         integer,
+    team_games_last_7d         integer,
+    hitter_games_last_7d       integer,
+    is_day_game                boolean,
+    is_getaway_day             boolean,
+    -- Recent form (hitter)
+    hitter_avg_last7           numeric,
+    hitter_avg_last15          numeric,
+    hitter_k_rate_last7        numeric,
+    hitter_ops_last15          numeric,
+    hitter_hr_last15           integer,
+    -- Recent form (pitcher)
+    pitcher_k_rate_last3       numeric,
+    pitcher_era_last3          numeric,
+    pitcher_whip_last3         numeric,
+    -- Bullpen exposure (hitter; currently all-NULL scaffold)
+    opp_bullpen_era_14d        numeric,
+    opp_bullpen_k_rate_14d     numeric,
+    opp_bullpen_whip_14d       numeric,
+    opp_bullpen_innings_last3d numeric,
+    -- 30-day pitcher platoon + plate-discipline from Statcast
+    pitcher_k_vs_lhh_30d       numeric,
+    pitcher_k_vs_rhh_30d       numeric,
+    pitcher_whiff_pct_30d      numeric,
+    pitcher_csw_pct_30d        numeric,
+    -- Series / travel context
+    series_game_number         integer,
+    is_home_team               boolean,
+    -- Weather (game time)
+    temperature_f              numeric,
+    wind_speed_mph             numeric,
+    wind_dir                   text,
+    is_dome                    boolean,
+    precipitation_pct          numeric,
     created_at        timestamptz default now(),
     unique (player_id, game_id)
 );
