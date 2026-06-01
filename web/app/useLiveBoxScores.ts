@@ -147,6 +147,10 @@ export function useLiveBoxScores(
     const toFetch = finalGamePks.filter(
       (pk) => !fetchedFinalsRef.current.has(pk),
     );
+    console.log(
+      `[live-box] finals effect: ${finalGamePks.length} final games, ` +
+        `${toFetch.length} new to fetch`,
+    );
     if (toFetch.length === 0) return;
 
     let cancelled = false;
@@ -154,6 +158,8 @@ export function useLiveBoxScores(
 
     (async () => {
       const results = await Promise.all(toFetch.map(loadOne));
+      const ok = results.filter(Boolean).length;
+      console.log(`[live-box] finals fetched: ${ok}/${toFetch.length} succeeded`);
       if (cancelled) return;
       setStats((prev) => {
         const next = new Map(prev);
