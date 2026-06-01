@@ -709,17 +709,9 @@ function formatDate(iso: string): string {
   });
 }
 
-function formatUpdatedAt(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", {
-    timeZone: "America/New_York",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-    timeZoneName: "short",
-  });
-}
+// (formatUpdatedAt removed — the "Last updated" line is now client-rendered in
+// the viewer's local timezone by web/app/LiveUpdated.tsx, so a non-ET viewer
+// sees a time that matches their wall clock + the relative counter.)
 
 export default async function Home({
   searchParams,
@@ -771,13 +763,11 @@ export default async function Home({
           <p className="mt-1 text-sm text-slate-400">
             Pitchers &amp; hitters
           </p>
-          {updatedAt && (
-            <p className="mt-0.5 text-sm text-slate-400">
-              Last updated: {formatUpdatedAt(updatedAt)}
-              {/* relative ticking counter — honest, counts up from updatedAt */}
-              <LiveUpdated iso={updatedAt} />
-            </p>
-          )}
+          {/* Full "Last updated" line — client-rendered in the viewer's
+              local timezone (not hardcoded ET) so it matches their wall
+              clock and the relative counter. Honest: same real updatedAt
+              instant, just localized + a count-up counter. */}
+          {updatedAt && <LiveUpdated iso={updatedAt} />}
         </div>
         <Link
           href="/results"

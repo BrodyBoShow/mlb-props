@@ -269,6 +269,30 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+"Last updated" now in the viewer's local timezone (this session):
+- Bug report: "updated 2h ago" while the absolute said 5:39 PM EDT and
+  the user thought it was ~2 min old. Diagnosis (raw DB checked): the
+  relative counter was CORRECT. lines.fetched_at = 2026-06-01T21:39:51Z
+  = 5:39 PM EDT = 2:39 PM PDT. The user is on Pacific (taskbar 4:41 PM),
+  so it genuinely was ~2h old — but the absolute was HARDCODED to ET
+  ("5:39 PM EDT"), which didn't match their 4:41 PM wall clock, so they
+  misread it as recent. The microsecond ISO parses fine in V8 (verified
+  delta 0) — not a parse bug; purely a display-timezone mismatch.
+- Fix: the whole "Last updated" line is now client-rendered in the
+  VIEWER's local timezone (toLocaleString with no explicit timeZone,
+  timeZoneName:"short" so it's labeled, e.g. "PDT"). web/app/
+  LiveUpdated.tsx now owns the full line (absolute local time + relative
+  counter), both recomputed every 30s; returns a "Last updated…"
+  placeholder on SSR/first paint to avoid a hydration mismatch on the
+  clock-dependent strings. Removed the server-side formatUpdatedAt
+  (hardcoded America/New_York) from page.tsx.
+- Now consistent in every zone: Pacific viewer sees "2:39 PM PDT ·
+  updated 2h ago"; Eastern "5:39 PM EDT · just now"; Central "4:39 PM
+  CDT · updated 1m ago" — absolute always matches the viewer's clock +
+  the relative counter. Still honest (same real updatedAt instant,
+  localized). Frontend-only (LiveUpdated.tsx, page.tsx); tsc clean;
+  build passes.
+
 Live-feel: auto-refresh + relative timestamp (this session):
 - Goal: new cron data appears without a manual reload, and "Last
   updated" feels alive — without ever overstating freshness.
