@@ -1,35 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { LiveStatsMap, StatLine } from "@/lib/types";
 
-// One player's accumulated stats so far in a live game. All numeric — undefined
-// means "we didn't find this player in the box score" (subbed out, hasn't
-// batted, etc.). The frontend ignores anything it can't display for the active
-// prop type.
-export type StatLine = {
-  // pitcher
-  strikeOuts?: number;
-  hitsAllowed?: number;        // pitching.hits
-  baseOnBalls?: number;
-  earnedRuns?: number;
-  outs?: number;
-  // batter
-  hits?: number;
-  totalBases?: number;
-  rbi?: number;
-  runs?: number;
-  homeRuns?: number;
-  // batter components needed to compute live PrizePicks fantasy score.
-  // The five batter fields above PLUS these four are everything the
-  // hitterFantasyScore() helper needs.
-  doubles?: number;
-  triples?: number;
-  hitByPitch?: number;
-  stolenBases?: number;
-};
-
-// Map shape: gamePk -> personId (MLBAM = our players.player_id) -> StatLine.
-export type LiveStatsMap = Map<number, Map<number, StatLine>>;
+// StatLine + LiveStatsMap moved to @/lib/types. Re-exported here for callers
+// that still do `import { ..., type StatLine } from "./useLiveBoxScores"`.
+export type { LiveStatsMap, StatLine } from "@/lib/types";
 
 const REFRESH_MS = 60_000;
 

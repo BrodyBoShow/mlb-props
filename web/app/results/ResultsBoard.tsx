@@ -1,70 +1,18 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type {
+  EvaluatedResult,
+  PropType,
+  TrackerResult,
+  Verdict,
+} from "@/lib/types";
+import { PROP_LABELS } from "@/lib/constants";
 
-// ── types ────────────────────────────────────────────────────────────────────
-
-export type PropType =
-  | "strikeouts"
-  | "hits_allowed"
-  | "walks"
-  | "earned_runs"
-  | "outs_recorded"
-  | "pitcher_fantasy_score"
-  | "hitter_hits"
-  | "hitter_total_bases"
-  | "hitter_rbis"
-  | "hitter_runs"
-  | "hitter_home_runs"
-  | "hitter_fantasy_score";
-
-export type Verdict = "correct" | "wrong" | "skip";
-
-// Betting Edge result — joined projection + book line + actual.
-export type EvaluatedResult = {
-  gameId: number;
-  matchup: string;
-  playerId: number;
-  playerName: string;
-  propType: PropType;
-  gameDate: string;
-  projection: number;
-  line: number;
-  bookmaker: string;
-  actual: number;
-  lean: "over" | "under" | "none";
-  verdict: Verdict;
-};
-
-// Model Tracker result — projection + actual only, no book line. Used for
-// calibration props (walks, earned_runs, hitter_hits, hitter_total_bases)
-// where there is no clean main-market line to evaluate against.
-export type TrackerResult = {
-  gameId: number;
-  matchup: string;
-  playerId: number;
-  playerName: string;
-  propType: PropType;
-  gameDate: string;
-  projection: number;
-  actual: number;
-  direction: "over" | "under";   // actual > projection ? "over" : "under"
-};
-
-export const PROP_LABELS: Record<PropType, string> = {
-  strikeouts:             "Strikeouts",
-  hits_allowed:           "Hits Allowed",
-  walks:                  "Walks",
-  earned_runs:            "Earned Runs",
-  outs_recorded:          "Outs",
-  pitcher_fantasy_score:  "Pitcher Fantasy",
-  hitter_hits:            "Hits",
-  hitter_total_bases:     "Total Bases",
-  hitter_rbis:            "RBIs",
-  hitter_runs:            "Runs",
-  hitter_home_runs:       "Home Runs",
-  hitter_fantasy_score:   "Hitter Fantasy",
-};
+// Re-export types/labels so callers `import { ..., type PropType } from
+// "./ResultsBoard"` keep working without changes.
+export type { EvaluatedResult, PropType, TrackerResult, Verdict } from "@/lib/types";
+export { PROP_LABELS } from "@/lib/constants";
 
 // ── prop groupings ───────────────────────────────────────────────────────────
 // BETTING_* arrays drive the per-prop card + filter chips in Section 1. They

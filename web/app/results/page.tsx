@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { getSupabaseClient } from "@/lib/supabase";
-import ResultsBoard, {
-  type EvaluatedResult,
-  type PropType,
-  type TrackerResult,
-  type Verdict,
-} from "./ResultsBoard";
+import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
+import { ALL_PROP_TYPES, TRACKER_PROPS } from "@/lib/constants";
+import type {
+  EvaluatedResult,
+  PropType,
+  TrackerResult,
+  Verdict,
+} from "@/lib/types";
+import ResultsBoard from "./ResultsBoard";
 
 // Always read fresh — graded rows land throughout the day as games finish.
 export const dynamic = "force-dynamic";
@@ -69,18 +71,7 @@ const MIN_LINE: Partial<Record<PropType, number>> = {
   hitter_fantasy_score:   4.0,
 };
 
-// Model Tracker props: evaluated as actual-vs-projection (no book line). This
-// list lives in page.tsx so the join loop knows which prop_types to emit as
-// TrackerResult instead of EvaluatedResult. Keep in sync with TRACKER_PROPS
-// in ResultsBoard.tsx -- they're the same authoritative list.
-const TRACKER_PROPS: ReadonlySet<PropType> = new Set([
-  "walks",
-  "earned_runs",
-  "hitter_hits",
-  "hitter_total_bases",
-]);
-
-const ALL_PROP_TYPES = Object.keys(ACTUAL_COLUMN) as PropType[];
+// TRACKER_PROPS + ALL_PROP_TYPES now live in @/lib/constants — imported above.
 
 // ── raw row shapes ───────────────────────────────────────────────────────────
 
@@ -178,28 +169,9 @@ async function getResults(): Promise<{
   // and logs (~2k). The 1000-row cap was the silent killer behind every
   // "no data" report on these props -- the most populous prop_types
   // (hitter_hits, hitter_total_bases) filled the 1000-row quota and the
-  // rest of the prop_types returned zero rows downstream.
-  const PAGE = 1000;
-
-  async function fetchAllPages<T>(
-    build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
-    label: string,
-  ): Promise<T[]> {
-    const all: T[] = [];
-    for (let page = 0; page < 50; page++) {
-      const from = page * PAGE;
-      const to = from + PAGE - 1;
-      const { data, error } = await build(from, to);
-      if (error) {
-        console.log(`[results-diag] paginate ${label} page=${page} error=${String(error)}`);
-        break;
-      }
-      if (!data || data.length === 0) break;
-      all.push(...data);
-      if (data.length < PAGE) break;
-    }
-    return all;
-  }
+  // rest of the prop_types returned zero rows downstream. We use the shared
+  // fetchAllPages helper from @/lib/supabase, which handles the Range-header
+  // pagination uniformly across pages.
 
   const [projData, lineData, logData] = await Promise.all([
     fetchAllPages<ProjectionRow>(

@@ -2,8 +2,16 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useLiveGameStatus, type GameStatus } from "./useLiveGameStatus";
-import { useLiveBoxScores, type StatLine } from "./useLiveBoxScores";
+import { useLiveGameStatus } from "./useLiveGameStatus";
+import { useLiveBoxScores } from "./useLiveBoxScores";
+import type {
+  ByProp,
+  GameStatus,
+  Pitcher,
+  PropType,
+  StatLine,
+} from "@/lib/types";
+import { EDGE_THRESHOLD, HITTER_PROPS } from "@/lib/constants";
 import {
   hitterFantasyScore,
   PITCHER_OUT_PTS,
@@ -11,49 +19,8 @@ import {
   PITCHER_EARNED_RUN_PTS,
 } from "@/lib/fantasyScore";
 
-// ── types ────────────────────────────────────────────────────────────────────
-
-export type PropType =
-  | "strikeouts"
-  | "hits_allowed"
-  | "walks"
-  | "earned_runs"
-  | "outs_recorded"
-  | "pitcher_fantasy_score"
-  | "hitter_hits"
-  | "hitter_total_bases"
-  | "hitter_rbis"
-  | "hitter_runs"
-  | "hitter_home_runs"
-  | "hitter_fantasy_score";
-
-// One pitcher/hitter row. Projection is always present; all other fields are
-// optional — most players won't have a line or enough graded history yet.
-// All values are pre-computed by the engine (the frontend does ZERO math).
-export type Pitcher = {
-  player_id: number;     // MLBAM id — matches boxscore "ID{n}" keys 1:1
-  name: string;
-  projection: number;
-  confidence?: number;   // 0–1 hit rate; undefined = not enough graded history
-  line?: number;
-  edge?: number;
-  fairOverProb?: number;
-  modelOverProb?: number;
-  overPrice?: number;
-  underPrice?: number;
-  bookmaker?: string;
-};
-
-export type GameGroup = {
-  game_id: number;
-  matchup: string;
-  // First-pitch ISO timestamp from the games table. The slate is sorted by
-  // this server-side in page.tsx; null entries (TBD) sort to the end.
-  startTime: string | null;
-  pitchers: Pitcher[];
-};
-
-export type ByProp = Record<PropType, GameGroup[]>;
+// Re-export types so existing `import {…} from "./PropBoard"` keeps working.
+export type { ByProp, GameGroup, Pitcher, PropType } from "@/lib/types";
 
 // ── prop metadata ─────────────────────────────────────────────────────────────
 
@@ -74,8 +41,7 @@ const PROPS: { key: PropType; label: string; unit: string }[] = [
   { key: "hitter_fantasy_score",  label: "Fantasy Score",  unit: "FP"   },
 ];
 
-// Edge threshold for calling a side a real lean vs. roughly even.
-const EDGE_THRESHOLD = 0.1;
+// EDGE_THRESHOLD and HITTER_PROPS now live in @/lib/constants — imported above.
 
 // Map each SIMPLE prop type to the StatLine field it reads. Fantasy-score
 // props are computed across multiple StatLine fields, not mapped 1:1 here —
@@ -92,15 +58,6 @@ const PROP_STAT_KEY: Partial<Record<PropType, keyof StatLine>> = {
   hitter_runs:        "runs",
   hitter_home_runs:   "homeRuns",
 };
-
-const HITTER_PROPS: ReadonlySet<PropType> = new Set([
-  "hitter_hits",
-  "hitter_total_bases",
-  "hitter_rbis",
-  "hitter_runs",
-  "hitter_home_runs",
-  "hitter_fantasy_score",
-]);
 
 // Compute the live actual for the active prop from a single StatLine row.
 // Returns undefined when the player hasn't accumulated any of the required

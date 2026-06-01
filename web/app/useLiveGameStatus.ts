@@ -1,20 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { GameStatus } from "@/lib/types";
 
-// Live status for one MLB game. The MLB Stats API gamePk matches our
-// projections.game_id (and games.game_id) one-to-one.
-export type GameStatus = {
-  state: "live" | "scheduled" | "final" | "other";
-  awayAbbr: string;
-  homeAbbr: string;
-  awayScore: number | null;
-  homeScore: number | null;
-  inningOrdinal: string | null;   // "3rd"
-  inningHalf: string | null;      // "Top" | "Bottom"
-  startTimeET: string | null;     // "1:05 PM ET"
-  detailedState: string;          // raw "In Progress" / "Scheduled" / "Final"
-};
+// GameStatus moved to @/lib/types. Re-exported so existing imports keep working.
+export type { GameStatus } from "@/lib/types";
 
 const REFRESH_MS = 60_000;
 

@@ -1,25 +1,12 @@
 import Link from "next/link";
-import { getSupabaseClient } from "@/lib/supabase";
-import PropBoard, { type ByProp, type GameGroup, type PropType } from "./PropBoard";
+import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
+import { ALL_PROP_TYPES } from "@/lib/constants";
+import type { ByProp, GameGroup, PropType } from "@/lib/types";
+import PropBoard from "./PropBoard";
 
 // Always read fresh from the DB at request time — the cron updates rows
 // throughout the day. No caching of stale projections.
 export const dynamic = "force-dynamic";
-
-const ALL_PROP_TYPES: PropType[] = [
-  "strikeouts",
-  "hits_allowed",
-  "walks",
-  "earned_runs",
-  "outs_recorded",
-  "pitcher_fantasy_score",
-  "hitter_hits",
-  "hitter_total_bases",
-  "hitter_rbis",
-  "hitter_runs",
-  "hitter_home_runs",
-  "hitter_fantasy_score",
-];
 
 // Simple guard for URL ?date= param — must be YYYY-MM-DD.
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -86,29 +73,14 @@ async function getSlate(dateOverride?: string): Promise<{
     selectedDate = latest[0].projection_date;
   }
 
-  // Paginate projections + edges past Supabase's 1000-row server cap.
-  // .limit() does NOT bypass it; only .range() does (see /results comment).
-  const HOME_PAGE_SIZE = 1000;
-  async function fetchAllHome<T>(
-    build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
-  ): Promise<T[]> {
-    const all: T[] = [];
-    for (let page = 0; page < 50; page++) {
-      const from = page * HOME_PAGE_SIZE;
-      const to = from + HOME_PAGE_SIZE - 1;
-      const { data, error } = await build(from, to);
-      if (error || !data || data.length === 0) break;
-      all.push(...data);
-      if (data.length < HOME_PAGE_SIZE) break;
-    }
-    return all;
-  }
+  // Paginate projections + edges past Supabase's 1000-row server cap via the
+  // shared fetchAllPages helper in @/lib/supabase.
 
   // Run all five reads in parallel: projections (paginated), edges
   // (paginated), updated_at, prev, next.
   const [projData, edgeData, { data: updatedAtData }, { data: prevData }, { data: nextData }] =
     await Promise.all([
-      fetchAllHome<ProjectionRow>(
+      fetchAllPages<ProjectionRow>(
         (from, to) =>
           supabase
             .from("projections")
@@ -122,9 +94,10 @@ async function getSlate(dateOverride?: string): Promise<{
               data: ProjectionRow[] | null;
               error: unknown;
             }>,
+        "home-projections",
       ),
 
-      fetchAllHome<EdgeRow>(
+      fetchAllPages<EdgeRow>(
         (from, to) =>
           supabase
             .from("edges")
@@ -136,6 +109,7 @@ async function getSlate(dateOverride?: string): Promise<{
               data: EdgeRow[] | null;
               error: unknown;
             }>,
+        "home-edges",
       ),
 
     // Most-recently-written row for the "Last updated" timestamp.
