@@ -262,8 +262,12 @@ def predict(
     starters: list[dict],
     games: list[dict],
     projection_date: date | None = None,
-) -> list[dict]:
-    """Run the trained model and return projection rows shaped for the projections table.
+) -> tuple[list[dict], pd.DataFrame]:
+    """Run the trained model and return projection rows + the bulk Statcast frame.
+
+    Returns (rows, bulk_df). The caller can hand bulk_df to baseline.build_
+    strikeout_projections so both layers share a single Statcast fetch.
+    bulk_df is an empty DataFrame when the fetch failed.
 
     model:    fitted XGBRegressor returned by train()
     starters: list of dicts with player_id, game_id, full_name, home_away
@@ -323,4 +327,4 @@ def predict(
         })
         print(f"  {s.get('full_name', s['player_id'])}: {pred} K (model)")
 
-    return rows
+    return rows, bulk_df

@@ -127,10 +127,18 @@ def upsert_game_logs(rows: list[dict]) -> int:
     return len(rows)
 
 
-def get_game_logs() -> list[dict] | None:
-    """Read all rows from player_game_logs. Returns None if the table is missing."""
+def get_game_logs(since_date: str | None = None) -> list[dict] | None:
+    """Read rows from player_game_logs. Returns None if the table is missing.
+
+    since_date: optional 'YYYY-MM-DD' floor — only rows on/after this date.
+    Calibration only needs a rolling window, not the full season's history,
+    so callers should pass a recent floor to keep the round-trip small.
+    """
     try:
-        resp = _client().table("player_game_logs").select("*").execute()
+        query = _client().table("player_game_logs").select("*")
+        if since_date:
+            query = query.gte("game_date", since_date)
+        resp = query.execute()
         return resp.data or []
     except Exception as exc:
         print(f"  player_game_logs not accessible ({exc}) — skipping training")

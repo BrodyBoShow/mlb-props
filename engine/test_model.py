@@ -4,6 +4,8 @@ Run locally: python engine/test_model.py
 Reads .env for SUPABASE_URL/SUPABASE_KEY (same as the pipeline).
 """
 
+from datetime import date, timedelta
+
 import pandas as pd
 
 import db
@@ -14,7 +16,8 @@ from model import FEATURE_COLS, MIN_TRAINING_ROWS
 def main() -> None:
     print("=== test_model.py — XGBoost feature-engineering diagnostic ===\n")
 
-    rows = db.get_game_logs()
+    since = (date.today() - timedelta(days=60)).strftime("%Y-%m-%d")
+    rows = db.get_game_logs(since_date=since)
     if rows is None:
         print("player_game_logs unreachable — aborting")
         return

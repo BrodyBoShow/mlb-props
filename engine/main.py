@@ -19,7 +19,7 @@ to the DB.
 """
 
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pybaseball
 
@@ -74,14 +74,21 @@ def _blend(base_rows: list[dict], model_rows: list[dict]) -> list[dict]:
 # ─── phase helpers ───────────────────────────────────────────────────────────
 
 def _grade_previous_slate() -> None:
-    """Grade yesterday's pitcher and hitter projections; upsert game logs."""
+    """Grade yesterday's pitcher and hitter projections; upsert game logs.
+
+    Fetches yesterday's projection rows ONCE and reuses them for both the
+    pitcher and hitter grading passes (each pass filters internally).
+    """
+    yesterday_str = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+    projections = db.get_projections_for_date(yesterday_str)
+
     print("Grading yesterday's pitcher projections...")
-    game_logs = grade.grade_yesterday()
+    game_logs = grade.grade_yesterday(projections=projections)
     n_logs = db.upsert_game_logs(game_logs)
     print(f"  upserted {n_logs} pitcher game log rows")
 
     print("Grading yesterday's hitter projections...")
-    hitter_logs = grade.grade_hitters_yesterday()
+    hitter_logs = grade.grade_hitters_yesterday(projections=projections)
     n_hlogs = db.upsert_game_logs(hitter_logs)
     print(f"  upserted {n_hlogs} hitter game log rows")
 
@@ -124,20 +131,31 @@ def _run_pitcher_pipeline(
     extends it with confirmed-lineup hitters.
     """
     # ── strikeouts: baseline + optional XGBoost blend ───────────────────────
-    print("Building baseline strikeout projections...")
-    base_projections = baseline.build_strikeout_projections(starters)
-    print(f"  baseline: {len(base_projections)} projections")
-
+    # The XGBoost predict() path already does a single bulk Statcast fetch.
+    # We pass that same DataFrame to baseline.build_strikeout_projections so
+    # the baseline doesn't trigger a second wave of per-pitcher fetches.
+    # When the model is skipped (insufficient training rows) we still want
+    # the baseline to enjoy the bulk pattern, so we do a standalone fetch.
     print("Training XGBoost (no-ops if insufficient data)...")
     trained_model = mlb_model.train()
 
     if trained_model is not None:
         print("Running XGBoost predictions...")
-        model_projections = mlb_model.predict(trained_model, starters, games)
+        model_projections, bulk_df = mlb_model.predict(trained_model, starters, games)
+    else:
+        print("  no trained model — using baseline only")
+        model_projections = []
+        print("  bulk Statcast fetch (for baseline)...")
+        bulk_df = mlb_model._fetch_bulk_statcast(date.today())
+
+    print("Building baseline strikeout projections...")
+    base_projections = baseline.build_strikeout_projections(starters, bulk_df=bulk_df)
+    print(f"  baseline: {len(base_projections)} projections")
+
+    if trained_model is not None:
         print("Blending baseline + model projections...")
         projections = _blend(base_projections, model_projections)
     else:
-        print("  no trained model — using baseline only")
         projections = base_projections
 
     print("Upserting strikeout projections...")
@@ -269,9 +287,15 @@ def _run_lines_and_edges(
 
 
 def _run_calibration(all_projections: list[dict]) -> None:
-    """Compute per-(player, prop) confidence scores from graded history."""
+    """Compute per-(player, prop) confidence scores from graded history.
+
+    Only the last 60 days of graded logs matter for the rolling confidence
+    window — bounding the fetch here keeps the calibration round-trip
+    small as the season accumulates.
+    """
     print("Computing calibration confidence scores...")
-    logs = db.get_game_logs() or []
+    since = (date.today() - timedelta(days=60)).strftime("%Y-%m-%d")
+    logs = db.get_game_logs(since_date=since) or []
     confidence_rows = calibrate.compute_confidences(all_projections, logs)
     n_conf = db.update_confidences(confidence_rows)
     print(f"  updated {n_conf} confidence scores")

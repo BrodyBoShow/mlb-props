@@ -80,17 +80,25 @@ def _pitcher_result(box: dict, player_id: int) -> dict | None:
     return None
 
 
-def grade_yesterday(grade_date: date | None = None) -> list[dict]:
+def grade_yesterday(
+    grade_date: date | None = None,
+    projections: list[dict] | None = None,
+) -> list[dict]:
     """Grade the previous day's slate against actual results.
 
     Returns rows shaped for player_game_logs. No DB writes here.
     Skips games not yet Final and pitchers not found in the box score.
+
+    projections: optional pre-fetched projection rows for the same date.
+    When the caller is grading pitchers and hitters back-to-back, fetching
+    once and passing the rows here avoids a second identical round-trip.
     """
     yesterday = grade_date or (date.today() - timedelta(days=1))
     yesterday_str = yesterday.strftime("%Y-%m-%d")
     print(f"  grading projections for {yesterday_str}...")
 
-    projections = db.get_projections_for_date(yesterday_str)
+    if projections is None:
+        projections = db.get_projections_for_date(yesterday_str)
     if not projections:
         print(f"  no projections found for {yesterday_str} -- nothing to grade")
         return []
@@ -264,18 +272,24 @@ def _hitter_result(box: dict, player_id: int) -> dict | None:
     return None
 
 
-def grade_hitters_yesterday(grade_date: date | None = None) -> list[dict]:
+def grade_hitters_yesterday(
+    grade_date: date | None = None,
+    projections: list[dict] | None = None,
+) -> list[dict]:
     """Grade the previous day's hitter projections against actual box scores.
 
     Same shape and graceful behavior as grade_yesterday(), but for hitter prop
     types. Returns rows for player_game_logs with player_type='hitter'. No DB
     writes here.
+
+    projections: optional pre-fetched projection rows (same as grade_yesterday).
     """
     yesterday = grade_date or (date.today() - timedelta(days=1))
     yesterday_str = yesterday.strftime("%Y-%m-%d")
     print(f"  grading hitter projections for {yesterday_str}...")
 
-    projections = db.get_projections_for_date(yesterday_str)
+    if projections is None:
+        projections = db.get_projections_for_date(yesterday_str)
     hitter_projs = [p for p in projections if (p.get("prop_type") or "").startswith("hitter_")]
     if not hitter_projs:
         print(f"  no hitter projections found for {yesterday_str} -- nothing to grade")

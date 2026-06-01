@@ -52,9 +52,20 @@ def _weighted_projection(values_newest_first: list[float]) -> float:
 
 # ─── strikeout projections (Statcast via pybaseball) ─────────────────────────
 
-def _strikeouts_per_start(player_id: int, start_dt: str, end_dt: str) -> list[int]:
-    """K count per start in the window, newest first (includes zero-K starts)."""
-    df = pybaseball.statcast_pitcher(start_dt, end_dt, player_id)
+def _strikeouts_per_start(
+    player_id: int, start_dt: str, end_dt: str, bulk_df=None,
+) -> list[int]:
+    """K count per start in the window, newest first (includes zero-K starts).
+
+    bulk_df: optional pre-fetched Statcast DataFrame covering the window
+    for many pitchers. When provided we filter by pitcher id instead of
+    issuing a per-pitcher pybaseball.statcast_pitcher() request — this
+    lets baseline and model share a single bulk fetch.
+    """
+    if bulk_df is not None and not bulk_df.empty:
+        df = bulk_df[bulk_df["pitcher"] == player_id].copy()
+    else:
+        df = pybaseball.statcast_pitcher(start_dt, end_dt, player_id)
     if df is None or df.empty:
         return []
     df = df.copy()
@@ -64,9 +75,16 @@ def _strikeouts_per_start(player_id: int, start_dt: str, end_dt: str) -> list[in
 
 
 def build_strikeout_projections(
-    starters: list[dict], projection_date: date | None = None
+    starters: list[dict],
+    projection_date: date | None = None,
+    bulk_df=None,
 ) -> list[dict]:
-    """One strikeout projection per probable starter with recent Statcast data."""
+    """One strikeout projection per probable starter with recent Statcast data.
+
+    bulk_df: optional pre-fetched Statcast DataFrame (see model._fetch_bulk_statcast).
+    When provided, each pitcher is filtered out of the shared frame in memory
+    instead of triggering its own statcast_pitcher() round-trip.
+    """
     proj_date = projection_date or date.today()
     start_dt = (proj_date - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     end_dt = proj_date.strftime("%Y-%m-%d")
@@ -75,7 +93,7 @@ def build_strikeout_projections(
     rows: list[dict] = []
     for s in starters:
         player_id = s["player_id"]
-        ks = _strikeouts_per_start(player_id, start_dt, end_dt)
+        ks = _strikeouts_per_start(player_id, start_dt, end_dt, bulk_df=bulk_df)
         if not ks:
             print(f"  no recent Statcast data for player {player_id}, skipping")
             continue
