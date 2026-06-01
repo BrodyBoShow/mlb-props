@@ -269,6 +269,48 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Opposing-lineup context line (feature 4, Option A) (this session):
+- Report from step 1: NO current-slate table carried opponent context.
+  projections/edges/games/lines all have zero opp columns (verified
+  live). opp_k_rate was computed transiently in model.predict()'s
+  feature vector and DISCARDED; player_game_logs.opp_k_rate is
+  historical (grade-time). Per spec, stopped and reported; user chose
+  Option A (persist opp_k_rate onto strikeouts projection rows).
+- engine/model.py predict(): now carries feats["opp_k_rate"] (already
+  computed by the feature builder, rounded 4dp) onto the returned
+  strikeouts ProjectionRow. NOT recomputed. Strikeouts is the only
+  prop the model runs, so it's the only prop that carries opp_k_rate
+  — exactly where the context line shows.
+- engine/main.py _blend(): model_map now maps key -> full model row
+  (was -> projection float) so the blend preserves opp_k_rate onto the
+  blended baseline row. Without this the value was silently dropped in
+  the 60/40 blend.
+- engine/schemas.py: ProjectionRow gains opp_k_rate: Optional[float].
+- engine/db.py upsert_projections(): PGRST204-retry pattern added
+  (_PROJECTION_OPTIONAL_COLS = opp_k_rate). Strips opp_k_rate + warns
+  + retries when the column is missing, so the pipeline runs cleanly
+  before the migration is applied.
+- db/schema.sql + db/migrations/add_opp_k_rate.sql: ADD COLUMN IF NOT
+  EXISTS opp_k_rate numeric on projections.
+- web/lib/types.ts: OppContext {kRate, lhh, rhh} (lhh/rhh deferred,
+  always null); Pitcher.oppContext?.
+- web/app/page.tsx getSlate(): ISOLATED, failure-tolerant query for
+  player_id+opp_k_rate on strikeouts rows. Kept OUT of the main
+  projections select because PostgREST 400s on a missing column —
+  this way the pre-migration window never breaks the board; the
+  context line just doesn't render. Attached per pitcher by player_id.
+- web/app/PropBoard.tsx: OppContextLine — "VS · Facing a X% K lineup",
+  K% toned emerald >=24% (favorable for SO over), amber <=20% (tougher
+  matchup, not red), else slate. Rendered on the Strikeouts tab ONLY.
+  Returns null when kRate missing (never "Facing a null% lineup").
+- Verified: model trains on exactly 11 features (opp_k_rate was
+  already a feature — only the value is now saved). predict() returns
+  18/18 strikeouts rows carrying opp_k_rate; cross-checked exactly vs
+  stats._opp_k_rate (Detroit 0.2294, Tampa Bay 0.1869, Miami 0.2185).
+  _blend preserves opp_k_rate (0.234) + correct projection (5.6).
+  PGRST204 retry strips+warns+persists pre-migration. tsc clean;
+  npm run build passes.
+
 Pitcher recent-form spark dots (this session):
 - Adds a quiet L5 dot row to pitcher cards showing the last ≤5 graded
   actuals for the active prop vs tonight's line (over=green, under=red,

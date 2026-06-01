@@ -27,6 +27,16 @@ export type PropType =
 // One graded game's actual vs tonight's line, oldest→newest for display.
 export type FormDot = "over" | "under" | "push";
 
+// Tonight's opposing-lineup context for a pitcher. kRate is the opponent
+// team's season strikeout rate (0–1), persisted onto strikeouts projection
+// rows by the engine (feature 4 / Option A). lhh/rhh handedness is deferred
+// (always null for now) — the type keeps the slot for a later feature.
+export type OppContext = {
+  kRate: number | null;
+  lhh: number | null;
+  rhh: number | null;
+};
+
 export type Pitcher = {
   player_id: number;     // MLBAM id — matches boxscore "ID{n}" keys 1:1
   name: string;
@@ -44,6 +54,10 @@ export type Pitcher = {
   // build time so each prop tab carries the right dots. undefined when the
   // pitcher has no graded history OR no current line to compare against.
   recentForm?: FormDot[];
+  // Tonight's opposing-lineup context (feature 4). Attached to every pitcher
+  // prop tab's row but only RENDERED on the Strikeouts tab. undefined when
+  // opp_k_rate isn't available (pre-migration, or a non-model prop).
+  oppContext?: OppContext;
 };
 
 export type GameGroup = {

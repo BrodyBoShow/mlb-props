@@ -402,6 +402,35 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     return dots.reverse();   // oldest→newest for left-to-right display
   }
 
+  // ── opposing-lineup K rate (feature 4) ──────────────────────────────────
+  // opp_k_rate lives ONLY on strikeouts projection rows. We fetch it in an
+  // ISOLATED query rather than adding the column to the main projections
+  // select — because PostgREST 400s when you select a column that doesn't
+  // exist, and we must not let the pre-migration window break the whole
+  // board. If the column isn't there yet, this query errors, oppKByPlayer
+  // stays empty, and the context line simply doesn't render. Keyed by
+  // player_id (opp_k_rate is the same for a pitcher across props).
+  const oppKByPlayer = new Map<number, number>();
+  {
+    const { data: oppRows, error: oppErr } = await supabase
+      .from("projections")
+      .select("player_id, opp_k_rate")
+      .eq("projection_date", selectedDate)
+      .eq("prop_type", "strikeouts");
+    if (oppErr) {
+      console.log(
+        `[home-diag] opp_k_rate fetch skipped (${String(oppErr)}) — ` +
+          `apply db/migrations/add_opp_k_rate.sql to enable the context line`,
+      );
+    } else {
+      for (const r of (oppRows ?? []) as Array<{ player_id: number; opp_k_rate: number | null }>) {
+        if (r.opp_k_rate !== null && r.opp_k_rate !== undefined) {
+          oppKByPlayer.set(r.player_id, r.opp_k_rate);
+        }
+      }
+    }
+  }
+
   // Group by prop_type → game_id → players. Pure presentation — no math.
   // After grouping we sort each prop's games chronologically by start_time so
   // the slate order matches MLB's schedule page and stays identical across
@@ -443,6 +472,12 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           // L5 recent-form dots for THIS prop vs this prop's current line.
           // undefined on hitter/fantasy tabs and when there's no line/history.
           recentForm: sparkFor(r.player_id, propType, e?.line),
+          // Tonight's opposing-lineup context. Attached to every prop's row
+          // but only rendered on the Strikeouts tab. undefined when opp_k_rate
+          // isn't available (pre-migration or no model run for this pitcher).
+          oppContext: oppKByPlayer.has(r.player_id)
+            ? { kRate: oppKByPlayer.get(r.player_id)!, lhh: null, rhh: null }
+            : undefined,
         });
       }
       const sorted = [...byGame.values()].sort(

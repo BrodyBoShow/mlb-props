@@ -446,17 +446,49 @@ def get_game_logs(since_date: str | None = None) -> list[dict] | None:
         return None
 
 
+# Projection columns that may not exist on a pre-migration schema. Stripped
+# and retried on PGRST204 so the pipeline runs cleanly before the migration
+# is applied (mirrors the upsert_game_logs / upsert_games pattern).
+_PROJECTION_OPTIONAL_COLS = ("opp_k_rate",)
+
+
 def upsert_projections(rows: "list[ProjectionRow] | list[dict]") -> int:
     """Upsert projection rows on the composite primary key.
 
     (game_id, player_id, prop_type, projection_date) — re-runs update in place.
+
+    Defensive: opp_k_rate (feature 4 / Option A) is only on strikeouts rows
+    and only exists after db/migrations/add_opp_k_rate.sql is applied. If the
+    column is missing PostgREST returns PGRST204; we strip the optional
+    columns and retry once so grading/projection still persists.
     """
     if not rows:
         return 0
-    _client().table("projections").upsert(
-        rows, on_conflict="game_id,player_id,prop_type,projection_date"
-    ).execute()
-    return len(rows)
+    client = _client()
+    try:
+        client.table("projections").upsert(
+            rows, on_conflict="game_id,player_id,prop_type,projection_date"
+        ).execute()
+        return len(rows)
+    except Exception as exc:
+        msg = str(exc)
+        mentions_optional = any(col in msg for col in _PROJECTION_OPTIONAL_COLS)
+        is_pgrst204 = "PGRST204" in msg or "Could not find" in msg
+        if mentions_optional and is_pgrst204:
+            stripped = [
+                {k: v for k, v in r.items() if k not in _PROJECTION_OPTIONAL_COLS}
+                for r in rows
+            ]
+            client.table("projections").upsert(
+                stripped, on_conflict="game_id,player_id,prop_type,projection_date"
+            ).execute()
+            print(
+                "  WARNING: projections missing opp_k_rate column -- upserted "
+                "without it. Run db/migrations/add_opp_k_rate.sql to enable "
+                "the opposing-lineup context line."
+            )
+            return len(rows)
+        raise
 
 
 def upsert_lines(rows: "list[LineRow] | list[dict]") -> int:

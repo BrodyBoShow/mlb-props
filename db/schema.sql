@@ -149,6 +149,11 @@ create table if not exists projections (
     projection       numeric not null,   -- model's projected number
     confidence       numeric,            -- optional: calibrated probability (0–1)
     projection_date  date    not null,   -- which slate date this belongs to
+    -- Opposing-lineup season K rate (0–1), set ONLY on strikeouts rows (the
+    -- only prop the XGBoost model runs). Feature 4 / Option A — see
+    -- db/migrations/add_opp_k_rate.sql. Frontend reads it for the
+    -- "Facing a X% K lineup" context line. NULL on baseline-only props.
+    opp_k_rate       numeric,
     updated_at       timestamptz default now(),
     primary key (game_id, player_id, prop_type, projection_date)
 );

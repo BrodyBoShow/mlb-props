@@ -199,6 +199,14 @@ class ProjectionRow(TypedDict, total=False):
     prop_type: str               # 'strikeouts', 'hits_allowed', 'hitter_hits', ...
     projection: float            # rounded to 1 decimal
     projection_date: str         # 'YYYY-MM-DD' — part of the composite PK
+    # Opposing-lineup season K rate (0..1). ONLY set on strikeouts rows
+    # (the only prop the XGBoost model runs) — the feature builder already
+    # computes it; predict() now carries it onto the row instead of
+    # discarding it. Frontend reads it for the "Facing a X% K lineup" line.
+    # Nullable: baseline-only props never set it. Requires the
+    # add_opp_k_rate.sql migration; db.upsert_projections strips it via
+    # the PGRST204 retry until the column exists.
+    opp_k_rate: Optional[float]
 
 
 class ProjectionContextRow(TypedDict, total=False):

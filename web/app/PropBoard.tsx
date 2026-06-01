@@ -308,6 +308,42 @@ function RecentFormDots({ form }: { form: FormDot[] | undefined }) {
   );
 }
 
+// ── opposing-lineup context line (feature 4) ─────────────────────────────────
+// Shows the opponent team's season K rate as "Facing a X% K lineup". Only the
+// K% number carries a tone accent: league avg team K rate ~22%, so a high-K
+// lineup (>=24%) is FAVORABLE for a strikeout over (emerald), a contact-heavy
+// lineup (<=20%) is a TOUGHER matchup (amber — not red; it's not "bad", just
+// harder). Rendered on the Strikeouts tab only (where opp K rate is most
+// meaningful and the only prop that carries the value). Renders nothing when
+// kRate is missing — never "Facing a null% lineup".
+function OppContextLine({ kRate }: { kRate: number | null | undefined }) {
+  if (kRate === null || kRate === undefined) return null;
+
+  const pct = kRate * 100;
+  const toneColor =
+    kRate >= 0.24
+      ? "text-emerald-400/70"
+      : kRate <= 0.2
+        ? "text-amber-400/70"
+        : "text-slate-400";
+
+  return (
+    <div
+      className="mt-1 flex items-center gap-1.5 overflow-hidden text-[10px] text-slate-500"
+      title={`Opponent team strikeout rate: ${pct.toFixed(1)}% (league avg ~22%). Higher = more strikeout-prone.`}
+    >
+      <span className="text-[9px] uppercase tracking-wider text-slate-600">
+        VS
+      </span>
+      <span className="truncate">
+        Facing a{" "}
+        <span className={`tabular-nums ${toneColor}`}>{pct.toFixed(1)}%</span> K
+        lineup
+      </span>
+    </div>
+  );
+}
+
 // ── game header sub-component ────────────────────────────────────────────────
 // Shows the matchup title + a status line beneath: date + live/scheduled/final.
 // `status` is undefined when the live fetch hasn't populated yet (or failed) —
@@ -530,6 +566,9 @@ export default function PropBoard({
                         <EdgeDetail pitcher={p} />
                         <ConfidenceBar confidence={p.confidence} />
                         <RecentFormDots form={p.recentForm} />
+                        {active === "strikeouts" && (
+                          <OppContextLine kRate={p.oppContext?.kRate} />
+                        )}
                       </div>
                       <ProjectionBadge
                         pitcher={p}

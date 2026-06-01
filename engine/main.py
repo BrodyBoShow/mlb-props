@@ -45,20 +45,29 @@ def _blend(base_rows: list[dict], model_rows: list[dict]) -> list[dict]:
     Pitchers that only appear in one source keep that source's projection
     unchanged.
     """
-    model_map: dict[tuple, float] = {
-        (r["game_id"], r["player_id"]): r["projection"] for r in model_rows
+    # Key -> full model row so we can carry both the projection AND the
+    # opp_k_rate the model computed. The blended row is built from the
+    # baseline row (which has no opp_k_rate), so without this the context
+    # feature would be silently dropped in the blend.
+    model_map: dict[tuple, dict] = {
+        (r["game_id"], r["player_id"]): r for r in model_rows
     }
     blended = []
     blended_count = 0
     for r in base_rows:
         key = (r["game_id"], r["player_id"])
         if key in model_map:
+            m = model_map[key]
             proj = round(
-                BLEND_MODEL_WEIGHT * model_map[key]
+                BLEND_MODEL_WEIGHT * m["projection"]
                 + BLEND_BASELINE_WEIGHT * r["projection"],
                 1,
             )
-            blended.append({**r, "projection": proj})
+            merged = {**r, "projection": proj}
+            # Preserve the opposing-lineup K rate the model carried (feature 4).
+            if m.get("opp_k_rate") is not None:
+                merged["opp_k_rate"] = m["opp_k_rate"]
+            blended.append(merged)
             blended_count += 1
         else:
             blended.append(r)  # model had no prediction → keep baseline as-is

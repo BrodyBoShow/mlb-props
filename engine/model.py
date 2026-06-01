@@ -448,6 +448,13 @@ def predict(
             "prop_type": PROP_TYPE,
             "projection": pred,
             "projection_date": proj_date_str,
+            # Persist the opposing-lineup K rate that the feature builder
+            # already computed (feature 4 / Option A). It's discarded
+            # everywhere else — saving it onto the strikeouts row lets the
+            # frontend show "Facing a X% K lineup" without recomputing.
+            # Strikeouts is the only prop the model runs, so this is the
+            # only prop that carries opp_k_rate — exactly where it's shown.
+            "opp_k_rate": round(float(feats["opp_k_rate"]), 4),
         })
         print(f"  {s.get('full_name', s['player_id'])}: {pred} K (model)")
 
