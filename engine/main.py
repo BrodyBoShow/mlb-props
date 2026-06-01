@@ -154,28 +154,38 @@ def _run_pitcher_pipeline(
         s["full_name"]: s["player_id"] for s in starters if s.get("full_name")
     }
     if existing >= 20:
-        # Stale-detection: only skip when the existing strikeouts projection
-        # ids actually match today's probable starters. If they don't, the
-        # projections were written by an earlier cron whose date/slate
-        # alignment was wrong (the 9 PM ET / 1 AM UTC timezone bug), and
-        # we rebuild instead of perpetuating the bad data.
+        # Stale-detection: skip only when the stored strikeouts ids match
+        # today's probable starters AND there's no significant excess (i.e.
+        # leftover ids that AREN'T current starters). The excess check
+        # catches the case where a prior rebuild added fresh rows alongside
+        # stale ones — the new rows match current starters (overlap ok) but
+        # the stale rows are still present and rendering on the frontend.
         existing_ids = db.get_projection_player_ids_for_date(today_str, "strikeouts")
         current_ids = {s["player_id"] for s in starters if s.get("player_id")}
         overlap = existing_ids & current_ids
-        threshold = max(1, int(0.8 * len(current_ids))) if current_ids else 1
-        if len(overlap) >= threshold:
+        excess = existing_ids - current_ids
+        match_ok = len(overlap) >= max(1, int(0.8 * len(current_ids))) if current_ids else False
+        clean = len(excess) <= 2   # tolerance for late scratches
+        if match_ok and clean:
             print(
                 f"  {existing} projections already exist for {today_str} -- "
                 f"skipping pitcher baseline + model "
-                f"({len(overlap)}/{len(current_ids)} starters match stored projections)"
+                f"({len(overlap)}/{len(current_ids)} starters match, "
+                f"{len(excess)} excess stale ids)"
             )
             return [], name_to_id, 0
+        reason = (
+            f"{len(overlap)}/{len(current_ids)} overlap, "
+            f"{len(excess)} excess stale ids"
+        )
         print(
             f"  WARNING: stored projections for {today_str} appear stale "
-            f"({len(overlap)}/{len(current_ids)} starter overlap, "
-            f"{len(existing_ids)} stored strikeouts ids vs "
-            f"{len(current_ids)} current starters) -- rebuilding"
+            f"({reason}) -- rebuilding"
         )
+        # Delete the stale rows so the fresh rebuild fully replaces them.
+        # Different game_ids on stale vs fresh rows would otherwise leave
+        # both in the table after the upsert (composite PK includes game_id).
+        db.delete_projections_for_date_props(today_str, db._PITCHER_PROP_TYPES)
 
     # ── strikeouts: baseline + optional XGBoost blend ───────────────────────
     # The XGBoost predict() path already does a single bulk Statcast fetch.
@@ -283,18 +293,27 @@ def _run_hitter_pipeline(
         existing_ids = db.get_projection_player_ids_for_date(today_str, "hitter_hits")
         current_ids = {p["player_id"] for p in lineup_players if p.get("player_id")}
         overlap = existing_ids & current_ids
-        threshold = max(1, int(0.8 * len(current_ids))) if current_ids else 1
-        if len(overlap) >= threshold:
+        excess = existing_ids - current_ids
+        match_ok = len(overlap) >= max(1, int(0.8 * len(current_ids))) if current_ids else False
+        # Hitters churn more than pitchers (bench moves, late scratches),
+        # so allow more excess tolerance than the pitcher path's 2.
+        clean = len(excess) <= 15
+        if match_ok and clean:
             print(
                 f"  {existing_hitter} hitter_hits projections already exist for "
                 f"{today_str} -- skipping hitter baseline builders "
-                f"({len(overlap)}/{len(current_ids)} lineup players match stored)"
+                f"({len(overlap)}/{len(current_ids)} match, {len(excess)} excess)"
             )
             return [], len(lineup_players)
         print(
             f"  WARNING: stored hitter projections for {today_str} appear stale "
-            f"({len(overlap)}/{len(current_ids)} lineup overlap) -- rebuilding"
+            f"({len(overlap)}/{len(current_ids)} overlap, {len(excess)} excess) "
+            f"-- rebuilding"
         )
+        # Delete stale rows before rebuild — same reasoning as the pitcher
+        # path (composite PK on game_id means UPSERT doesn't replace rows
+        # tied to the wrong-slate game_ids).
+        db.delete_projections_for_date_props(today_str, db._HITTER_PROP_TYPES)
 
     hitter_projections: list[dict] = []
     hitter_hit_rows: list[dict] = []

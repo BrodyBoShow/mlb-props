@@ -295,6 +295,52 @@ def get_projection_player_ids_for_date(
         return set()
 
 
+_PITCHER_PROP_TYPES = (
+    "strikeouts", "hits_allowed", "walks", "earned_runs",
+    "outs_recorded", "pitcher_fantasy_score",
+)
+_HITTER_PROP_TYPES = (
+    "hitter_hits", "hitter_total_bases", "hitter_rbis", "hitter_runs",
+    "hitter_home_runs", "hitter_fantasy_score",
+)
+
+
+def delete_projections_for_date_props(
+    date_str: str, prop_types: tuple[str, ...] | list[str],
+) -> int:
+    """Delete projection rows matching (projection_date, prop_type IN ...).
+
+    The projections PK is (game_id, player_id, prop_type, projection_date).
+    A stale-rebuild that targets the same date+player+prop but a DIFFERENT
+    game_id (because the prior cron stored the wrong slate's game_ids)
+    doesn't conflict on the composite key — the UPSERT inserts new rows
+    alongside the stale ones rather than replacing them. The rebuild path
+    in main.py calls this immediately before re-upserting so the fresh
+    rows fully replace the stale set instead of co-existing with it.
+    """
+    if not prop_types:
+        return 0
+    try:
+        resp = (
+            _client()
+            .table("projections")
+            .delete()
+            .eq("projection_date", date_str)
+            .in_("prop_type", list(prop_types))
+            .execute()
+        )
+        n = len(resp.data or [])
+        if n:
+            print(
+                f"  deleted {n} stale projection rows for {date_str} "
+                f"(prop_types={list(prop_types)})"
+            )
+        return n
+    except Exception as exc:
+        print(f"  could not delete stale projections for {date_str}: {exc}")
+        return 0
+
+
 def get_game_log_count_for_date(date_str: str) -> int:
     """Count player_game_logs rows for `date_str`.
 
