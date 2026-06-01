@@ -269,6 +269,27 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Park-factor tag on game card headers (this session):
+- web/lib/constants.ts: PARK_FACTORS_HITS table (mirror of
+  engine/constants.py PARK_FACTORS_HITS, 31 entries) + getParkProfile
+  helper returning {factor, label, direction}. Comment notes the
+  two tables must stay in sync.
+- Thresholds: factor >= 1.04 -> Hitter-friendly ↑, factor <= 0.96 ->
+  Pitcher-friendly ↓, otherwise Neutral (no tag rendered).
+- web/app/ParkTag.tsx: new client component. Returns null for
+  neutral parks so the header stays uncluttered. Muted pill — emerald
+  for hitter, sky for pitcher — text-[10px] uppercase tabular-nums
+  with a tooltip carrying the exact factor.
+- web/app/PropBoard.tsx GameHeader: split the existing "Away @ Home"
+  matchup string on " @ " to get homeTeam, render <ParkTag /> in
+  the same row as the matchup heading (right-aligned via flex).
+- web/app/FutureSlate.tsx game header: g.home_team passed directly
+  to <ParkTag />.
+- Not added to FeaturedPlays cards per spec — those are per-player.
+- Verified: tsc --noEmit clean; threshold spot-check confirms Coors
+  tagged hitter-friendly, Petco/Seattle/Oracle/Tropicana tagged
+  pitcher-friendly, Camden/Target/Comerica left untagged.
+
 TypedDict data contracts in engine/schemas.py (this session):
 - New file engine/schemas.py — SINGLE SOURCE OF TRUTH for every dict
   that flows between engine modules. Named `schemas` (not `types`)

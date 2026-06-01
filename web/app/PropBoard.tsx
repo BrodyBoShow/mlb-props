@@ -3,6 +3,7 @@
 import { useState } from "react";
 import DateNav from "./DateNav";
 import FeaturedPlays from "./FeaturedPlays";
+import ParkTag from "./ParkTag";
 import { useLiveGameStatus } from "./useLiveGameStatus";
 import { useLiveBoxScores } from "./useLiveBoxScores";
 import type {
@@ -350,9 +351,19 @@ function GameHeader({
   date: string;
   status: GameStatus | undefined;
 }) {
+  // matchup is "Away @ Home" — the home team is what determines the park.
+  // No MLB team name contains " @ " so the split is safe; fall back to ""
+  // if the matchup is a Game-N placeholder (no home team known).
+  const homeTeam = matchup.includes(" @ ")
+    ? matchup.split(" @ ")[1]
+    : "";
+
   return (
     <div className="border-b border-slate-800 bg-slate-900 px-5 py-3">
-      <h2 className="font-semibold text-slate-200">{matchup}</h2>
+      <div className="flex items-start justify-between gap-2">
+        <h2 className="font-semibold text-slate-200">{matchup}</h2>
+        <ParkTag homeTeam={homeTeam} />
+      </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
         <span>{formatShortDate(date)}</span>
         {status && <span className="text-slate-600">·</span>}

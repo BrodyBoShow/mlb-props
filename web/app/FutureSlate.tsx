@@ -1,6 +1,7 @@
 "use client";
 
 import DateNav from "./DateNav";
+import ParkTag from "./ParkTag";
 
 // One game card on a future date. Populated by engine/main._run_future_previews
 // (no projections yet, but games + probable starters are in the DB ahead of
@@ -71,9 +72,12 @@ export default function FutureSlate({
               className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
             >
               <div className="border-b border-slate-800 bg-slate-900 px-5 py-3">
-                <h2 className="font-semibold text-slate-200">
-                  {g.away_team} @ {g.home_team}
-                </h2>
+                <div className="flex items-start justify-between gap-2">
+                  <h2 className="font-semibold text-slate-200">
+                    {g.away_team} @ {g.home_team}
+                  </h2>
+                  <ParkTag homeTeam={g.home_team} />
+                </div>
                 <p className="text-xs text-slate-500">
                   {formatShortDate(g.game_date)}
                   {g.start_time && " · " + formatStartTime(g.start_time)}
