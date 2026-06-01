@@ -88,9 +88,25 @@ MARKET_TO_PROP = {
 # meaningless because the scoring formula is PrizePicks-specific.
 PRIZEPICKS_ONLY_PROPS = {"pitcher_fantasy_score", "hitter_fantasy_score"}
 
-# Sharp baseline (pinnacle) + major US books + main DFS apps.
-BOOKMAKERS = ["pinnacle", "draftkings", "fanduel",
-              "prizepicks", "underdog", "betr", "sleeper"]
+# Sharp baseline (pinnacle) + major US books + main DFS apps. Books that
+# ParlayAPI doesn't actually list for a given market are silently no-ops on
+# the API side, so widening this list only costs response bytes — there's no
+# per-book quota or rate-limit hit. The wider the list, the better our
+# coverage when DK/FD don't post a particular prop.
+BOOKMAKERS = [
+    "pinnacle",
+    "draftkings",
+    "fanduel",
+    "betmgm",
+    "caesars",
+    "bet365",
+    "espnbet",
+    "pointsbet",
+    "prizepicks",
+    "underdog",
+    "betr",
+    "sleeper",
+]
 
 # Name suffixes to strip when normalizing. Lower-case with leading space.
 _SUFFIXES = (" jr.", " sr.", " ii", " iii", " iv")
@@ -228,4 +244,45 @@ def fetch_prop_lines(
     pp_note = f" [{pp_only_dropped} non-PrizePicks fantasy lines dropped]" if pp_only_dropped else ""
     summary = ", ".join(f"{p}: {n}" for p, n in per_prop.items())
     print(f"  fetched {len(rows)} lines ({summary}){norm_note}{pp_note}")
+
+    # ── per-book breakdown ──────────────────────────────────────────────────
+    # Surfaces which books are actually returning lines vs which are dead
+    # entries in BOOKMAKERS. Sorted by row count descending so the heavy
+    # hitters land first.
+    per_book: dict[str, int] = {}
+    for r in rows:
+        per_book[r["bookmaker"]] = per_book.get(r["bookmaker"], 0) + 1
+    if per_book:
+        book_summary = ", ".join(
+            f"{b}:{n}" for b, n in sorted(per_book.items(), key=lambda x: -x[1])
+        )
+        print(f"  by book: {book_summary}")
+
+    # ── unmatched player names ──────────────────────────────────────────────
+    # Any raw row whose player name didn't exact- or normalized-match a known
+    # projected player. Surfaces typos/diacritics/lookup_player misses so we
+    # can patch the normalizer (or fetch.py) when a pattern emerges.
+    unmatched: list[str] = []
+    for r in raw or []:
+        name = r.get("player")
+        if name and name_to_id.get(name) is None:
+            norm = _normalize(name)
+            if normalized_to_id.get(norm) is None:
+                if name not in unmatched:
+                    unmatched.append(name)
+    if unmatched:
+        print(
+            f"  unmatched players (first 10, {len(unmatched)} total): "
+            f"{unmatched[:10]}"
+        )
+
+    # ── market_keys returned by the API ─────────────────────────────────────
+    # Helps diagnose new markets the API has started returning that we're
+    # not mapping in MARKET_TO_PROP (and therefore silently dropping).
+    all_market_keys = sorted(set(
+        r.get("market_key") for r in raw or []
+        if r.get("market_key")
+    ))
+    print(f"  market_keys from API: {all_market_keys}")
+
     return rows

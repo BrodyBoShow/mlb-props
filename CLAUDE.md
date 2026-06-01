@@ -244,6 +244,42 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Six-run cron + lines-only refresh mode (this session):
+- .github/workflows/refresh.yml: cron is now 6/day (1/5/11/14/17/18 UTC =
+  9pm/1am/7am/10am/1pm/2pm ET). First run of the day does a full
+  projection pass; subsequent runs detect existing rows and skip the
+  expensive baseline + XGBoost work, dropping run time from ~60s to ~20s.
+- engine/db.py: two new count helpers — get_projection_count_for_date
+  (optional prop_type filter) and get_game_log_count_for_date. Both
+  use Supabase's count="exact" with limit(1) so they're a single
+  round-trip with no row payload.
+- engine/db.py: get_projections_for_date now paginates the select via
+  .range() so it walks past the 1000-row Supabase server cap. A full
+  slate produces 2000-3000 projection rows (200 players × 10-12 props);
+  without pagination refresh-mode edges silently covered only the first
+  1000. Verified: edges jumped from 89 → 180 in refresh mode after this
+  fix on the same DB state.
+- engine/main.py: mode header at the top of main() prints
+  "lines-only refresh" or "full projection" + existing-projection count.
+- engine/main.py: _grade_previous_slate bails out when player_game_logs
+  already has rows for yesterday (one count round-trip).
+- engine/main.py: _run_pitcher_pipeline + _run_hitter_pipeline both gain
+  a skip-if-already-projected branch (>=20 total projections / >=100
+  hitter_hits). name_to_id is built before the skip check so the lines
+  fetch can still resolve names on skip-path runs.
+- engine/main.py: _run_lines_and_edges + _run_calibration re-fetch
+  today's projections from the DB when their caller passed [] (refresh
+  mode). projection_date is injected so edge.compute_edges keys match.
+- engine/main.py: total runtime logged at end and on failure.
+- engine/lines.py: BOOKMAKERS expanded from 7 to 12 — added betmgm,
+  bet365, espnbet, pointsbet, and re-added caesars. Books ParlayAPI
+  doesn't list for a market are silent no-ops, so widening is free.
+  Live verification: caesars now contributing 50+ lines/run.
+- engine/lines.py: new diagnostic block after the existing summary —
+  per-book breakdown (sorted desc), unmatched player names (first 10
+  + total), and all market_keys returned by the API. Surfaces dead
+  books, name-resolution misses, and unmapped markets per run.
+
 Final-game result chip + late-night cron (this session):
 - .github/workflows/refresh.yml: added a 4th cron at 06:00 UTC (2 AM ET)
   so the grader catches every game that finished overnight, including

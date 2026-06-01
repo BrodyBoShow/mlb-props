@@ -52,23 +52,37 @@ def get_projections_for_date(date_str: str) -> list[dict]:
     Each row: game_id, player_id, projection, prop_type, home_team,
     away_team, home_away ('home' | 'away' | None).
     """
+    # Paginate to walk past Supabase's 1000-row server cap. A full slate
+    # produces 200+ players x 10-12 prop types ≈ 2-3k projection rows;
+    # without pagination refresh-mode edge coverage silently drops by half.
+    page_size = 1000
+    raw_rows: list[dict] = []
     try:
-        resp = (
-            _client()
-            .table("projections")
-            .select(
-                "game_id, player_id, projection, prop_type, "
-                "games(home_team, away_team), players(team)"
+        client = _client()
+        for page in range(20):
+            start = page * page_size
+            end = start + page_size - 1
+            resp = (
+                client
+                .table("projections")
+                .select(
+                    "game_id, player_id, projection, prop_type, "
+                    "games(home_team, away_team), players(team)"
+                )
+                .eq("projection_date", date_str)
+                .range(start, end)
+                .execute()
             )
-            .eq("projection_date", date_str)
-            .execute()
-        )
+            batch = resp.data or []
+            raw_rows.extend(batch)
+            if len(batch) < page_size:
+                break
     except Exception as exc:
         print(f"  could not fetch projections for {date_str}: {exc}")
         return []
 
     rows: list[dict] = []
-    for r in resp.data or []:
+    for r in raw_rows:
         game = r.get("games") or {}
         player = r.get("players") or {}
         home_team = game.get("home_team")
@@ -125,6 +139,51 @@ def upsert_game_logs(rows: list[dict]) -> int:
         rows, on_conflict="player_id,game_id"
     ).execute()
     return len(rows)
+
+
+def get_projection_count_for_date(
+    date_str: str, prop_type: str | None = None
+) -> int:
+    """Count projection rows for `date_str` (optionally a single prop_type).
+
+    Used by main.py to detect whether today's projections already exist so
+    later runs in the same day can skip the expensive baseline + XGBoost
+    work and just refresh lines + edges. prop_type=None counts every prop.
+    """
+    try:
+        query = (
+            _client()
+            .table("projections")
+            .select("player_id", count="exact")
+            .eq("projection_date", date_str)
+        )
+        if prop_type is not None:
+            query = query.eq("prop_type", prop_type)
+        resp = query.limit(1).execute()
+        return resp.count or 0
+    except Exception:
+        return 0
+
+
+def get_game_log_count_for_date(date_str: str) -> int:
+    """Count player_game_logs rows for `date_str`.
+
+    Used by main.py to skip re-grading a slate that's already been graded
+    by an earlier run today (each cron tick after the first grading run
+    finds the rows here and bails out instead of repeating the work).
+    """
+    try:
+        resp = (
+            _client()
+            .table("player_game_logs")
+            .select("player_id", count="exact")
+            .eq("game_date", date_str)
+            .limit(1)
+            .execute()
+        )
+        return resp.count or 0
+    except Exception:
+        return 0
 
 
 def get_game_logs(since_date: str | None = None) -> list[dict] | None:
