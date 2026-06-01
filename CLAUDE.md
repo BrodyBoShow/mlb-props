@@ -269,6 +269,41 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Sharp badge — edge-derived direction + relabel (this session):
+- Bug (visible in prod): the badge fired on ~Even rows (Alcantara SO
+  SHARP 4/4 next to ~Even) and its direction could contradict the edge
+  arrow (Avila: proj 3.4 < line 3.5 = under by the old proj-vs-line
+  logic, but edge arrow was +0.16 over). Root cause: the badge derived
+  lean from raw proj-vs-line while the edge derives it from de-vigged
+  probability — they disagree in magnitude (a 0.1 proj gap is a "lean"
+  to the badge but ~Even to the edge) and sometimes direction.
+- Step 0: EdgeDetail derives direction from the signed edge
+  (model_over_prob - fair_over_prob, on p.edge): >EDGE_THRESHOLD ▲over,
+  <-EDGE_THRESHOLD ▼under, else ~Even. EDGE_THRESHOLD=0.1. The badge now
+  REUSES that exact value + threshold.
+- computeSharp(playerId, prop, projection, edge): direction + ~Even gate
+  now come from the EDGE (authoritative). No projection / no edge /
+  |edge|<=EDGE_THRESHOLD → no badge. agree = real books (gated to
+  SHARP_MIN_LINE) that CORROBORATE the edge lean (edge over → proj>book
+  line; edge under → proj<book line). total = qualifying real books.
+  Badge only when agree>=2; UI tiers full (>=3 && ===total) vs partial.
+  The badge now agrees with the arrow BY CONSTRUCTION — can't point
+  opposite, never on ~Even. Both call sites pass the signed edge
+  (prop board e?.edge; featured e.edge).
+- Relabel: "SHARP N/N" → direction-bearing "N/N OVER" / "N/N UNDER"
+  (full keeps ◆ + emerald; partial muted slate). Tooltip: "Model is on
+  the <dir> side of all N / N of M sportsbook lines (<book names>)".
+  SharpAgreement.direction is now edge-derived (shape unchanged).
+- Verified vs raw DB (2026-06-01): Sandy Alcantara SO edge 0.04 →
+  NO badge; Luinder Avila SO edge +0.16 over but no real book
+  corroborates over → NO badge (never an under badge contradicting the
+  over arrow); Griffin Jax SO edge -0.11 under, all five 4.5 lines →
+  5/5 UNDER (full, emerald); Jacob deGrom SO -0.34, three 6.5 → 3/3
+  UNDER (full); Shane Drohan SO -0.11, two 3.5 → 2/2 UNDER (partial).
+  Every rendered badge's direction matches its edge sign. Frontend-only
+  (page.tsx, types.ts, SharpBadge.tsx); no engine; FEATURE_COLS still
+  11; tsc clean; npm run build passes.
+
 Sharp badge — dedicated SHARP_MIN_LINE floor (this session):
 - Residual gap from the MIN_LINE work: the badge renders on ALL pitcher
   prop tabs (strikeouts/hits_allowed/walks/earned_runs/outs_recorded/

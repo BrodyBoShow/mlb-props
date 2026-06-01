@@ -37,17 +37,19 @@ export type OppContext = {
   rhh: number | null;
 };
 
-// Sharp-money agreement (feature 5). Counts how many REAL two-sided books
-// (pinnacle/draftkings/fanduel/bet365/caesars) the model leans the SAME way
-// against — independent multi-book consensus, distinct from the edge size.
-// Only set when agree >= 2; the UI tiers it (agree>=3 && agree===total = full,
-// agree>=2 = partial). DFS apps are excluded entirely (flat single-number
-// lines, not two-sided markets).
+// Sharp-money agreement (feature 5). The DIRECTION is the de-vigged edge's
+// lean (same value + EDGE_THRESHOLD the EdgeDetail arrow uses) — so the badge
+// can never point opposite the arrow and never fires on ~Even rows. `agree`
+// counts how many REAL two-sided books (pinnacle/draftkings/fanduel/bet365/
+// caesars, gated to main-market lines) corroborate that lean — i.e. have the
+// projection on the edge's side of their line. Only set when agree >= 2; the
+// UI tiers it (agree>=3 && agree===total = full, agree>=2 = partial). DFS apps
+// are excluded (flat single-number lines, not two-sided markets).
 export type SharpAgreement = {
-  agree: number;                 // real books the model leans the same way vs
-  total: number;                 // real books with a line on this prop
-  direction: "over" | "under";   // the majority lean direction
-  books: string[];               // agreeing book keys (for the tooltip)
+  agree: number;                 // real books corroborating the edge's lean
+  total: number;                 // qualifying real books with a line on this prop
+  direction: "over" | "under";   // the EDGE's lean direction
+  books: string[];               // corroborating book keys (for the tooltip)
 };
 
 export type Pitcher = {

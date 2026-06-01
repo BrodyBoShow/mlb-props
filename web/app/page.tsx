@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES, MIN_LINE, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import { ALL_PROP_TYPES, EDGE_THRESHOLD, MIN_LINE, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import type { ByProp, FeaturedPlay, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
@@ -468,27 +468,36 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     if (!books.has(r.bookmaker)) books.set(r.bookmaker, Number(r.line));
   }
 
-  // Compute multi-book agreement for one (player, prop) vs the model
-  // projection. Returns undefined unless >= 2 real books lean the model's
-  // way — honest: 0-1 real books can't be a consensus. The "model lean vs
-  // book B" is proj>line→over, proj<line→under; a proj==line book is a push
-  // (counts toward total, agrees with neither side). The agreed direction is
-  // the strict majority of non-push leans; an even split yields no majority
-  // and therefore no badge.
-  //
-  // Main-market gate: a book's line below the prop's SHARP_MIN_LINE floor is
-  // an alternate — dropped BEFORE counting, so a book whose only stored line
-  // for the prop is a sub-threshold alt doesn't contribute to agree/total.
-  // Uses SHARP_MIN_LINE (NOT the shared MIN_LINE) so the floor covers EVERY
-  // pitcher prop the badge renders on — including walks/earned_runs, which
-  // MIN_LINE omits (they're Model-Tracker props). MIN_LINE stays untouched so
-  // /results + Featured Plays behavior is unchanged.
+  // Count how many real books corroborate the EDGE's lean for one (player,
+  // prop). The badge's DIRECTION comes from the de-vigged edge — the exact
+  // same value + EDGE_THRESHOLD the EdgeDetail arrow uses — NOT from raw
+  // proj-vs-line. This makes the badge agree with the edge arrow by
+  // construction (they can't point opposite ways) and never fire on ~Even
+  // rows. Steps:
+  //   1. No projection / no edge / ~Even edge (|edge| <= EDGE_THRESHOLD) →
+  //      no badge. The edge is authoritative for direction.
+  //   2. Gate real books to main-market lines (>= SHARP_MIN_LINE; covers
+  //      every pitcher prop the badge renders on, walks/earned_runs included.
+  //      MIN_LINE untouched so /results + Featured Plays are unchanged).
+  //   3. corroborate = books with the projection on the edge's side
+  //      (edge over → proj > book line; edge under → proj < book line).
+  //   4. total = qualifying real books. Return only when corroborate >= 2;
+  //      the UI tiers full (>=3 && ===total) vs partial (>=2).
   function computeSharp(
     playerId: number,
     propType: PropType,
     projection: number | undefined,
+    edge: number | undefined | null,
   ): import("@/lib/types").SharpAgreement | undefined {
     if (projection === undefined || projection === null) return undefined;
+    if (edge === undefined || edge === null) return undefined;
+
+    // Direction + ~Even gate from the edge (authoritative).
+    let direction: "over" | "under";
+    if (edge > EDGE_THRESHOLD) direction = "over";
+    else if (edge < -EDGE_THRESHOLD) direction = "under";
+    else return undefined;   // ~Even → no badge
+
     const allBooks = sharpByKey.get(`${playerId}|${propType}`);
     if (!allBooks) return undefined;
 
@@ -501,28 +510,20 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
     if (books.size < 2) return undefined;   // need 2+ qualifying real books
 
-    const overBooks: string[] = [];
-    const underBooks: string[] = [];
+    // Corroborating books: projection sits on the edge's side of the line.
+    const corroborating: string[] = [];
     for (const [book, line] of books) {
-      if (projection > line) overBooks.push(book);
-      else if (projection < line) underBooks.push(book);
-      // proj === line → push: counted in total, not in either direction
+      const onSide = direction === "over" ? projection > line : projection < line;
+      if (onSide) corroborating.push(book);
     }
-    const total = books.size;
-    let direction: "over" | "under";
-    let agreeing: string[];
-    if (overBooks.length > underBooks.length) {
-      direction = "over";
-      agreeing = overBooks;
-    } else if (underBooks.length > overBooks.length) {
-      direction = "under";
-      agreeing = underBooks;
-    } else {
-      return undefined;   // even split (or all pushes) → no consensus
-    }
-    if (agreeing.length < 2) return undefined;
+    if (corroborating.length < 2) return undefined;
 
-    return { agree: agreeing.length, total, direction, books: agreeing };
+    return {
+      agree: corroborating.length,
+      total: books.size,
+      direction,
+      books: corroborating,
+    };
   }
 
   // Group by prop_type → game_id → players. Pure presentation — no math.
@@ -572,9 +573,10 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           oppContext: oppKByPlayer.has(r.player_id)
             ? { kRate: oppKByPlayer.get(r.player_id)!, lhh: null, rhh: null }
             : undefined,
-          // Multi-book sharp agreement for THIS prop (feature 5). undefined
-          // unless >= 2 real books lean the model's way.
-          sharpAgreement: computeSharp(r.player_id, propType, r.projection),
+          // Multi-book sharp agreement for THIS prop (feature 5). Direction
+          // comes from the (signed) edge — same value EdgeDetail uses — so
+          // the badge agrees with the arrow and never fires on ~Even rows.
+          sharpAgreement: computeSharp(r.player_id, propType, r.projection, e?.edge),
         });
       }
       const sorted = [...byGame.values()].sort(
@@ -639,8 +641,9 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         gameId: proj.game_id,
         matchup,
         gradedStarts: 0, // enriched below in ONE query for the top-5
-        // Multi-book sharp agreement for this featured pitcher+prop (feature 5).
-        sharpAgreement: computeSharp(e.player_id, propType, proj.projection),
+        // Multi-book sharp agreement (feature 5). Direction from the signed
+        // edge (e.edge), so it matches this play's lean and never ~Even.
+        sharpAgreement: computeSharp(e.player_id, propType, proj.projection, e.edge),
       };
     })
     .filter((p): p is FeaturedPlay => p !== null)
