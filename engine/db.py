@@ -256,6 +256,45 @@ def get_projection_count_for_date(
         return 0
 
 
+def get_projection_player_ids_for_date(
+    date_str: str, prop_type: str
+) -> set[int]:
+    """Set of player_ids with a projection for (date, prop_type).
+
+    Used by main.py's stale-detection in the refresh-mode skip path:
+    when today's probable starter ids don't overlap with the existing
+    strikeouts-projection ids, the projections were written by a prior
+    cron run that fetched the WRONG slate (the 9 PM ET / 1 AM UTC
+    timezone-disagreement bug). The pipeline then rebuilds rather than
+    skip. Returns an empty set on any error so the caller falls back to
+    the safer rebuild path.
+    """
+    try:
+        # Paginate so a 200-player hitter prop doesn't get truncated to 1000.
+        page_size = 1000
+        all_ids: set[int] = set()
+        for page in range(20):
+            start = page * page_size
+            end = start + page_size - 1
+            resp = (
+                _client()
+                .table("projections")
+                .select("player_id")
+                .eq("projection_date", date_str)
+                .eq("prop_type", prop_type)
+                .range(start, end)
+                .execute()
+            )
+            batch = resp.data or []
+            for r in batch:
+                all_ids.add(int(r["player_id"]))
+            if len(batch) < page_size:
+                break
+        return all_ids
+    except Exception:
+        return set()
+
+
 def get_game_log_count_for_date(date_str: str) -> int:
     """Count player_game_logs rows for `date_str`.
 
@@ -353,16 +392,34 @@ def upsert_lines(rows: list[dict]) -> int:
 
 
 def get_lines_for_date(date_str: str) -> list[dict]:
-    """Return all betting line rows for a given game_date. [] on error/missing."""
+    """Return all betting line rows for a given game_date. [] on error/missing.
+
+    Paginated via .range() to walk past Supabase's 1000-row server cap. A
+    full slate produces 200+ players x 12 prop types x 9 bookmakers = ~3k
+    rows; without pagination the first 1000 (which sort as all-hitter due
+    to insertion order) come back and every pitcher prop silently produces
+    zero edges. This is the same trap get_projections_for_date paginates
+    around.
+    """
+    page_size = 1000
+    raw_rows: list[dict] = []
     try:
-        resp = (
-            _client()
-            .table("lines")
-            .select("*")
-            .eq("game_date", date_str)
-            .execute()
-        )
-        return resp.data or []
+        client = _client()
+        for page in range(20):
+            start = page * page_size
+            end = start + page_size - 1
+            resp = (
+                client.table("lines")
+                .select("*")
+                .eq("game_date", date_str)
+                .range(start, end)
+                .execute()
+            )
+            batch = resp.data or []
+            raw_rows.extend(batch)
+            if len(batch) < page_size:
+                break
+        return raw_rows
     except Exception as exc:
         print(f"  could not fetch lines for {date_str}: {exc}")
         return []

@@ -1,7 +1,30 @@
 """Shared constants for the engine. Import from here; never redefine locally."""
 
+from datetime import date as _date, datetime as _datetime
+from zoneinfo import ZoneInfo as _ZoneInfo
+
 # Strikeout event types (Statcast)
 STRIKEOUT_EVENTS = {"strikeout", "strikeout_double_play"}
+
+
+# ─── timezone helpers ────────────────────────────────────────────────────────
+#
+# The engine runs on UTC infrastructure (GitHub Actions, Vercel) but every
+# MLB-side date (statsapi.schedule, ParlayAPI game_date, baseball convention
+# generally) is anchored on ET. Using Python's bare date.today() returns the
+# UTC date, which silently disagrees with the MLB API any time it's < 4 AM
+# UTC (= 11/midnight ET). That's exactly when the 9 PM ET cron fires, so
+# without an ET-aware helper the late-evening run writes the WRONG slate's
+# pitchers under "today's" projection_date.
+
+_ET = _ZoneInfo("America/New_York")
+
+
+def et_today() -> _date:
+    """Today's date in America/New_York. Use this anywhere we need to align
+    with statsapi.schedule()'s implicit ET anchor — i.e. nearly everywhere
+    the engine cares about "today's slate"."""
+    return _datetime.now(_ET).date()
 
 # Baseline projection parameters
 LOOKBACK_DAYS = 30       # days of history to pull for each pitcher

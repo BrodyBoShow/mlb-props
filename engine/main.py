@@ -20,7 +20,7 @@ to the DB.
 
 import time
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pybaseball
 
@@ -34,7 +34,7 @@ import fetch
 import grade
 import lines
 import model as mlb_model
-from constants import BLEND_BASELINE_WEIGHT, BLEND_MODEL_WEIGHT
+from constants import BLEND_BASELINE_WEIGHT, BLEND_MODEL_WEIGHT, et_today
 
 
 # ─── blend helper (unchanged, just imports constants now) ────────────────────
@@ -83,7 +83,7 @@ def _grade_previous_slate() -> None:
     Fetches yesterday's projection rows ONCE and reuses them for both the
     pitcher and hitter grading passes (each pass filters internally).
     """
-    yesterday_str = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday_str = (et_today() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     already_graded = db.get_game_log_count_for_date(yesterday_str)
     if already_graded > 0:
@@ -148,17 +148,34 @@ def _run_pitcher_pipeline(
     projections list is fine — _run_lines_and_edges() re-fetches from the
     DB in refresh mode so edges still compute.
     """
-    today_str = date.today().strftime("%Y-%m-%d")
+    today_str = et_today().strftime("%Y-%m-%d")
     existing = db.get_projection_count_for_date(today_str)
     name_to_id = {
         s["full_name"]: s["player_id"] for s in starters if s.get("full_name")
     }
     if existing >= 20:
+        # Stale-detection: only skip when the existing strikeouts projection
+        # ids actually match today's probable starters. If they don't, the
+        # projections were written by an earlier cron whose date/slate
+        # alignment was wrong (the 9 PM ET / 1 AM UTC timezone bug), and
+        # we rebuild instead of perpetuating the bad data.
+        existing_ids = db.get_projection_player_ids_for_date(today_str, "strikeouts")
+        current_ids = {s["player_id"] for s in starters if s.get("player_id")}
+        overlap = existing_ids & current_ids
+        threshold = max(1, int(0.8 * len(current_ids))) if current_ids else 1
+        if len(overlap) >= threshold:
+            print(
+                f"  {existing} projections already exist for {today_str} -- "
+                f"skipping pitcher baseline + model "
+                f"({len(overlap)}/{len(current_ids)} starters match stored projections)"
+            )
+            return [], name_to_id, 0
         print(
-            f"  {existing} projections already exist for {today_str} -- "
-            f"skipping pitcher baseline + model"
+            f"  WARNING: stored projections for {today_str} appear stale "
+            f"({len(overlap)}/{len(current_ids)} starter overlap, "
+            f"{len(existing_ids)} stored strikeouts ids vs "
+            f"{len(current_ids)} current starters) -- rebuilding"
         )
-        return [], name_to_id, 0
 
     # ── strikeouts: baseline + optional XGBoost blend ───────────────────────
     # The XGBoost predict() path already does a single bulk Statcast fetch.
@@ -176,7 +193,7 @@ def _run_pitcher_pipeline(
         print("  no trained model — using baseline only")
         model_projections = []
         print("  bulk Statcast fetch (for baseline)...")
-        bulk_df = mlb_model._fetch_bulk_statcast(date.today())
+        bulk_df = mlb_model._fetch_bulk_statcast(et_today())
 
     print("Building baseline strikeout projections...")
     base_projections = baseline.build_strikeout_projections(starters, bulk_df=bulk_df)
@@ -255,16 +272,29 @@ def _run_hitter_pipeline(
     )
 
     # Skip path: if today's hitter projections already exist (>= 100 rows
-    # for hitter_hits), bail out of the baseline builders. The names are
-    # already in name_to_id so lines + edges still work.
-    today_str = date.today().strftime("%Y-%m-%d")
+    # for hitter_hits) AND the stored player_ids overlap with today's
+    # lineup, bail out of the baseline builders. The overlap check is
+    # the same stale-detection used in _run_pitcher_pipeline — without it,
+    # a prior cron's wrong-slate projections would persist forever once
+    # the count threshold was crossed.
+    today_str = et_today().strftime("%Y-%m-%d")
     existing_hitter = db.get_projection_count_for_date(today_str, "hitter_hits")
     if existing_hitter >= 100:
+        existing_ids = db.get_projection_player_ids_for_date(today_str, "hitter_hits")
+        current_ids = {p["player_id"] for p in lineup_players if p.get("player_id")}
+        overlap = existing_ids & current_ids
+        threshold = max(1, int(0.8 * len(current_ids))) if current_ids else 1
+        if len(overlap) >= threshold:
+            print(
+                f"  {existing_hitter} hitter_hits projections already exist for "
+                f"{today_str} -- skipping hitter baseline builders "
+                f"({len(overlap)}/{len(current_ids)} lineup players match stored)"
+            )
+            return [], len(lineup_players)
         print(
-            f"  {existing_hitter} hitter_hits projections already exist for "
-            f"{today_str} -- skipping hitter baseline builders"
+            f"  WARNING: stored hitter projections for {today_str} appear stale "
+            f"({len(overlap)}/{len(current_ids)} lineup overlap) -- rebuilding"
         )
-        return [], len(lineup_players)
 
     hitter_projections: list[dict] = []
     hitter_hit_rows: list[dict] = []
@@ -317,7 +347,7 @@ def _run_lines_and_edges(
     has no effect on what the frontend reads.
     """
     try:
-        today_str = date.today().strftime("%Y-%m-%d")
+        today_str = et_today().strftime("%Y-%m-%d")
 
         # Refresh mode: rebuild all_projections from the DB so edges have
         # something to compare lines against. Inject projection_date so
@@ -331,7 +361,7 @@ def _run_lines_and_edges(
             )
 
         print("Fetching prop lines from ParlayAPI...")
-        line_rows = lines.fetch_prop_lines(name_to_id, date.today())
+        line_rows = lines.fetch_prop_lines(name_to_id, et_today())
         n_lines = db.upsert_lines(line_rows)
         print(f"  upserted {n_lines} lines across {len(lines.BOOKMAKERS)} bookmakers")
 
@@ -360,7 +390,7 @@ def _run_calibration(all_projections: list[dict]) -> None:
     small as the season accumulates.
     """
     if not all_projections:
-        today_str = date.today().strftime("%Y-%m-%d")
+        today_str = et_today().strftime("%Y-%m-%d")
         existing = db.get_projections_for_date(today_str)
         all_projections = [{**p, "projection_date": today_str} for p in existing]
         print(
@@ -369,7 +399,7 @@ def _run_calibration(all_projections: list[dict]) -> None:
         )
 
     print("Computing calibration confidence scores...")
-    since = (date.today() - timedelta(days=60)).strftime("%Y-%m-%d")
+    since = (et_today() - timedelta(days=60)).strftime("%Y-%m-%d")
     logs = db.get_game_logs(since_date=since) or []
     confidence_rows = calibrate.compute_confidences(all_projections, logs)
     n_conf = db.update_confidences(confidence_rows)
@@ -390,7 +420,7 @@ def _run_future_previews() -> None:
     omits home_starter_id / away_starter_id, which upsert_games handles
     via the per-key-signature grouping in db.upsert_games).
     """
-    today = date.today()
+    today = et_today()
     for days_ahead in (1, 2, 3):
         future_date = today + timedelta(days=days_ahead)
         date_str = future_date.strftime("%Y-%m-%d")
@@ -439,7 +469,7 @@ def main() -> None:
         # Mode header: with six crons/day, only the first run of the day
         # builds projections. Subsequent runs detect existing rows and
         # skip straight to lines + edges + calibration.
-        today_str = date.today().strftime("%Y-%m-%d")
+        today_str = et_today().strftime("%Y-%m-%d")
         proj_count = db.get_projection_count_for_date(today_str)
         is_refresh = proj_count >= 20
         print(

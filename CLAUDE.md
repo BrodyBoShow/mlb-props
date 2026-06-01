@@ -269,6 +269,49 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Pitcher edges fix — three stacked bugs (this session):
+- USER REPORT: home page fetched 184 edges (per Vercel diag) but no
+  edge arrows showed on any pitcher card. Frontend JOIN logic was the
+  suspect; turned out to be three stacked engine-side bugs.
+- BUG 1 (engine/db.py: get_lines_for_date 1000-row cap).
+  Supabase / PostgREST silently caps every response at 1000 rows.
+  A full slate produces ~3k lines; the first 1000 sort as all-hitter
+  rows (insertion order, hitters projected later in the cron). All
+  pitcher lines were silently truncated out of the slice that
+  edge.compute_edges received, so zero pitcher edges were ever
+  computed even though the lines existed in the DB. Fixed with the
+  same .range() paginator used in get_projections_for_date.
+- BUG 2 (timezone disagreement at the 9 PM ET / 1 AM UTC cron).
+  At 1 AM UTC, Python's date.today() returns the UTC date but
+  statsapi.schedule() defaults to ET's date — they disagree any time
+  it's after 8 PM ET and before midnight UTC. The 9 PM ET cron was
+  storing the WRONG slate's pitchers under "today's" projection_date
+  (e.g. May 31's pitchers under projection_date='2026-06-01'). Lines
+  for the real June 1 slate are stored correctly (ParlayAPI returns
+  game_date alongside each row), so the two were disjoint sets of
+  player_ids and the edge JOIN produced zero matches.
+- Fix: new et_today() helper in constants.py (zoneinfo America/
+  New_York). Replaced every date.today() in engine/main.py with it.
+  Pipeline now uses ET-anchored "today" everywhere it talks to MLB
+  data, eliminating the disagreement at the cron boundary.
+- BUG 3 (stale-data skip bypass).
+  The pitcher / hitter pipelines skipped expensive work when
+  >= 20 / >= 100 projections existed for today. With Bug 2 above,
+  those projections were the WRONG slate's — but the skip still
+  fired, so the bad data persisted across every subsequent cron.
+- Fix: new db.get_projection_player_ids_for_date(date, prop_type)
+  helper. Both _run_pitcher_pipeline and _run_hitter_pipeline now
+  compare the stored projection player_ids against the just-fetched
+  probable-starters / lineup-players. They only skip when >= 80% of
+  the current slate's player_ids overlap with what's stored;
+  otherwise they emit a "stale, rebuilding" WARNING and rebuild.
+- Verified end-to-end: pipeline run detected 0/17 starter overlap on
+  pitcher projections for 2026-06-01 (the stale May 31 data),
+  rebuilt them, kept the hitter projections (36/45 match), produced
+  58 fresh edges. Post-run DB sample for 2026-06-01:
+    strikeouts:13  hits_allowed:14  walks:5  earned_runs:14
+    outs_recorded:12 + 184 hitter edges as before.
+
 "Last updated" reflects refresh-only runs (this session):
 - web/app/page.tsx: the timestamp shown under "Last updated" used to
   read only projections.updated_at, which is bumped solely by full-
