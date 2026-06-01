@@ -12,11 +12,13 @@ const ALL_PROP_TYPES: PropType[] = [
   "walks",
   "earned_runs",
   "outs_recorded",
+  "pitcher_fantasy_score",
   "hitter_hits",
   "hitter_total_bases",
   "hitter_rbis",
   "hitter_runs",
   "hitter_home_runs",
+  "hitter_fantasy_score",
 ];
 
 // Simple guard for URL ?date= param — must be YYYY-MM-DD.

@@ -12,19 +12,7 @@ import statsapi
 import db
 import stats
 from fantasy_score import hitter_fantasy_score, pitcher_fantasy_score
-
-
-def _parse_innings(ip_str: str) -> int:
-    """Convert an inningsPitched string to total outs recorded.
-
-    Baseball notation: "6.2" means 6 full innings + 2 outs = 20 outs.
-    The fractional part is *outs*, not tenths of an inning.
-    """
-    try:
-        whole, partial = str(ip_str).split(".")
-        return int(whole) * 3 + int(partial)
-    except Exception:
-        return 0
+from stats import _parse_innings
 
 
 def _boxscore(game_id: int) -> dict:

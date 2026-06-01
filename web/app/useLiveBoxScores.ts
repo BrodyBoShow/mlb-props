@@ -103,7 +103,14 @@ export function useLiveBoxScores(liveGamePks: number[]): LiveStatsMap {
               outs: hasPitching ? Number(pitching.outs ?? 0) : undefined,
               // batter
               hits: hasBatting ? Number(batting.hits ?? 0) : undefined,
-              totalBases: hasBatting ? Number(batting.totalBases ?? 0) : undefined,
+              // batting.totalBases is NOT in the MLB boxscore response — derive
+              // it from components (hits already includes 1B/2B/3B/HR).
+              totalBases: hasBatting
+                ? Number(batting.hits ?? 0)
+                  + Number(batting.doubles ?? 0)
+                  + 2 * Number(batting.triples ?? 0)
+                  + 3 * Number(batting.homeRuns ?? 0)
+                : undefined,
               rbi: hasBatting ? Number(batting.rbi ?? 0) : undefined,
               runs: hasBatting ? Number(batting.runs ?? 0) : undefined,
               homeRuns: hasBatting ? Number(batting.homeRuns ?? 0) : undefined,
