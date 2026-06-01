@@ -111,6 +111,25 @@ export type StatLine = {
 // Map shape: gamePk -> personId (MLBAM = our players.player_id) -> StatLine.
 export type LiveStatsMap = Map<number, Map<number, StatLine>>;
 
+// ── featured plays (top-of-board highlights) ────────────────────────────────
+
+// One "best of the day" play selected from the edges table by the strict
+// filters in web/app/page.tsx (real two-sided book, edge >= 0.12, clean
+// pitcher props only, meaningful lean). Built server-side from already-
+// fetched edge + projection data and passed through PropBoard.
+export type FeaturedPlay = {
+  playerId: number;
+  playerName: string;
+  propType: PropType;
+  projection: number;
+  line: number;
+  edge: number;        // always > 0 — under-leans flip the sign at build time
+  bookmaker: string;
+  lean: "over" | "under";
+  gameId: number;
+  matchup: string;
+};
+
 // Live status for one MLB game. The MLB Stats API gamePk matches our
 // projections.game_id (and games.game_id) one-to-one.
 export type GameStatus = {

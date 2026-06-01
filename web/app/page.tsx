@@ -1,9 +1,56 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
 import { ALL_PROP_TYPES } from "@/lib/constants";
-import type { ByProp, GameGroup } from "@/lib/types";
+import type { ByProp, FeaturedPlay, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
+
+// ── Featured-play filter constants ───────────────────────────────────────────
+// Tight filters — featuring a marginal play on the top of the home page is
+// worse than featuring nothing. See the per-filter comments at the build
+// site below for the reasoning on each threshold.
+
+// Real two-sided sportsbooks only. DFS apps (PrizePicks, Underdog, Sleeper,
+// Betr) don't post symmetric over/under markets, so the de-vig math behind
+// the `edge` field doesn't apply to them and any "edge" we'd surface would
+// be against an artificial baseline. The featured section requires a real
+// book to anchor the claim.
+const FEATURED_BOOKS: ReadonlySet<string> = new Set([
+  "pinnacle", "draftkings", "fanduel", "bet365", "caesars",
+]);
+
+// Clean pitcher props only. We deliberately exclude:
+//   - walks / earned_runs: thin two-sided line coverage; the few lines that
+//     exist often come from a single book, leaving the de-vig fragile.
+//   - all hitter props: 1.5-line dominance + DFS-skewed coverage create a
+//     systemic under-lean bias that the Model Tracker section is designed
+//     to surface, not the Featured Plays section to promote.
+//   - fantasy_score: PrizePicks-only lines (PRIZEPICKS_ONLY_PROPS enforced
+//     at ingest), so no two-sided baseline exists.
+const FEATURED_PROPS: ReadonlySet<PropType> = new Set([
+  "strikeouts", "hits_allowed", "outs_recorded",
+]);
+
+// Edge threshold is set ABOVE the regular display threshold (0.10) so we
+// don't promote borderline calls. 0.12 = a clear vote for one side after
+// vig is removed.
+const FEATURED_MIN_EDGE = 0.12;
+
+// |projection - line| floor. The model can be technically "leaning over"
+// while sitting 0.05 away from the line — that's not a meaningful call,
+// it's noise. 0.3 keeps featured plays to ones where the projection is
+// visibly off the line.
+const FEATURED_MIN_LEAN = 0.3;
+
+// Same MIN_LINE thresholds the /results page uses to filter alternate
+// lines out of the main-market hit rate. Featured plays must come from
+// the main market for the same reason — alt lines are easier to "hit"
+// and would inflate the apparent edge.
+const FEATURED_MIN_LINE: Partial<Record<PropType, number>> = {
+  strikeouts:    3.5,
+  hits_allowed:  2.5,
+  outs_recorded: 10.5,
+};
 
 // Always read fresh from the DB at request time — the cron updates rows
 // throughout the day. No caching of stale projections.
@@ -47,6 +94,7 @@ type SlateResult = {
   nextDate: string | null;
   byProp: ByProp;
   futureGames: FutureGame[] | null;
+  featuredPlays: FeaturedPlay[];
   // True when at least one projection_date in the DB is >= today (ET).
   // Used by the page component to suppress the "stale" banner when the
   // user is intentionally browsing a past date but current data exists.
@@ -63,6 +111,7 @@ const emptyResult = (date: string | null = null): SlateResult => ({
     ALL_PROP_TYPES.map((p) => [p, []])
   ) as unknown as ByProp,
   futureGames: null,
+  featuredPlays: [],
   hasCurrentProjections: false,
 });
 
@@ -255,6 +304,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         ALL_PROP_TYPES.map((p) => [p, []]),
       ) as unknown as ByProp,
       futureGames: (futureGameRows as FutureGame[] | null) ?? null,
+      featuredPlays: [],
       hasCurrentProjections,
     };
   }
@@ -313,6 +363,66 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     })
   ) as unknown as ByProp;
 
+  // ── Featured Plays ────────────────────────────────────────────────────────
+  // Build from the already-fetched edgeData + a (player_id, prop_type) index
+  // over the projection rows so we have player names + matchup strings
+  // without another DB round-trip.
+  //
+  // edge.edge in the DB is the model's over-probability minus the de-vigged
+  // fair over-probability — positive means the model is more bullish on the
+  // over than the book is. A featured under-lean is mathematically the same
+  // signal flipped: |edge| past the threshold, with the projection sitting
+  // below the line. We absolute-value the displayed edge so the card always
+  // reads as a positive "edge against the line" regardless of direction.
+  const projIndex = new Map<string, ProjectionRow>();
+  for (const r of rows) {
+    projIndex.set(`${r.player_id}|${r.prop_type}`, r);
+  }
+  const featuredPlays: FeaturedPlay[] = edgeData
+    .map((e): FeaturedPlay | null => {
+      if (!FEATURED_BOOKS.has(e.bookmaker)) return null;
+      const propType = e.prop_type as PropType;
+      if (!FEATURED_PROPS.has(propType)) return null;
+      const edge = e.edge;
+      if (edge === null || edge === undefined) return null;
+      // Edge magnitude must clear the featured threshold AFTER taking
+      // absolute value — large negative edges (model favors UNDER strongly)
+      // are just as featurable as large positive ones.
+      const absEdge = Math.abs(edge);
+      if (absEdge < FEATURED_MIN_EDGE) return null;
+      const lineMin = FEATURED_MIN_LINE[propType];
+      if (lineMin === undefined || e.line < lineMin) return null;
+
+      const proj = projIndex.get(`${e.player_id}|${e.prop_type}`);
+      if (!proj) return null;
+      // Meaningful lean: the projection must sit at least FEATURED_MIN_LEAN
+      // away from the line. Keeps the section from featuring plays where
+      // the model is technically off the line but barely.
+      if (Math.abs(proj.projection - e.line) < FEATURED_MIN_LEAN) return null;
+
+      const lean: "over" | "under" =
+        proj.projection > e.line ? "over" : "under";
+      const matchup = proj.games
+        ? `${proj.games.away_team} @ ${proj.games.home_team}`
+        : `Game ${proj.game_id}`;
+
+      return {
+        playerId: e.player_id,
+        playerName: proj.players?.full_name ?? "Unknown player",
+        propType,
+        projection: proj.projection,
+        line: e.line,
+        edge: absEdge,
+        bookmaker: e.bookmaker,
+        lean,
+        gameId: proj.game_id,
+        matchup,
+      };
+    })
+    .filter((p): p is FeaturedPlay => p !== null)
+    .sort((a, b) => b.edge - a.edge)
+    .slice(0, 5);
+
   return {
     date: selectedDate,
     updatedAt,
@@ -320,6 +430,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     nextDate,
     byProp,
     futureGames: null,
+    featuredPlays,
     hasCurrentProjections,
   };
 }
@@ -360,6 +471,7 @@ export default async function Home({
     nextDate,
     byProp,
     futureGames,
+    featuredPlays,
     hasCurrentProjections,
   } = await getSlate(dateOverride);
 
@@ -416,6 +528,7 @@ export default async function Home({
           prevDate={prevDate}
           nextDate={nextDate}
           byProp={byProp}
+          featuredPlays={featuredPlays}
         />
       ) : date && futureGames !== null ? (
         <FutureSlate

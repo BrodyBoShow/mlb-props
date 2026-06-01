@@ -269,6 +269,42 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Featured Plays section (this session):
+- web/lib/types.ts: new FeaturedPlay type (player + matchup + proj +
+  line + signed-positive edge + lean direction + book + ids).
+- web/app/FeaturedPlays.tsx: new client component. Renders a header +
+  responsive grid of FeaturedPlayCard tiles (1 col mobile, 2 cols sm,
+  3 cols lg). Returns null when plays.length < 3 — "nothing" is better
+  than "marginal" at the top of the page. Card layout: player name +
+  matchup at top, prop label upper-right, divider, then Proj/Line on
+  one row and lean arrow + Edge on the next. Lean arrow ▲ OVER in
+  emerald, ▼ UNDER in red, edge value always emerald (we abs-value
+  the edge at build time so both lean directions surface symmetrically).
+- web/app/page.tsx: built up-front constants for the filter
+  (FEATURED_BOOKS, FEATURED_PROPS, FEATURED_MIN_EDGE, FEATURED_MIN_LEAN,
+  FEATURED_MIN_LINE) with comments explaining each exclusion. After
+  building byProp, indexes projections by (player_id, prop_type) and
+  filters edgeData through:
+  * book ∈ {pinnacle, draftkings, fanduel, bet365, caesars}
+    (DFS apps don't post symmetric markets → no de-vig)
+  * prop ∈ {strikeouts, hits_allowed, outs_recorded}
+    (walks/earned_runs too thin; hitter props lean-biased; fantasy
+    PrizePicks-only)
+  * |edge| >= 0.12 (above the 0.10 display threshold)
+  * line >= per-prop MIN_LINE (3.5 / 2.5 / 10.5)
+  * |projection - line| >= 0.3 (meaningful lean)
+  Sorted by abs(edge) desc, sliced to top 5. SlateResult and
+  emptyResult plumbed for featuredPlays through both return paths
+  (data and future-preview).
+- web/app/PropBoard.tsx: accepts featuredPlays prop and renders
+  <FeaturedPlays> between DateNav and the prop selector tabs. Prop is
+  defaulted to [] so the FutureSlate path (which never sets it) keeps
+  type-checking.
+- Verified: 20 qualifying plays for the current 2026-06-01 slate;
+  top 5 surface with real names (Luinder Avila, Ty Madden, Jacob
+  deGrom, Kyle Freeland, ...) and edges from 0.36 to 0.55 against
+  Pinnacle de-vigged baselines. tsc --noEmit clean.
+
 Pitcher edges fix — three stacked bugs (this session):
 - USER REPORT: home page fetched 184 edges (per Vercel diag) but no
   edge arrows showed on any pitcher card. Frontend JOIN logic was the
