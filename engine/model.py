@@ -20,11 +20,16 @@ No pkl file is written or read; the model retrains on every Actions run.
 from datetime import date, timedelta
 from functools import lru_cache
 
+from typing import TYPE_CHECKING
+
 import db
 import pandas as pd
 import pybaseball
 import statsapi
 from xgboost import XGBRegressor
+
+if TYPE_CHECKING:
+    from schemas import PitcherFeatureRow, ProjectionRow
 
 from constants import (
     LEAGUE_AVG_K_PCT,
@@ -105,7 +110,7 @@ def _build_pitcher_features_from_df(
     opp_team_name: str,
     projection_date: date,
     home_team: str = "",
-) -> dict | None:
+) -> "PitcherFeatureRow | None":
     """Compute the model feature row for one pitcher from a pre-fetched DataFrame.
 
     Filters bulk_df to rows where pitcher == player_id. Returns None when the
@@ -222,7 +227,7 @@ def _build_pitcher_features(
     home_away: str,
     opp_team_name: str,
     projection_date: date,
-) -> dict | None:
+) -> "PitcherFeatureRow | None":
     """Fetch one pitcher's Statcast slice and compute features.
 
     KEPT for use as a defensive fallback when the bulk Statcast fetch
@@ -373,7 +378,7 @@ def predict(
     starters: list[dict],
     games: list[dict],
     projection_date: date | None = None,
-) -> tuple[list[dict], pd.DataFrame]:
+) -> "tuple[list[ProjectionRow], pd.DataFrame]":
     """Run the trained model and return projection rows + the bulk Statcast frame.
 
     Returns (rows, bulk_df). The caller can hand bulk_df to baseline.build_

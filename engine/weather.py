@@ -22,12 +22,13 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 
 from constants import IS_DOME, VENUE_COORDS
+from schemas import WeatherFields
 
 _OWM_URL = "https://api.openweathermap.org/data/2.5/forecast"
 _MISSING_KEY_NOTED = False
 
 
-def _dome_weather() -> dict:
+def _dome_weather() -> WeatherFields:
     """Neutral indoor baseline for dome / closed-roof venues."""
     return {
         "temperature_f":     72.0,
@@ -38,7 +39,7 @@ def _dome_weather() -> dict:
     }
 
 
-def _empty_weather(is_dome: bool = False) -> dict:
+def _empty_weather(is_dome: bool = False) -> WeatherFields:
     """Used when there's no API key or the call failed. is_dome is still
     populated since we know it from the home team string alone."""
     return {
@@ -70,7 +71,7 @@ def _kelvin_to_f(k: float) -> float:
 def get_game_weather(
     home_team: str,
     game_time_utc: datetime | None,
-) -> dict:
+) -> WeatherFields:
     """Forecast for `home_team`'s venue at `game_time_utc`.
 
     Returns {temperature_f, wind_speed_mph, wind_dir, precipitation_pct,

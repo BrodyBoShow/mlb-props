@@ -11,8 +11,12 @@ Reads PARLAY_API_KEY from the environment (via python-dotenv).
 import os
 import unicodedata
 from datetime import date
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from schemas import LineRow
 
 # Import defensively: betting lines must never break the projection pipeline.
 # main.py imports this module unconditionally, so a missing parlay-api package
@@ -143,7 +147,7 @@ def _normalize(name: str) -> str:
 def fetch_prop_lines(
     name_to_id: dict[str, int],   # full_name -> player_id (pitchers + hitters)
     game_date: date,
-) -> list[dict]:
+) -> list["LineRow"]:
     """Fetch all pitcher + hitter prop markets in one ParlayAPI call.
 
     name_to_id covers both projected starters and confirmed lineup hitters.

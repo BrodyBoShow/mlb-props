@@ -6,9 +6,20 @@ pipeline updates rows in place and never creates duplicates.
 
 import os
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 from supabase import Client, create_client
+
+if TYPE_CHECKING:
+    from schemas import (
+        EdgeRow,
+        HitterGameLogRow,
+        LineRow,
+        PitcherGameLogRow,
+        ProjectionContextRow,
+        ProjectionRow,
+    )
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -89,7 +100,7 @@ def upsert_games(rows: list[dict]) -> int:
     return len(rows)
 
 
-def get_projections_for_date(date_str: str) -> list[dict]:
+def get_projections_for_date(date_str: str) -> "list[ProjectionContextRow]":
     """Return projection rows for a given date (for grading), all prop types.
 
     Joins games (home_team, away_team) and players (team) so the grader can
@@ -215,7 +226,9 @@ _CONTEXT_COLS = (
 )
 
 
-def upsert_game_logs(rows: list[dict]) -> int:
+def upsert_game_logs(
+    rows: "list[PitcherGameLogRow] | list[HitterGameLogRow] | list[dict]",
+) -> int:
     """Upsert graded game log rows on (player_id, game_id). Re-runs are safe.
 
     Defensive: if the player_game_logs table is on a pre-migration schema
@@ -433,7 +446,7 @@ def get_game_logs(since_date: str | None = None) -> list[dict] | None:
         return None
 
 
-def upsert_projections(rows: list[dict]) -> int:
+def upsert_projections(rows: "list[ProjectionRow] | list[dict]") -> int:
     """Upsert projection rows on the composite primary key.
 
     (game_id, player_id, prop_type, projection_date) — re-runs update in place.
@@ -446,7 +459,7 @@ def upsert_projections(rows: list[dict]) -> int:
     return len(rows)
 
 
-def upsert_lines(rows: list[dict]) -> int:
+def upsert_lines(rows: "list[LineRow] | list[dict]") -> int:
     """Upsert betting line rows on (player_id, prop_type, bookmaker, game_date).
 
     Idempotent — re-running the job refreshes each book's line in place.
@@ -493,7 +506,7 @@ def get_lines_for_date(date_str: str) -> list[dict]:
         return []
 
 
-def upsert_edges(rows: list[dict]) -> int:
+def upsert_edges(rows: "list[EdgeRow] | list[dict]") -> int:
     """Upsert edge rows on (player_id, prop_type, game_date, bookmaker).
 
     Idempotent — re-running the job refreshes each edge in place.

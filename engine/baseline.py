@@ -10,8 +10,12 @@ projections table: game_id, player_id, prop_type, projection, projection_date.
 """
 
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
 import pybaseball
+
+if TYPE_CHECKING:
+    from schemas import ProjectionRow
 
 import stats
 from constants import (
@@ -77,7 +81,7 @@ def build_strikeout_projections(
     starters: list[dict],
     projection_date: date | None = None,
     bulk_df=None,
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """One strikeout projection per probable starter with recent Statcast data.
 
     bulk_df: optional pre-fetched Statcast DataFrame (see model._fetch_bulk_statcast).
@@ -118,7 +122,7 @@ def _build_from_starts(
     prop_type: str,
     label: str,
     projection_date: date | None = None,
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Generic weighted-average builder using stats.get_pitcher_starts().
 
     field:     key in the dicts returned by stats.get_pitcher_starts()
@@ -152,28 +156,28 @@ def _build_from_starts(
 
 def build_hits_allowed_projections(
     starters: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for hits allowed per start."""
     return _build_from_starts(starters, "hits_allowed", "hits_allowed", "H", projection_date)
 
 
 def build_walks_projections(
     starters: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for walks (BB) per start."""
     return _build_from_starts(starters, "walks", "walks", "BB", projection_date)
 
 
 def build_earned_runs_projections(
     starters: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for earned runs per start."""
     return _build_from_starts(starters, "earned_runs", "earned_runs", "ER", projection_date)
 
 
 def build_outs_recorded_projections(
     starters: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for outs recorded per start."""
     return _build_from_starts(starters, "outs_recorded", "outs_recorded", "outs", projection_date)
 
@@ -182,7 +186,7 @@ def build_outs_recorded_projections(
 
 def build_pitcher_fantasy_score_projections(
     starters: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for a pitcher's PrizePicks fantasy score.
 
     Computes per-start FP from the components we already extract for every
@@ -246,7 +250,7 @@ def _build_hitter_from_games(
     prop_type: str,
     label: str,
     projection_date: date | None = None,
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Generic weighted-average builder for hitters using stats.get_hitter_games().
 
     Mirrors _build_from_starts but for lineup hitters. Each player dict must
@@ -283,42 +287,42 @@ def _build_hitter_from_games(
 
 def build_hitter_hits_projections(
     lineup_players: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for a hitter's hits per game."""
     return _build_hitter_from_games(lineup_players, "hits", "hitter_hits", "H", projection_date)
 
 
 def build_hitter_total_bases_projections(
     lineup_players: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for a hitter's total bases per game."""
     return _build_hitter_from_games(lineup_players, "total_bases", "hitter_total_bases", "TB", projection_date)
 
 
 def build_hitter_rbis_projections(
     lineup_players: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for a hitter's RBIs per game."""
     return _build_hitter_from_games(lineup_players, "rbis", "hitter_rbis", "RBI", projection_date)
 
 
 def build_hitter_runs_projections(
     lineup_players: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for a hitter's runs per game."""
     return _build_hitter_from_games(lineup_players, "runs", "hitter_runs", "R", projection_date)
 
 
 def build_hitter_home_runs_projections(
     lineup_players: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for a hitter's home runs per game."""
     return _build_hitter_from_games(lineup_players, "home_runs", "hitter_home_runs", "HR", projection_date)
 
 
 def build_hitter_fantasy_score_projections(
     lineup_players: list[dict], projection_date: date | None = None
-) -> list[dict]:
+) -> "list[ProjectionRow]":
     """Weighted rolling projection for a hitter's PrizePicks fantasy score.
 
     Computes per-game FP from each game's full component set (singles,

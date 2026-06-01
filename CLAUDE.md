@@ -269,6 +269,54 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+TypedDict data contracts in engine/schemas.py (this session):
+- New file engine/schemas.py — SINGLE SOURCE OF TRUTH for every dict
+  that flows between engine modules. Named `schemas` (not `types`)
+  because `engine/types.py` would shadow Python's stdlib `types`
+  module on sys.path and break third-party imports.
+- 8 TypedDicts cover every cross-module dict shape:
+  * PitcherGameLogRow — 44 fields written by grade.grade_yesterday
+  * HitterGameLogRow  — 42 fields written by grade.grade_hitters_yesterday
+  * ProjectionRow     — 5 fields written by baseline.* / model.predict
+  * ProjectionContextRow — augmented READ-side projection shape
+    returned by db.get_projections_for_date (the 5 write fields +
+    home_team / away_team / home_away / start_time joined from games)
+  * LineRow           — 8 fields written by lines.fetch_prop_lines
+  * EdgeRow           — 11 fields written by edge.compute_edges
+  * WeatherFields     — 5 fields returned by weather.get_game_weather
+  * PitcherFeatureRow — 14 fields returned by model._build_pitcher_
+    features_from_df (the 11 in FEATURE_COLS + 3 returned-but-unused)
+- All TypedDicts use total=False so downstream code that does
+  dict.get("optional_key") type-checks cleanly. Notes on each field
+  state when the key is actually populated.
+- Annotated producer / consumer signatures (annotations ONLY, no
+  logic changes):
+  * grade.grade_yesterday: -> list[PitcherGameLogRow]
+  * grade.grade_hitters_yesterday: -> list[HitterGameLogRow]
+  * weather._dome_weather / _empty_weather / get_game_weather:
+    -> WeatherFields
+  * lines.fetch_prop_lines: -> list[LineRow]
+  * edge.compute_edges: (list[ProjectionContextRow], list[LineRow])
+    -> list[EdgeRow]
+  * baseline.build_*_projections (14 builders): -> list[ProjectionRow]
+  * model._build_pitcher_features_from_df / _build_pitcher_features:
+    -> PitcherFeatureRow | None
+  * model.predict: -> tuple[list[ProjectionRow], pd.DataFrame]
+  * db.get_projections_for_date: -> list[ProjectionContextRow]
+  * db.upsert_game_logs / upsert_projections / upsert_lines /
+    upsert_edges: typed `rows` parameters
+- All schema imports in producers other than grade.py use
+  TYPE_CHECKING guards so the import only fires under a type
+  checker, never at runtime — pure annotations, zero runtime cost.
+- Mismatch flagged during analysis: ProjectionRow (write shape, 5
+  fields) and ProjectionContextRow (read shape, 9 fields) are
+  legitimately different. db.get_projections_for_date augments
+  every projection row with home_team / away_team / home_away /
+  start_time. Made explicit with two TypedDicts — not a bug.
+- Verified zero behavior change: model.FEATURE_COLS still 11,
+  python engine/main.py runs cleanly in refresh mode (348 edges
+  computed, 43.0s), all engine modules import without error.
+
 Data-foundation sprint — log every meaningful feature (this session):
 - Pure data-collection: 31 new nullable columns on player_game_logs.
   FEATURE_COLS stays at 11; model.train()/predict() behaviour is

@@ -14,9 +14,14 @@ Model over probability uses a normal approximation around the projection
 Positive edge = the model thinks the over is more likely than the book implies.
 """
 
+from typing import TYPE_CHECKING
+
 from scipy.stats import norm
 
 from constants import MIN_STD, PROP_CV
+
+if TYPE_CHECKING:
+    from schemas import EdgeRow, LineRow, ProjectionContextRow
 
 # Books we trust to form a fair-probability baseline when Pinnacle is absent.
 # DFS apps (PrizePicks/Underdog/etc.) carry no two-sided vig to remove, so
@@ -107,9 +112,9 @@ def _fair_over_prob(book_lines: dict) -> tuple[str, dict, float] | None:
 
 
 def compute_edges(
-    projections: list[dict],
-    lines: list[dict],
-) -> list[dict]:
+    projections: "list[ProjectionContextRow]",
+    lines: "list[LineRow]",
+) -> "list[EdgeRow]":
     """Compute over-edge rows by comparing projections to de-vigged market lines.
 
     projections: rows with player_id, prop_type, projection, projection_date.

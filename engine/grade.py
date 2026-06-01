@@ -23,6 +23,11 @@ from constants import (
 )
 from fantasy_score import hitter_fantasy_score, pitcher_fantasy_score
 from stats import _parse_innings
+from schemas import (
+    HitterGameLogRow,
+    PitcherGameLogRow,
+    ProjectionContextRow,
+)
 
 
 # Sleep between per-pitcher 30-day Statcast calls (Step 5). Polite to the
@@ -336,8 +341,8 @@ def _pitcher_result(box: dict, player_id: int) -> dict | None:
 
 def grade_yesterday(
     grade_date: date | None = None,
-    projections: list[dict] | None = None,
-) -> list[dict]:
+    projections: list[ProjectionContextRow] | None = None,
+) -> list[PitcherGameLogRow]:
     """Grade the previous day's slate against actual results.
 
     Returns rows shaped for player_game_logs. No DB writes here.
@@ -656,8 +661,8 @@ def _hitter_result(box: dict, player_id: int) -> dict | None:
 
 def grade_hitters_yesterday(
     grade_date: date | None = None,
-    projections: list[dict] | None = None,
-) -> list[dict]:
+    projections: list[ProjectionContextRow] | None = None,
+) -> list[HitterGameLogRow]:
     """Grade the previous day's hitter projections against actual box scores.
 
     Same shape and graceful behavior as grade_yesterday(), but for hitter prop
