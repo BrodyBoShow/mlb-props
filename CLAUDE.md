@@ -244,6 +244,26 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Home-page default-date + stale-banner fix (this session):
+- web/app/page.tsx: getSlate() now resolves the default date as the
+  EARLIEST projection_date >= todayET (ascending), falling back to the
+  absolute latest only when nothing for today-or-later exists. Replaces
+  the previous "latest projection_date desc" which silently displayed
+  yesterday's slate when the overnight cron hadn't yet produced today's
+  rows AND any past projection still won the order.
+- Two parallel date-resolution queries run up-front: one for today-or-
+  future (also doubles as the hasCurrentProjections probe) and one for
+  the absolute latest as fallback. dateOverride still wins outright so
+  › / ‹ navigation always renders the exact URL date.
+- SlateResult gains hasCurrentProjections: boolean. The stale banner
+  now requires (displayedDate < todayET) AND (!hasCurrentProjections),
+  so a user browsing a past date intentionally while today's data
+  exists does not see the misleading "today's slate updates after 8 AM
+  ET" message.
+- Both return paths from getSlate (projection-data path and
+  future-preview path) plumb hasCurrentProjections through.
+- Verified: tsc --noEmit clean.
+
 Matchup-context feature logging (this session):
 - engine/constants.py: PARK_FACTORS_HITS (31 teams) + PARK_FACTORS_K
   (sparse — only off-neutral parks listed) + get_park_factor_hits /

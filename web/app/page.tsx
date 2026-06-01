@@ -47,6 +47,10 @@ type SlateResult = {
   nextDate: string | null;
   byProp: ByProp;
   futureGames: FutureGame[] | null;
+  // True when at least one projection_date in the DB is >= today (ET).
+  // Used by the page component to suppress the "stale" banner when the
+  // user is intentionally browsing a past date but current data exists.
+  hasCurrentProjections: boolean;
 };
 
 // Empty result used when there's no data to show.
@@ -59,23 +63,49 @@ const emptyResult = (date: string | null = null): SlateResult => ({
     ALL_PROP_TYPES.map((p) => [p, []])
   ) as unknown as ByProp,
   futureGames: null,
+  hasCurrentProjections: false,
 });
 
 async function getSlate(dateOverride?: string): Promise<SlateResult> {
   const supabase = getSupabaseClient();
+  const todayET = new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/New_York",
+  });
 
-  // Resolve the date to display.
+  // Resolve the date to display. Two queries (run in parallel):
+  //   1. Earliest projection_date >= today ET — the user's "now" slate.
+  //      Doubles as the hasCurrentProjections probe.
+  //   2. Latest projection_date overall — fallback when there's no current
+  //      data (e.g. early morning before today's cron has produced rows).
+  // Explicit dateOverride (› / ‹ navigation) always wins — we render that
+  // date exactly, never redirect.
+  const [{ data: futureData }, { data: latestData }] = await Promise.all([
+    supabase
+      .from("projections")
+      .select("projection_date")
+      .gte("projection_date", todayET)
+      .order("projection_date", { ascending: true })
+      .limit(1),
+    supabase
+      .from("projections")
+      .select("projection_date")
+      .order("projection_date", { ascending: false })
+      .limit(1),
+  ]);
+
+  const todayOrFutureDate =
+    (futureData?.[0]?.projection_date as string | undefined) ?? null;
+  const latestAnyDate =
+    (latestData?.[0]?.projection_date as string | undefined) ?? null;
+  const hasCurrentProjections = todayOrFutureDate !== null;
+
   let selectedDate: string;
   if (dateOverride) {
     selectedDate = dateOverride;
   } else {
-    const { data: latest } = await supabase
-      .from("projections")
-      .select("projection_date")
-      .order("projection_date", { ascending: false })
-      .limit(1);
-    if (!latest?.[0]?.projection_date) return emptyResult();
-    selectedDate = latest[0].projection_date;
+    const resolved = todayOrFutureDate ?? latestAnyDate;
+    if (!resolved) return emptyResult();
+    selectedDate = resolved;
   }
 
   // Paginate projections + edges past Supabase's 1000-row server cap via the
@@ -196,6 +226,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         ALL_PROP_TYPES.map((p) => [p, []]),
       ) as unknown as ByProp,
       futureGames: (futureGameRows as FutureGame[] | null) ?? null,
+      hasCurrentProjections,
     };
   }
 
@@ -260,6 +291,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     nextDate,
     byProp,
     futureGames: null,
+    hasCurrentProjections,
   };
 }
 
@@ -292,12 +324,28 @@ export default async function Home({
   const dateOverride =
     rawDate && DATE_RE.test(rawDate) ? rawDate : undefined;
 
-  const { date, updatedAt, prevDate, nextDate, byProp, futureGames } =
-    await getSlate(dateOverride);
+  const {
+    date,
+    updatedAt,
+    prevDate,
+    nextDate,
+    byProp,
+    futureGames,
+    hasCurrentProjections,
+  } = await getSlate(dateOverride);
 
-  // Show a stale-data banner when the latest projection date isn't today in ET.
-  const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  const isStale = date !== null && updatedAt !== null && date < todayET;
+  // Stale banner: ONLY when the displayed date is before today AND today
+  // (or later) has no projections in the DB. When the user is browsing a
+  // past date but current data exists, suppress the banner — that's
+  // intentional navigation, not a freshness problem.
+  const todayET = new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/New_York",
+  });
+  const isStale =
+    date !== null &&
+    updatedAt !== null &&
+    date < todayET &&
+    !hasCurrentProjections;
 
   // hasAny: at least one prop type has at least one game. If every prop list
   // is empty we're on a future-preview date even though we have a `date`.
