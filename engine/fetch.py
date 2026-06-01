@@ -258,6 +258,35 @@ def fetch_lineups(date_str: str | None = None) -> list[dict]:
     return records
 
 
+def fetch_bats_by_id(player_ids: list[int]) -> dict[int, str]:
+    """Resolve player_id -> bats code via the MLB Stats API /people endpoint.
+
+    A SINGLE bulk request resolves any number of player ids; the alternative
+    (statsapi.boxscore_data → person.batSide) is empty in the modern response
+    and statsapi.lookup_player also returns batSide=None. Returns {} on any
+    failure so the caller can fall back to league-average handedness.
+
+    Returns codes per MLB convention: 'L', 'R', or 'S' (switch). Players not
+    in the response are silently dropped — the caller treats absence as
+    "unknown" and uses defaults.
+    """
+    if not player_ids:
+        return {}
+    ids_csv = ",".join(str(int(p)) for p in player_ids)
+    try:
+        resp = statsapi.get("people", {"personIds": ids_csv})
+    except Exception as exc:
+        print(f"  WARNING: statsapi.get('people') failed: {exc}")
+        return {}
+    out: dict[int, str] = {}
+    for p in (resp.get("people") or []):
+        code = (p.get("batSide") or {}).get("code")
+        pid = p.get("id")
+        if pid is not None and code:
+            out[int(pid)] = code
+    return out
+
+
 def compute_lineup_handedness(
     lineup_players: list[dict],
 ) -> dict[int, dict[str, float]]:

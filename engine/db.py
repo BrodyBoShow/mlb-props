@@ -270,6 +270,37 @@ def get_game_log_count_for_date(date_str: str) -> int:
         return 0
 
 
+def get_player_bats(player_ids: list[int]) -> dict[int, str]:
+    """Map of player_id -> bats handedness from the players table.
+
+    Used by grade.py to resolve LHH/RHH for the opposing lineup — the MLB
+    boxscore_data response strips batSide out, so we read it from our own
+    cache. The players table is populated by fetch_lineups() (batters) and
+    fetch_probable_pitchers() (pitchers), so any batter who's been in a
+    confirmed lineup this season is here.
+
+    Returns {} on any failure so the caller can fall back to a league-
+    average lineup split without crashing.
+    """
+    if not player_ids:
+        return {}
+    try:
+        resp = (
+            _client()
+            .table("players")
+            .select("player_id, bats")
+            .in_("player_id", list(player_ids))
+            .execute()
+        )
+        return {
+            r["player_id"]: r.get("bats") or "R"
+            for r in resp.data or []
+        }
+    except Exception as exc:
+        print(f"  could not fetch player bats: {exc}")
+        return {}
+
+
 def get_game_logs(since_date: str | None = None) -> list[dict] | None:
     """Read rows from player_game_logs. Returns None if the table is missing.
 

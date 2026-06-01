@@ -12,6 +12,7 @@ import statsapi
 import pybaseball
 
 import db
+import fetch
 import stats
 from constants import (
     LEAGUE_AVG_K_PCT,
@@ -66,20 +67,39 @@ def _pitcher_pitch_mix(player_id: int, day_str: str) -> dict:
     }
 
 
-def _opp_lineup_handedness(box: dict, opp_side: str) -> dict:
-    """LHH/RHH percentages of the opposing batters who actually appeared.
+def _opp_lineup_handedness(
+    box: dict,
+    opp_side: str,
+    bats_by_id: dict[int, str],
+) -> dict:
+    """LHH/RHH percentages of the opposing starting 9 from the boxscore.
 
-    Derived from the boxscore's batter list. Switch hitters count 0.5 to
-    each side. Returns league-average splits (0.42 / 0.58) when no batters
-    are present (data gap / postponed game).
+    MLB statsapi.boxscore_data() strips person.batSide entirely (verified
+    via direct probe — only `id` and `fullName` are present on `person`),
+    so we look bats up from the players table cache (db.get_player_bats),
+    which fetch_lineups() / fetch_probable_pitchers() populates.
+
+    Uses battingOrder (starting nine) rather than `batters` (everyone who
+    came to bat, including pinch hitters) so the metric reflects the
+    matchup the pitcher actually faced from the first inning, not the
+    composite of the full game's batter pool.
+
+    Switch hitters (bats=='S') count 0.5 to each side. Returns league-
+    average splits (0.42 / 0.58) when battingOrder is empty (postponed
+    or data gap) or when no batter resolves to a known bats code.
     """
-    opp_batters = (box.get(opp_side, {}) or {}).get("players", {}) or {}
+    side_data = box.get(opp_side, {}) or {}
+    order = side_data.get("battingOrder") or []
     bats_list: list[str] = []
-    for v in opp_batters.values():
-        if not (v.get("stats", {}) or {}).get("batting"):
+    for pid in order:
+        try:
+            pid_int = int(pid)
+        except (TypeError, ValueError):
             continue
-        code = ((v.get("person", {}) or {}).get("batSide", {}) or {}).get("code") or "R"
-        bats_list.append(code)
+        code = bats_by_id.get(pid_int)
+        if code:
+            bats_list.append(code)
+
     if not bats_list:
         return {"lineup_lhh_pct": 0.42, "lineup_rhh_pct": 0.58}
     n = len(bats_list)
@@ -261,6 +281,31 @@ def grade_yesterday(
     box_cache: dict[int, dict] = {}
     decision_cache: dict[int, tuple[int | None, int | None]] = {}
 
+    # Pre-fetch every starting batter's bats handedness via the MLB Stats
+    # API /people endpoint — one bulk call for the whole slate. The
+    # boxscore_data response strips person.batSide entirely (only `id` and
+    # `fullName` come through), and our players-table cache is populated
+    # from the same empty source, so this is the only reliable path.
+    all_batter_ids: set[int] = set()
+    for proj in by_pitcher.values():
+        gid = proj["game_id"]
+        if gid not in final_ids:
+            continue
+        if gid not in box_cache:
+            box_cache[gid] = _boxscore(gid)
+        for side in ("home", "away"):
+            order = (box_cache[gid].get(side, {}) or {}).get("battingOrder") or []
+            for pid in order:
+                try:
+                    all_batter_ids.add(int(pid))
+                except (TypeError, ValueError):
+                    continue
+    bats_by_id = fetch.fetch_bats_by_id(list(all_batter_ids))
+    print(
+        f"  resolved bats handedness for {len(bats_by_id)} / "
+        f"{len(all_batter_ids)} starting batters from MLB /people"
+    )
+
     rows: list[dict] = []
     for proj in by_pitcher.values():
         game_id = proj["game_id"]
@@ -315,11 +360,13 @@ def grade_yesterday(
         park_k = get_park_factor_k(proj["home_team"] or "")
         park_h = get_park_factor_hits(proj["home_team"] or "")
 
-        # Opposing lineup handedness, computed from the actual batters that
-        # appeared in the boxscore (most-accurate signal — no separate lineup
-        # fetch needed at grade time).
+        # Opposing lineup handedness — read from the boxscore's battingOrder
+        # (starting nine) and the pre-fetched bats_by_id cache (players
+        # table). The boxscore doesn't carry batSide directly.
         opp_side = "away" if side == "home" else "home"
-        hand_split = _opp_lineup_handedness(box_cache[game_id], opp_side)
+        hand_split = _opp_lineup_handedness(
+            box_cache[game_id], opp_side, bats_by_id
+        )
 
         # Pitch mix + velo from yesterday's single-day Statcast pass. One
         # API call per graded pitcher; bounded at ~15-20 per day.
