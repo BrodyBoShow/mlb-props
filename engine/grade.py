@@ -9,10 +9,146 @@ from datetime import date, timedelta
 
 import statsapi
 
+import pybaseball
+
 import db
 import stats
+from constants import (
+    LEAGUE_AVG_K_PCT,
+    get_park_factor_hits,
+    get_park_factor_k,
+)
 from fantasy_score import hitter_fantasy_score, pitcher_fantasy_score
 from stats import _parse_innings
+
+
+# Pitch-type sets (mirrored from engine/model.py — same Statcast codes).
+_FASTBALL_TYPES = {"FF", "SI", "FC"}
+_BREAKING_TYPES = {"SL", "CU", "KC", "SV", "CS"}
+_OFFSPEED_TYPES = {"CH", "FS", "FO", "SC"}
+
+
+def _pitcher_pitch_mix(player_id: int, day_str: str) -> dict:
+    """Pitch mix + avg velocity + total pitches from yesterday's Statcast.
+
+    Single-day per-pitcher fetch keyed on day_str. Returns a dict of NULL-able
+    feature values — when Savant flakes or the pitcher has no rows for the
+    day, each value comes back as None so the grade row stays sane and the
+    grader keeps going.
+    """
+    try:
+        df = pybaseball.statcast_pitcher(day_str, day_str, player_id)
+    except Exception as exc:
+        print(f"  pitch-mix fetch failed for player {player_id}: {exc}")
+        df = None
+
+    if df is None or df.empty:
+        return {
+            "pitcher_fastball_pct":       None,
+            "pitcher_breaking_pct":       None,
+            "pitcher_offspeed_pct":       None,
+            "pitcher_avg_velo":           None,
+            "pitcher_pitches_last_start": None,
+        }
+
+    total = len(df)
+    fb_pct = float(df["pitch_type"].isin(_FASTBALL_TYPES).sum() / total)
+    br_pct = float(df["pitch_type"].isin(_BREAKING_TYPES).sum() / total)
+    os_pct = float(df["pitch_type"].isin(_OFFSPEED_TYPES).sum() / total)
+    fb_df = df[df["pitch_type"].isin(_FASTBALL_TYPES)]
+    avg_velo = float(fb_df["release_speed"].mean()) if len(fb_df) > 0 else None
+    return {
+        "pitcher_fastball_pct":       round(fb_pct, 3),
+        "pitcher_breaking_pct":       round(br_pct, 3),
+        "pitcher_offspeed_pct":       round(os_pct, 3),
+        "pitcher_avg_velo":           round(avg_velo, 1) if avg_velo is not None else None,
+        "pitcher_pitches_last_start": int(total),
+    }
+
+
+def _opp_lineup_handedness(box: dict, opp_side: str) -> dict:
+    """LHH/RHH percentages of the opposing batters who actually appeared.
+
+    Derived from the boxscore's batter list. Switch hitters count 0.5 to
+    each side. Returns league-average splits (0.42 / 0.58) when no batters
+    are present (data gap / postponed game).
+    """
+    opp_batters = (box.get(opp_side, {}) or {}).get("players", {}) or {}
+    bats_list: list[str] = []
+    for v in opp_batters.values():
+        if not (v.get("stats", {}) or {}).get("batting"):
+            continue
+        code = ((v.get("person", {}) or {}).get("batSide", {}) or {}).get("code") or "R"
+        bats_list.append(code)
+    if not bats_list:
+        return {"lineup_lhh_pct": 0.42, "lineup_rhh_pct": 0.58}
+    n = len(bats_list)
+    lhh = sum(
+        1.0 if b == "L" else 0.5 if b == "S" else 0.0
+        for b in bats_list
+    ) / n
+    return {
+        "lineup_lhh_pct": round(lhh, 3),
+        "lineup_rhh_pct": round(1 - lhh, 3),
+    }
+
+
+def _opp_starting_pitcher(box: dict, opp_side: str) -> tuple[int | None, str]:
+    """Identify the opposing starting pitcher from the boxscore.
+
+    The boxscore's `pitchers` list on each side is ordered by appearance,
+    so element 0 is the starter. Returns (sp_id, sp_hand). sp_id is None
+    when the pitcher list is empty (postponed / data gap); the caller
+    treats that as "unknown SP" and uses league-average fallbacks.
+    """
+    side_data = box.get(opp_side, {}) or {}
+    pitchers = side_data.get("pitchers") or []
+    if not pitchers:
+        return None, "R"
+    sp_id = pitchers[0]
+    entry = (side_data.get("players") or {}).get(f"ID{sp_id}", {}) or {}
+    person = entry.get("person", {}) or {}
+    return (
+        sp_id,
+        (person.get("pitchHand", {}) or {}).get("code") or "R",
+    )
+
+
+def _opp_sp_recent_stats(sp_id: int | None, yesterday: date) -> dict:
+    """Last-5-start K%, ERA, WHIP for the opposing starting pitcher.
+
+    Uses stats.get_pitcher_starts() so we don't need a second Statcast pass.
+    Falls back to league-average constants when sp_id is None or there are
+    no recent starts on file (rookie / call-up / data gap).
+    """
+    sp_starts: list[dict] = []
+    if sp_id is not None:
+        sp_starts = stats.get_pitcher_starts(sp_id, 30, yesterday) or []
+    if not sp_starts:
+        return {
+            "opp_sp_k_rate_last5": round(LEAGUE_AVG_K_PCT, 3),
+            "opp_sp_era_last5":    4.50,
+            "opp_sp_whip_last5":   1.30,
+        }
+    recent = sp_starts[:5]
+    total_outs = sum(s["outs_recorded"] for s in recent)
+    total_innings = max(total_outs / 3, 1)   # avoid div-by-zero
+    total_outs_for_era = max(total_outs, 1)
+
+    k_per_ip = sum(s["strikeouts"] for s in recent) / total_innings
+    # Normalize K/IP to a "K rate" so it shares units with LEAGUE_AVG_K_PCT.
+    # An average ~8 K/9 → ~0.27 K-rate per IP segment.
+    k_rate = k_per_ip / 9.0
+    era = sum(s["earned_runs"] for s in recent) * 27 / total_outs_for_era
+    whip = (
+        sum(s["hits_allowed"] for s in recent)
+        + sum(s["walks"] for s in recent)
+    ) / total_innings
+    return {
+        "opp_sp_k_rate_last5": round(float(k_rate), 3),
+        "opp_sp_era_last5":    round(float(era), 2),
+        "opp_sp_whip_last5":   round(float(whip), 2),
+    }
 
 
 def _boxscore(game_id: int) -> dict:
@@ -174,6 +310,21 @@ def grade_yesterday(
             win=actual_win,
         )
 
+        # ── context features (additive, NULL-safe in the DB) ───────────────
+        # Park factors keyed on the venue (always proj['home_team']).
+        park_k = get_park_factor_k(proj["home_team"] or "")
+        park_h = get_park_factor_hits(proj["home_team"] or "")
+
+        # Opposing lineup handedness, computed from the actual batters that
+        # appeared in the boxscore (most-accurate signal — no separate lineup
+        # fetch needed at grade time).
+        opp_side = "away" if side == "home" else "home"
+        hand_split = _opp_lineup_handedness(box_cache[game_id], opp_side)
+
+        # Pitch mix + velo from yesterday's single-day Statcast pass. One
+        # API call per graded pitcher; bounded at ~15-20 per day.
+        pitch_mix = _pitcher_pitch_mix(player_id, yesterday_str)
+
         rows.append({
             "player_id":             player_id,
             "game_id":               game_id,
@@ -189,6 +340,16 @@ def grade_yesterday(
             "home_away":             side,
             "opp_k_rate":            opp_k_rate,
             "days_rest":             days_rest,
+            # Context features for advanced modeling — all nullable.
+            "lineup_lhh_pct":        hand_split["lineup_lhh_pct"],
+            "lineup_rhh_pct":        hand_split["lineup_rhh_pct"],
+            "park_factor_k":         park_k,
+            "park_factor_hits":      park_h,
+            "pitcher_fastball_pct":  pitch_mix["pitcher_fastball_pct"],
+            "pitcher_breaking_pct":  pitch_mix["pitcher_breaking_pct"],
+            "pitcher_offspeed_pct":  pitch_mix["pitcher_offspeed_pct"],
+            "pitcher_avg_velo":      pitch_mix["pitcher_avg_velo"],
+            "pitcher_pitches_last_start": pitch_mix["pitcher_pitches_last_start"],
         })
         win_marker = "W" if actual_win else "—"
         print(
@@ -202,6 +363,17 @@ def grade_yesterday(
         )
 
     print(f"  graded {len(rows)} / {len(by_pitcher)} projected pitchers")
+    if rows:
+        context_features = [
+            "lineup_lhh_pct", "pitcher_k_vs_lhh",
+            "pitcher_fastball_pct", "park_factor_k",
+        ]
+        sample = rows[0]
+        logged = {k: sample.get(k) for k in context_features}
+        print(
+            f"  context features sample (player {sample['player_id']}): "
+            f"{logged}"
+        )
     return rows
 
 
@@ -340,6 +512,29 @@ def grade_hitters_yesterday(
             stolen_bases=result["stolen_bases"],
         )
 
+        # ── opposing starting pitcher quality ─────────────────────────────
+        # Opposing SP is the pitcher who appeared with pitchingOrder == 1 on
+        # the OTHER side. We log their recent-5-start ERA / WHIP / K-rate so
+        # the hitter prop model can condition on matchup difficulty.
+        opp_side = "away" if result["home_away"] == "home" else "home"
+        opp_sp_id, opp_sp_hand = _opp_starting_pitcher(box_cache[game_id], opp_side)
+        sp_stats = _opp_sp_recent_stats(opp_sp_id, yesterday)
+
+        # Park factor for the venue (proj['home_team']).
+        park_h = get_park_factor_hits(proj["home_team"] or "")
+
+        # Hitter's recent batting rate (rough proxy — until we log per-game
+        # opp_sp_hand historically, this is just the last-15-games average
+        # hits-per-PA estimate. Improves automatically as data accumulates.)
+        hitter_games = stats.get_hitter_games(player_id, 60, yesterday) or []
+        if hitter_games:
+            recent_games = hitter_games[:15]
+            recent_avg = sum(g["hits"] for g in recent_games) / max(
+                len(recent_games) * 3.5, 1
+            )
+        else:
+            recent_avg = 0.250
+
         rows.append({
             "player_id":          player_id,
             "game_id":            game_id,
@@ -356,6 +551,13 @@ def grade_hitters_yesterday(
             "stolen_bases":       result["stolen_bases"],
             "actual_hitter_fantasy_score": actual_hitter_fp,
             "home_away":          result["home_away"],
+            # Context features for advanced modeling — all nullable.
+            "opp_sp_k_rate_last5": sp_stats["opp_sp_k_rate_last5"],
+            "opp_sp_era_last5":    sp_stats["opp_sp_era_last5"],
+            "opp_sp_whip_last5":   sp_stats["opp_sp_whip_last5"],
+            "opp_sp_hand":         opp_sp_hand,
+            "park_factor_hits_h":  park_h,
+            "hitter_avg_vs_hand":  round(float(recent_avg), 3),
         })
         print(
             f"  hitter {player_id}: projected {proj['projection']}"

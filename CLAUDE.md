@@ -244,6 +244,71 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Matchup-context feature logging (this session):
+- engine/constants.py: PARK_FACTORS_HITS (31 teams) + PARK_FACTORS_K
+  (sparse — only off-neutral parks listed) + get_park_factor_hits /
+  get_park_factor_k helpers. Indexed by full team name so the lookup
+  is a single dict get with no normalization.
+- engine/model.py: _build_pitcher_features_from_df() now also computes
+  pitcher_k_vs_lhh / pitcher_k_vs_rhh (platoon splits over bulk_df;
+  20-PA floor before falling back to LEAGUE_AVG_K_PCT), pitcher_fastball_pct
+  / breaking / offspeed (Statcast pitch_type buckets), pitcher_avg_velo
+  (mean fastball release_speed), pitcher_velo_trend (last-2 starts vs
+  prior over the bulk window), and park_factor_k. home_team parameter
+  added to the signature so park factor can be looked up; predict()
+  passes game_map's home_team through.
+- engine/model.py: FEATURE_COLS extended from 5 to 11 (legacy 5 +
+  lineup_lhh_pct, pitcher_k_vs_lhh, pitcher_k_vs_rhh,
+  pitcher_fastball_pct, pitcher_avg_velo, park_factor_k). train()
+  imputes each new column with its _CONTEXT_DEFAULTS entry so rows
+  graded before the migration land in the training pool unchanged.
+  predict() fills any missing context feature with the same defaults
+  via dict.setdefault, so the legacy fallback _build_pitcher_features()
+  (which only returns the 5 legacy keys) still produces a valid vec.
+- engine/fetch.py: new compute_lineup_handedness(lineup_players) helper
+  — {game_id: {lhh_pct, rhh_pct}} aggregator with switch hitters
+  counted 0.5 to each side. Reserved for predict-time use; grade.py
+  derives the same value at grade time from the actual batter list.
+- engine/grade.py:
+  * Per-row pitch mix from a single-day Statcast call
+    (_pitcher_pitch_mix) — pitcher_fastball_pct / breaking / offspeed /
+    avg_velo / pitches_last_start. Bounded ~15-20 API calls per
+    grading run.
+  * Opposing-lineup handedness from the boxscore's actual batter list
+    (_opp_lineup_handedness) — no separate lineup fetch needed.
+  * Opposing starting pitcher identified via box[side]["pitchers"][0]
+    (NOT gameStatus.pitchingOrder — that field is empty in the modern
+    boxscore shape, confirmed by direct probe). _opp_starting_pitcher
+    returns (sp_id, sp_hand).
+  * Opposing SP recent-5-start stats (_opp_sp_recent_stats) — ERA,
+    WHIP, K-rate from stats.get_pitcher_starts. League-average fallback
+    when sp_id is unknown or the pitcher has no logged starts.
+  * Park factors (k + hits) on pitcher rows; park_factor_hits_h on
+    hitter rows.
+  * Hitter rolling 15-game hits-per-PA approximation as a rough
+    hitter_avg_vs_hand — improves automatically once per-game opp hand
+    is logged historically.
+  * Sample-row log line at end of grade_yesterday() prints
+    "context features sample (player N): {lineup_lhh_pct: ...,
+    pitcher_k_vs_lhh: ..., pitcher_fastball_pct: ...,
+    park_factor_k: ...}" so each cron's log shows the new features
+    landing.
+- engine/db.py: upsert_game_logs() now catches PGRST204 on the new
+  context-feature column names and retries stripped of them. Pipeline
+  keeps grading actuals correctly before db/migrations/
+  add_context_features.sql is applied.
+- db/schema.sql + db/migrations/add_context_features.sql: 23 new
+  nullable columns on player_game_logs (12 pitcher-side, 11 hitter-side).
+- Verified: full grade_yesterday() run produced rows with real
+  pitcher_fastball_pct (0.522), pitcher_avg_velo (94.6), park_factor_k
+  / park_factor_hits, lineup_lhh_pct derived from boxscore batters.
+  grade_hitters_yesterday() produced real opp_sp_k_rate_last5 / era /
+  whip / hand. train() succeeds on 58 pitcher rows with 11 features
+  (all imputation-fillable, zero NaN after imputation pass). The new
+  columns will be populated DB-side once add_context_features.sql is
+  applied; until then the defensive retry strips them and the
+  pre-existing columns continue to fill.
+
 Future-slate browsing (this session):
 - engine/fetch.py: refactored to a _resolved_schedule(date_str) helper
   cached via lru_cache(maxsize=8). One pass per date does the schedule

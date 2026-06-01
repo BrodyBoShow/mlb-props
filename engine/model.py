@@ -31,12 +31,48 @@ from constants import (
     MIN_TRAINING_ROWS,
     STATCAST_LOOKBACK_DAYS,
     STRIKEOUT_EVENTS,
+    get_park_factor_k,
 )
 from stats import _opp_k_rate
 
 PROP_TYPE = "strikeouts"
 
-FEATURE_COLS = ["last5_k_rate", "last30_k_rate", "is_home", "days_rest", "opp_k_rate"]
+# Pitch-type sets (Statcast pitch_type codes). Used by both predict-time
+# feature building and grade.py's per-pitcher mix logging.
+FASTBALL_TYPES = {"FF", "SI", "FC"}
+BREAKING_TYPES = {"SL", "CU", "KC", "SV", "CS"}
+OFFSPEED_TYPES = {"CH", "FS", "FO", "SC"}
+
+# Feature column order. The first five are the legacy required features the
+# model has always used; the rest are context features that may be NULL on
+# rows graded before the schema migration. train() imputes the NULLs with
+# the per-feature defaults below so adding columns never blocks training.
+FEATURE_COLS = [
+    "last5_k_rate",
+    "last30_k_rate",
+    "is_home",
+    "days_rest",
+    "opp_k_rate",
+    # Context features (additive — imputed when missing)
+    "lineup_lhh_pct",
+    "pitcher_k_vs_lhh",
+    "pitcher_k_vs_rhh",
+    "pitcher_fastball_pct",
+    "pitcher_avg_velo",
+    "park_factor_k",
+]
+
+# (column, default-when-missing). Used by train() to fill NULLs without
+# dropping rows; also used at predict-time as the constant value for any
+# context feature that can't be computed for a particular pitcher.
+_CONTEXT_DEFAULTS: list[tuple[str, float]] = [
+    ("lineup_lhh_pct",       0.42),
+    ("pitcher_k_vs_lhh",     LEAGUE_AVG_K_PCT),
+    ("pitcher_k_vs_rhh",     LEAGUE_AVG_K_PCT),
+    ("pitcher_fastball_pct", 0.55),
+    ("pitcher_avg_velo",     93.5),
+    ("park_factor_k",        1.0),
+]
 
 
 # ─── bulk Statcast fetch (predict-time only) ─────────────────────────────────
@@ -68,12 +104,15 @@ def _build_pitcher_features_from_df(
     home_away: str,
     opp_team_name: str,
     projection_date: date,
+    home_team: str = "",
 ) -> dict | None:
-    """Compute the 5 model features for one pitcher from a pre-fetched DataFrame.
+    """Compute the model feature row for one pitcher from a pre-fetched DataFrame.
 
-    Filters bulk_df to rows where pitcher == player_id and computes the same
-    features as _build_pitcher_features() — but with NO API call. Returns
-    None when the pitcher has no rows in the bulk window.
+    Filters bulk_df to rows where pitcher == player_id. Returns None when the
+    pitcher has no rows in the bulk window. Builds the legacy 5 features plus
+    the additive context features (platoon, pitch mix, velo trend, park).
+    Park factor takes the HOME team (the pitcher's park if home, else the
+    opponent's park if away — but home_team is always the venue team).
     """
     pitcher_df = bulk_df[bulk_df["pitcher"] == player_id]
     if pitcher_df.empty:
@@ -105,12 +144,74 @@ def _build_pitcher_features_from_df(
     # Feature 5: opposing lineup K%.
     opp_k = _opp_k_rate(opp_team_name, projection_date.year)
 
+    # ── platoon splits ─────────────────────────────────────────────────────
+    # Strict K rate vs LHH / RHH over the bulk window. Fall back to league
+    # K% only when the pitcher has < 20 PAs vs that side (rookies, recent
+    # call-ups). The bulk_df row count is per-PITCH so 20 is a low bar.
+    lhh_df = df[df["stand"] == "L"]
+    rhh_df = df[df["stand"] == "R"]
+    k_vs_lhh = (
+        float(lhh_df["is_k"].mean()) if len(lhh_df) >= 20 else LEAGUE_AVG_K_PCT
+    )
+    k_vs_rhh = (
+        float(rhh_df["is_k"].mean()) if len(rhh_df) >= 20 else LEAGUE_AVG_K_PCT
+    )
+
+    # ── pitch mix + velocity ──────────────────────────────────────────────
+    total_pitches = len(df)
+    if total_pitches > 0:
+        fastball_pct = df["pitch_type"].isin(FASTBALL_TYPES).sum() / total_pitches
+        breaking_pct = df["pitch_type"].isin(BREAKING_TYPES).sum() / total_pitches
+        offspeed_pct = df["pitch_type"].isin(OFFSPEED_TYPES).sum() / total_pitches
+
+        fb_df = df[df["pitch_type"].isin(FASTBALL_TYPES)]
+        avg_velo = (
+            float(fb_df["release_speed"].mean()) if len(fb_df) > 0 else 93.5
+        )
+
+        # Velocity trend: last 2 starts vs prior. Negative = losing velo.
+        per_game_velo = (
+            df[df["pitch_type"].isin(FASTBALL_TYPES)]
+            .groupby("game_date")["release_speed"]
+            .mean()
+            .sort_index()
+        )
+        if len(per_game_velo) >= 4:
+            recent = per_game_velo.iloc[-2:].mean()
+            older = per_game_velo.iloc[:-2].mean()
+            velo_trend = round(float(recent - older), 2)
+        else:
+            velo_trend = 0.0
+    else:
+        fastball_pct = 0.55
+        breaking_pct = 0.25
+        offspeed_pct = 0.10
+        avg_velo = 93.5
+        velo_trend = 0.0
+
+    # ── park factor (K) ───────────────────────────────────────────────────
+    park_k = get_park_factor_k(home_team) if home_team else 1.0
+
     return {
+        # legacy 5
         "last5_k_rate": last5_k_rate,
         "last30_k_rate": last30_k_rate,
         "is_home": is_home,
         "days_rest": days_rest,
         "opp_k_rate": opp_k,
+        # context features
+        "pitcher_k_vs_lhh":     round(float(k_vs_lhh), 4),
+        "pitcher_k_vs_rhh":     round(float(k_vs_rhh), 4),
+        "pitcher_fastball_pct": round(float(fastball_pct), 3),
+        "pitcher_breaking_pct": round(float(breaking_pct), 3),
+        "pitcher_offspeed_pct": round(float(offspeed_pct), 3),
+        "pitcher_avg_velo":     round(float(avg_velo), 1),
+        "pitcher_velo_trend":   velo_trend,
+        "park_factor_k":        park_k,
+        # lineup_lhh_pct is only knowable once lineups post. Imputed to the
+        # league average here so the predict-time row matches FEATURE_COLS;
+        # train() also imputes the same value for rows graded pre-migration.
+        "lineup_lhh_pct":       0.42,
     }
 
 
@@ -230,6 +331,16 @@ def train() -> XGBRegressor | None:
         df["days_rest"] = 5
     df["days_rest"] = pd.to_numeric(df["days_rest"], errors="coerce").fillna(5)
 
+    # Context features: NULL on rows graded before the feature-logging
+    # migration. Impute with the per-feature defaults so training proceeds
+    # without dropping pre-migration rows. As graded data accumulates with
+    # real values, the imputed-default rows become a shrinking share and
+    # the model picks up real signal automatically.
+    for col, default in _CONTEXT_DEFAULTS:
+        if col not in df.columns:
+            df[col] = default
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default)
+
     # Diagnostics: per-column NaN counts before the final drop
     nan_counts = {c: int(df[c].isna().sum()) for c in FEATURE_COLS + ["actual_strikeouts"]}
     print(f"  NaN counts after imputation: {nan_counts}")
@@ -302,10 +413,12 @@ def predict(
         game = game_map.get(s["game_id"], {})
         home_away = s.get("home_away", "home")
         opp_team = game.get("away_team") if home_away == "home" else game.get("home_team")
+        home_team = game.get("home_team", "")
 
         if bulk_ok:
             feats = _build_pitcher_features_from_df(
-                s["player_id"], bulk_df, home_away, opp_team or "", proj_date
+                s["player_id"], bulk_df, home_away, opp_team or "", proj_date,
+                home_team=home_team,
             )
         else:
             feats = _build_pitcher_features(
@@ -315,6 +428,12 @@ def predict(
         if feats is None:
             print(f"  no features for {s.get('full_name', s['player_id'])} — skipping model")
             continue
+
+        # Fill any missing context features with their training defaults so
+        # the legacy fallback (_build_pitcher_features) — which only returns
+        # the original 5 — still produces a vec with the right shape.
+        for col, default in _CONTEXT_DEFAULTS:
+            feats.setdefault(col, default)
 
         vec = [[feats[c] for c in FEATURE_COLS]]
         pred = max(0.0, round(float(model.predict(vec)[0]), 1))

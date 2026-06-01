@@ -258,6 +258,40 @@ def fetch_lineups(date_str: str | None = None) -> list[dict]:
     return records
 
 
+def compute_lineup_handedness(
+    lineup_players: list[dict],
+) -> dict[int, dict[str, float]]:
+    """Per-game LHH / RHH percentages from a confirmed lineup list.
+
+    Returns {game_id: {"lhh_pct": float, "rhh_pct": float}}. Switch hitters
+    (bats == "S") count as 0.5 to each side. Missing bats fields default to
+    "R" — most-common case for unannotated MLB roster entries.
+
+    Used by main.py to attach lineup_lhh_pct to each game so grade.py can
+    log it onto the pitcher's player_game_logs row. The model treats this
+    as a context feature for the platoon split logic.
+    """
+    by_game: dict[int, list[str]] = {}
+    for p in lineup_players:
+        gid = p["game_id"]
+        bats = p.get("bats") or "R"
+        by_game.setdefault(gid, []).append(bats)
+    result: dict[int, dict[str, float]] = {}
+    for gid, bats_list in by_game.items():
+        n = len(bats_list)
+        if n == 0:
+            continue
+        lhh = sum(
+            1.0 if b == "L" else 0.5 if b == "S" else 0.0
+            for b in bats_list
+        ) / n
+        result[gid] = {
+            "lhh_pct": round(lhh, 3),
+            "rhh_pct": round(1 - lhh, 3),
+        }
+    return result
+
+
 if __name__ == "__main__":
     games = fetch_games()
     print(f"Games: {len(games)}")

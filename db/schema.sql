@@ -61,6 +61,36 @@ create table if not exists player_game_logs (
     home_away         text,        -- 'home' | 'away'
     opp_k_rate        numeric,     -- opposing team K% as batters (0–1)
     days_rest         integer,
+    -- ── advanced matchup context features (additive, all nullable) ───────
+    -- Populated by engine/grade.py once db/migrations/add_context_features.sql
+    -- has been applied. The XGBoost model imputes NULLs with league averages
+    -- so adding columns never blocks training. As graded data with real
+    -- values accumulates, the model picks up signal automatically.
+    -- Pitcher-row context:
+    lineup_lhh_pct        numeric,
+    lineup_rhh_pct        numeric,
+    pitcher_k_vs_lhh      numeric,
+    pitcher_k_vs_rhh      numeric,
+    pitcher_fastball_pct  numeric,
+    pitcher_breaking_pct  numeric,
+    pitcher_offspeed_pct  numeric,
+    pitcher_avg_velo      numeric,
+    pitcher_velo_trend    numeric,
+    park_factor_hits      numeric,
+    park_factor_k         numeric,
+    pitcher_pitches_last_start integer,
+    -- Hitter-row context:
+    opp_sp_k_rate_last5   numeric,
+    opp_sp_era_last5      numeric,
+    opp_sp_whip_last5     numeric,
+    opp_sp_hand           text,        -- 'L' | 'R' (handedness of opposing SP)
+    opp_sp_projected_ip   numeric,
+    opp_bullpen_era_7day  numeric,
+    opp_bullpen_k_rate_7day numeric,
+    hitter_avg_vs_hand    numeric,
+    park_factor_hits_h    numeric,
+    temperature           numeric,
+    wind_speed            numeric,
     created_at        timestamptz default now(),
     unique (player_id, game_id)
 );

@@ -172,14 +172,57 @@ def get_last_game_date(player_id: int, before_date: str) -> str | None:
         return None
 
 
+_CONTEXT_COLS = (
+    "lineup_lhh_pct", "lineup_rhh_pct",
+    "pitcher_k_vs_lhh", "pitcher_k_vs_rhh",
+    "pitcher_fastball_pct", "pitcher_breaking_pct", "pitcher_offspeed_pct",
+    "pitcher_avg_velo", "pitcher_velo_trend",
+    "park_factor_hits", "park_factor_k",
+    "pitcher_pitches_last_start",
+    "opp_sp_k_rate_last5", "opp_sp_era_last5", "opp_sp_whip_last5",
+    "opp_sp_hand", "opp_sp_projected_ip",
+    "opp_bullpen_era_7day", "opp_bullpen_k_rate_7day",
+    "hitter_avg_vs_hand", "park_factor_hits_h",
+    "temperature", "wind_speed",
+)
+
+
 def upsert_game_logs(rows: list[dict]) -> int:
-    """Upsert graded game log rows on (player_id, game_id). Re-runs are safe."""
+    """Upsert graded game log rows on (player_id, game_id). Re-runs are safe.
+
+    Defensive: if the player_game_logs table is on a pre-migration schema
+    (the new context-feature columns haven't been added yet) PostgREST
+    returns PGRST204 with the offending column name. We strip every
+    context column and retry once so the grading run still persists the
+    actuals; the user can apply db/migrations/add_context_features.sql
+    whenever convenient and subsequent runs will land the context data.
+    """
     if not rows:
         return 0
-    _client().table("player_game_logs").upsert(
-        rows, on_conflict="player_id,game_id"
-    ).execute()
-    return len(rows)
+    client = _client()
+    try:
+        client.table("player_game_logs").upsert(
+            rows, on_conflict="player_id,game_id"
+        ).execute()
+        return len(rows)
+    except Exception as exc:
+        msg = str(exc)
+        if any(col in msg for col in _CONTEXT_COLS):
+            stripped = [
+                {k: v for k, v in r.items() if k not in _CONTEXT_COLS}
+                for r in rows
+            ]
+            client.table("player_game_logs").upsert(
+                stripped, on_conflict="player_id,game_id"
+            ).execute()
+            print(
+                "  WARNING: player_game_logs missing context-feature columns "
+                "-- upserted without them. Run "
+                "db/migrations/add_context_features.sql to enable advanced "
+                "matchup features."
+            )
+            return len(rows)
+        raise
 
 
 def get_projection_count_for_date(
