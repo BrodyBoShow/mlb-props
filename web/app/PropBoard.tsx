@@ -32,13 +32,13 @@ export type { ByProp, GameGroup, Pitcher, PropType } from "@/lib/types";
 const PROPS: { key: PropType; label: string; unit: string }[] = [
   // pitcher props
   { key: "strikeouts",            label: "Strikeouts",     unit: "K"    },
-  { key: "hits_allowed",          label: "Hits Allowed",   unit: "H"    },
+  { key: "hits_allowed",          label: "Hits Allowed",   unit: "HA"   },
   { key: "walks",                 label: "Walks",          unit: "BB"   },
   { key: "earned_runs",           label: "Earned Runs",    unit: "ER"   },
   { key: "outs_recorded",         label: "Outs Recorded",  unit: "outs" },
   { key: "pitcher_fantasy_score", label: "Fantasy Score",  unit: "FP"   },
   // hitter props
-  { key: "hitter_hits",           label: "H Hits",         unit: "H"    },
+  { key: "hitter_hits",           label: "Hits",           unit: "H"    },
   { key: "hitter_total_bases",    label: "Total Bases",    unit: "TB"   },
   { key: "hitter_rbis",           label: "RBIs",           unit: "RBI"  },
   { key: "hitter_runs",           label: "Runs",           unit: "R"    },
