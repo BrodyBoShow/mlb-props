@@ -61,6 +61,28 @@ export const MIN_LINE: Partial<Record<PropType, number>> = {
   hitter_fantasy_score:   4.0,
 };
 
+// The sharp badge's OWN main-market floor — intentionally SEPARATE from
+// MIN_LINE. MIN_LINE drives /results Betting-Edge evaluation + Featured Plays
+// qualification (changing it would alter those), and it omits walks/earned_runs
+// because those are Model-Tracker props with no betting-line eval. But the
+// sharp badge RENDERS on every pitcher prop tab — including walks and
+// earned_runs — so it needs a floor that covers them too, or their badges
+// would still count sub-threshold alt lines (the exact distortion the gate
+// closes). These are the historical main-market floors per pitcher prop:
+//   - strikeouts 3.5, hits_allowed 3.5, outs_recorded 10.5
+//   - walks 1.5, earned_runs 1.5  (excludes 0.5 alternates)
+//   - pitcher_fantasy_score 6.0   (badge renders on that tab; real two-sided
+//     books don't post fantasy lines, so it's a no-op today, included for
+//     completeness)
+export const SHARP_MIN_LINE: Partial<Record<PropType, number>> = {
+  strikeouts:            3.5,
+  hits_allowed:          3.5,
+  outs_recorded:         10.5,
+  walks:                 1.5,
+  earned_runs:           1.5,
+  pitcher_fantasy_score: 6.0,
+};
+
 // Real, two-sided sportsbooks — the only books that count toward sharp-money
 // agreement (feature 5). DFS apps (prizepicks/underdog/sleeper/betr) post flat
 // single-number lines, not two-sided over/under markets, so they're excluded.

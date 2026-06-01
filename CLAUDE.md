@@ -269,6 +269,33 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Sharp badge — dedicated SHARP_MIN_LINE floor (this session):
+- Residual gap from the MIN_LINE work: the badge renders on ALL pitcher
+  prop tabs (strikeouts/hits_allowed/walks/earned_runs/outs_recorded/
+  pitcher_fantasy_score) but the shared MIN_LINE only floors strikeouts/
+  hits_allowed/outs_recorded + the fantasy props. walks + earned_runs had
+  NO floor, so their badges still counted sub-threshold alt lines.
+- Fix WITHOUT touching MIN_LINE (which drives /results Betting-Edge +
+  Featured Plays and must stay as-is): new SHARP_MIN_LINE in
+  web/lib/constants.ts covering every pitcher prop the badge renders on —
+  strikeouts 3.5, hits_allowed 3.5, outs_recorded 10.5, walks 1.5,
+  earned_runs 1.5, pitcher_fantasy_score 6.0 (no-op — no real two-sided
+  books post fantasy lines, included for completeness). Note: the badge's
+  hits_allowed floor is the historical 3.5, intentionally stricter than
+  MIN_LINE's 2.5.
+- computeSharp now gates on SHARP_MIN_LINE (was MIN_LINE). MIN_LINE
+  import retained for the Featured Plays qualifier — unchanged.
+- Verified vs raw DB (2026-06-01):
+  * Unchanged: Griffin Jax SO 5/5 under (books 4.5 >= 3.5), Luinder
+    Avila SO 2/2 under (books 3.5 >= 3.5).
+  * Gap closed: Lyon Richardson earned_runs proj 1.0, books
+    {caesars 0.5, pinnacle 0.5} — BEFORE (ungated) showed a misleading
+    SHARP 2/2 over built on two 0.5 alts; AFTER (1.5 floor) both lines
+    drop -> NO badge.
+- /results + Featured Plays unchanged (MIN_LINE untouched). Frontend-only
+  (page.tsx, constants.ts); no engine; FEATURE_COLS still 11; tsc clean;
+  npm run build passes.
+
 Sharp badge follow-ups — MIN_LINE gate + split verify (this session):
 - MIN_LINE hoisted to web/lib/constants.ts as the SINGLE source of
   truth (was duplicated: FEATURED_MIN_LINE in page.tsx + a local

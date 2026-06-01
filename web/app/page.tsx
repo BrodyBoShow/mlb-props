@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES, MIN_LINE, REAL_BOOKS } from "@/lib/constants";
+import { ALL_PROP_TYPES, MIN_LINE, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import type { ByProp, FeaturedPlay, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
@@ -476,11 +476,13 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   // the strict majority of non-push leans; an even split yields no majority
   // and therefore no badge.
   //
-  // MIN_LINE gate (follow-up consistency fix): a book's line below the prop's
-  // main-market floor is an alternate — it's dropped BEFORE counting, so a
-  // book whose only stored line for the prop is a sub-threshold alt doesn't
-  // contribute to agree/total at all. Same floor /results + Featured Plays
-  // use. Props without a floor (walks, earned_runs) are counted as-is.
+  // Main-market gate: a book's line below the prop's SHARP_MIN_LINE floor is
+  // an alternate — dropped BEFORE counting, so a book whose only stored line
+  // for the prop is a sub-threshold alt doesn't contribute to agree/total.
+  // Uses SHARP_MIN_LINE (NOT the shared MIN_LINE) so the floor covers EVERY
+  // pitcher prop the badge renders on — including walks/earned_runs, which
+  // MIN_LINE omits (they're Model-Tracker props). MIN_LINE stays untouched so
+  // /results + Featured Plays behavior is unchanged.
   function computeSharp(
     playerId: number,
     propType: PropType,
@@ -491,7 +493,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     if (!allBooks) return undefined;
 
     // Drop alt lines below the prop's main-market floor (if it has one).
-    const floor = MIN_LINE[propType];
+    const floor = SHARP_MIN_LINE[propType];
     const books = new Map<string, number>();
     for (const [book, line] of allBooks) {
       if (floor !== undefined && line < floor) continue;
