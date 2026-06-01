@@ -241,34 +241,61 @@ def fetch_lineups(date_str: str | None = None) -> list[dict]:
                     continue   # can't map a line/grade without a name
 
                 position = (entry.get("position", {}) or {}).get("abbreviation")
+                # bats / throws are populated from the bulk /people pass
+                # below — the boxscore_data response strips person.batSide
+                # and person.pitchHand out entirely (verified probe).
                 records.append(
                     {
                         "player_id": int(pid),
                         "full_name": full_name,
                         "team": team_name,
                         "position": position,
-                        "bats": (person.get("batSide", {}) or {}).get("code"),
-                        "throws": (person.get("pitchHand", {}) or {}).get("code"),
+                        "bats": None,
+                        "throws": None,
                         "game_id": game_id,
                         "batting_order": idx + 1,   # 1-9, always non-zero
                         "home_away": side,
                     }
                 )
 
+    # Backfill bats + throws in ONE bulk MLB /people request for every
+    # unique batter id we just collected. The boxscore strips both fields
+    # so this is the only reliable path; doing it post-loop keeps it to
+    # a single API call per fetch_lineups invocation regardless of slate
+    # size. Players not returned by /people keep their None values, which
+    # downstream consumers (db.upsert_players) leave NULL in the cache.
+    unique_ids = list({r["player_id"] for r in records})
+    handedness = _fetch_handedness_by_id(unique_ids)
+    resolved = 0
+    for r in records:
+        h = handedness.get(r["player_id"])
+        if h:
+            if h.get("bats"):
+                r["bats"] = h["bats"]
+            if h.get("throws"):
+                r["throws"] = h["throws"]
+            if h.get("bats") or h.get("throws"):
+                resolved += 1
+    if records:
+        print(
+            f"  resolved bats/throws for {resolved} / {len(unique_ids)} "
+            f"lineup players via MLB /people"
+        )
+
     return records
 
 
-def fetch_bats_by_id(player_ids: list[int]) -> dict[int, str]:
-    """Resolve player_id -> bats code via the MLB Stats API /people endpoint.
+def _fetch_handedness_by_id(player_ids: list[int]) -> dict[int, dict]:
+    """Resolve player_id -> {bats, throws} via the MLB Stats API /people endpoint.
 
     A SINGLE bulk request resolves any number of player ids; the alternative
-    (statsapi.boxscore_data → person.batSide) is empty in the modern response
-    and statsapi.lookup_player also returns batSide=None. Returns {} on any
-    failure so the caller can fall back to league-average handedness.
+    (statsapi.boxscore_data → person.batSide / person.pitchHand) is empty in
+    the modern response and statsapi.lookup_player also returns batSide=None.
+    Returns {} on any failure so callers can fall back to defaults.
 
-    Returns codes per MLB convention: 'L', 'R', or 'S' (switch). Players not
-    in the response are silently dropped — the caller treats absence as
-    "unknown" and uses defaults.
+    Each value is shaped {"bats": "L"|"R"|"S"|None, "throws": "L"|"R"|None}.
+    Players not in the response are silently dropped — caller treats absence
+    as "unknown" and uses defaults.
     """
     if not player_ids:
         return {}
@@ -278,13 +305,25 @@ def fetch_bats_by_id(player_ids: list[int]) -> dict[int, str]:
     except Exception as exc:
         print(f"  WARNING: statsapi.get('people') failed: {exc}")
         return {}
-    out: dict[int, str] = {}
+    out: dict[int, dict] = {}
     for p in (resp.get("people") or []):
-        code = (p.get("batSide") or {}).get("code")
         pid = p.get("id")
-        if pid is not None and code:
-            out[int(pid)] = code
+        if pid is None:
+            continue
+        out[int(pid)] = {
+            "bats":   (p.get("batSide") or {}).get("code"),
+            "throws": (p.get("pitchHand") or {}).get("code"),
+        }
     return out
+
+
+def fetch_bats_by_id(player_ids: list[int]) -> dict[int, str]:
+    """Resolve player_id -> bats code only. Thin wrapper around the richer
+    _fetch_handedness_by_id helper for callers that only need bats (e.g.
+    grade._opp_lineup_handedness which doesn't care about pitchHand).
+    """
+    full = _fetch_handedness_by_id(player_ids)
+    return {pid: v["bats"] for pid, v in full.items() if v.get("bats")}
 
 
 def compute_lineup_handedness(
