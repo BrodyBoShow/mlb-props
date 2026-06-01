@@ -14,9 +14,11 @@ import type {
 import { EDGE_THRESHOLD, HITTER_PROPS } from "@/lib/constants";
 import {
   hitterFantasyScore,
+  isQualityStart,
   PITCHER_OUT_PTS,
   PITCHER_STRIKEOUT_PTS,
   PITCHER_EARNED_RUN_PTS,
+  PITCHER_QUALITY_START_PTS,
 } from "@/lib/fantasyScore";
 
 // Re-export types so existing `import {…} from "./PropBoard"` keeps working.
@@ -64,12 +66,15 @@ const PROP_STAT_KEY: Partial<Record<PropType, keyof StatLine>> = {
 // fields yet (e.g. hasn't batted; hasn't taken the mound). For fantasy-score
 // props we synthesize from components via the shared scoring constants.
 //
-// Pitcher fantasy score during LIVE games intentionally omits the W bonus
-// and the QS bonus -- both are not final until the game ends. The badge
-// labels it as "in-progress FP" via the trailing asterisk in PROP rendering.
+// Pitcher fantasy score during LIVE games intentionally omits the W and QS
+// bonuses -- both are not final until the game ends. Once isFinal=true the
+// QS bonus is included (derivable from outs + ER). The W bonus stays omitted
+// because the box score doesn't carry the decision; the user accepts the
+// same ~6-FP-low bias the baseline projection already has.
 function liveActualFor(
   propType: PropType,
   stat: StatLine | undefined,
+  isFinal: boolean,
 ): number | undefined {
   if (!stat) return undefined;
 
@@ -90,12 +95,16 @@ function liveActualFor(
 
   if (propType === "pitcher_fantasy_score") {
     if (stat.outs === undefined) return undefined;
-    // Live partial: outs + K + ER only. W and QS held back until final.
-    return (
-      stat.outs * PITCHER_OUT_PTS +
+    const outs = stat.outs;
+    const er = stat.earnedRuns ?? 0;
+    let fp =
+      outs * PITCHER_OUT_PTS +
       (stat.strikeOuts ?? 0) * PITCHER_STRIKEOUT_PTS +
-      (stat.earnedRuns ?? 0) * PITCHER_EARNED_RUN_PTS
-    );
+      er * PITCHER_EARNED_RUN_PTS;
+    if (isFinal && isQualityStart(outs, er)) {
+      fp += PITCHER_QUALITY_START_PTS;
+    }
+    return fp;
   }
 
   const key = PROP_STAT_KEY[propType];
@@ -103,20 +112,31 @@ function liveActualFor(
   return stat[key] as number | undefined;
 }
 
-// Pace coloring for the live actual. For pitchers we compare actual vs the
-// pro-rated portion of the projection given how far into the game we are.
-// For hitters there's no half-inning baseline, so any contribution >0 is
-// green; 0 is neutral. Returns a Tailwind text color class.
+// Pace coloring for the actual stat shown next to the projection.
+//
+// Final games: this is the "did the model hit" indicator -- actual > proj is
+// green (model underestimated), actual < proj is red (model overestimated),
+// equal is neutral. Same calibration logic the /results Model Tracker uses.
+//
+// Live games: pitchers compare actual vs the pro-rated portion of the
+// projection given how far into the game we are; hitters have no
+// half-inning baseline so any contribution >0 is green, 0 is neutral.
 function paceColor(
   actual: number,
   projection: number,
   isHitter: boolean,
   status: GameStatus | undefined,
 ): string {
+  // Final game: actual vs projection.
+  if (status?.state === "final") {
+    if (actual > projection) return "text-emerald-400";
+    if (actual < projection) return "text-red-400";
+    return "text-slate-300";
+  }
   if (isHitter) {
     return actual > 0 ? "text-emerald-400" : "text-slate-300";
   }
-  // Pitcher pacing
+  // Pitcher pacing (live only)
   if (!status || !status.inningOrdinal) return "text-slate-300";
   const inningNum = parseInt(status.inningOrdinal, 10);
   if (!Number.isFinite(inningNum) || inningNum < 1) return "text-slate-300";
@@ -430,15 +450,16 @@ export default function PropBoard({
   // to the static matchup + date header in those cases.
   const liveStatus = useLiveGameStatus(date);
 
-  // Derive the list of currently-live gamePks from the schedule poll, then
-  // fetch box scores for those alone. The list is recomputed each render but
-  // useLiveBoxScores stabilizes via a stringified key, so the effect only
-  // re-runs when the set of live games actually changes.
+  // Split today's games into live (poll every 60s) vs final (fetch once each)
+  // gamePks. The hook stabilizes both via stringified keys so the effects
+  // only fire when the SET of game ids changes, not on every render.
   const liveGamePks: number[] = [];
+  const finalGamePks: number[] = [];
   for (const [gid, s] of liveStatus) {
     if (s.state === "live") liveGamePks.push(gid);
+    else if (s.state === "final") finalGamePks.push(gid);
   }
-  const liveStats = useLiveBoxScores(liveGamePks);
+  const liveStats = useLiveBoxScores(liveGamePks, finalGamePks);
 
   const isHitter = HITTER_PROPS.has(active);
 
@@ -492,16 +513,20 @@ export default function PropBoard({
               <ul className="divide-y divide-slate-800">
                 {g.pitchers.map((p, i) => {
                   const gameStatus = liveStatus.get(g.game_id);
-                  // Only show live actuals when the game is actually live; a
-                  // final-game boxscore would show total stats, which is what
-                  // /results is for, not the in-progress overlay.
-                  const liveActual =
-                    gameStatus?.state === "live"
-                      ? liveActualFor(
-                          active,
-                          liveStats.get(g.game_id)?.get(p.player_id),
-                        )
-                      : undefined;
+                  // Show the actual stat next to the projection for both
+                  // live games (in-progress overlay) and final games (the
+                  // "did the model hit" result chip). Scheduled / other
+                  // states stay projection-only.
+                  const showActual =
+                    gameStatus?.state === "live" ||
+                    gameStatus?.state === "final";
+                  const liveActual = showActual
+                    ? liveActualFor(
+                        active,
+                        liveStats.get(g.game_id)?.get(p.player_id),
+                        gameStatus?.state === "final",
+                      )
+                    : undefined;
                   return (
                     <li
                       key={`${g.game_id}-${i}`}

@@ -244,6 +244,37 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Final-game result chip + late-night cron (this session):
+- .github/workflows/refresh.yml: added a 4th cron at 06:00 UTC (2 AM ET)
+  so the grader catches every game that finished overnight, including
+  West Coast late games. Result: /results lands by ~2:05 AM ET instead
+  of waiting for the 8 AM run.
+- web/app/useLiveBoxScores.ts: now accepts TWO arrays — liveGamePks
+  (poll every 60s, existing behavior) and finalGamePks (fetch each
+  one exactly ONCE, tracked in a useRef Set so re-renders don't
+  re-fetch). A loaded box score from either path is merged into the
+  same Map<gamePk, Map<personId, StatLine>>. loadOne() was hoisted
+  out of the effect so both can share it. The "clear stats when no
+  live games" reset was dropped — Final stats would have been wiped
+  every render — replaced with `setStats(prev => merge(prev))` on
+  both effects.
+- web/app/PropBoard.tsx: split today's slate into liveGamePks +
+  finalGamePks and passes both to the hook. liveActualFor() now
+  takes an `isFinal: boolean` so the pitcher_fantasy_score path can
+  add the QS bonus (derivable from outs + ER) for Final games. The
+  W bonus is still omitted because the boxscore doesn't carry the
+  decision; the chip is consistent with the baseline's known ~6-FP-
+  low bias.
+- paceColor() gained a Final branch: actual > projection => green,
+  actual < projection => red, equal => slate. Same calibration
+  semantics the /results Model Tracker uses.
+- Render gate: showActual = (live OR final); for scheduled / other
+  states the right-side chip stays projection-only (existing
+  behavior).
+- Verified: tsc --noEmit clean. Existing live-game pace logic
+  unchanged (the new Final branch returns before the live path is
+  reached).
+
 Audit follow-up (trackedFrom + projection column, this session):
 - web/app/results/page.tsx: trackedFrom was issuing 12 separate
   round-trips (one per prop_type) sequentially-fired inside a
