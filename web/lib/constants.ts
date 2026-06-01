@@ -44,6 +44,23 @@ export const HITTER_PROPS: ReadonlySet<PropType> = new Set([
 // Mirrored from engine/constants.py EDGE_THRESHOLD — keep in sync.
 export const EDGE_THRESHOLD = 0.1;
 
+// Minimum line value for a book line to count as a "main market" line rather
+// than an alternate. SINGLE SOURCE OF TRUTH — imported by the /results Betting
+// Edge join, the home-page Featured Plays qualifier, AND the feature-5 sharp
+// badge so all three agree on what a real main-market line is. Props absent
+// from this map have no floor (e.g. walks / earned_runs are Model-Tracker
+// props with no betting-line evaluation in the codebase).
+//   - strikeouts / hits_allowed: floors exclude DFS-style 0.5–1.5 alternates.
+//   - outs_recorded: 10.5 (ParlayAPI rarely returns real outs lines).
+//   - pitcher_fantasy_score / hitter_fantasy_score: PrizePicks-only floors.
+export const MIN_LINE: Partial<Record<PropType, number>> = {
+  strikeouts:             3.5,
+  hits_allowed:           2.5,
+  outs_recorded:          10.5,
+  pitcher_fantasy_score:  6.0,
+  hitter_fantasy_score:   4.0,
+};
+
 // Real, two-sided sportsbooks — the only books that count toward sharp-money
 // agreement (feature 5). DFS apps (prizepicks/underdog/sleeper/betr) post flat
 // single-number lines, not two-sided over/under markets, so they're excluded.

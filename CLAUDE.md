@@ -269,6 +269,35 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Sharp badge follow-ups — MIN_LINE gate + split verify (this session):
+- MIN_LINE hoisted to web/lib/constants.ts as the SINGLE source of
+  truth (was duplicated: FEATURED_MIN_LINE in page.tsx + a local
+  MIN_LINE in results/page.tsx with identical values for shared props).
+  Both pages now import it; the local copies are gone. The canonical
+  map is the 5-prop superset (strikeouts 3.5, hits_allowed 2.5,
+  outs_recorded 10.5, pitcher_fantasy_score 6.0, hitter_fantasy_score
+  4.0). Featured-play values for its 3 props are identical, so behavior
+  is unchanged there.
+- computeSharp now applies the MIN_LINE gate: a real book's line below
+  the prop's main-market floor is an alternate and is dropped BEFORE
+  counting, so an alt-only book no longer contributes to agree/total.
+  Props without a floor (walks, earned_runs — Model-Tracker props with
+  no betting-line evaluation in the codebase) are counted as-is.
+- Re-verified under the gate (frontend logic mirrored vs raw DB):
+  * Griffin Jax SO 2026-06-01: proj 3.9 vs five 4.5 lines (all >= 3.5
+    floor) -> still SHARP 5/5 under (full). UNCHANGED.
+  * Luinder Avila SO: proj 3.4 vs caesars+pinnacle 3.5 (at floor) ->
+    still SHARP 2/2 under (partial). UNCHANGED.
+- LIVE split case (previously only inspected): today's 2026-06-01
+  slate has NO post-gate split (qualifying real books cluster tightly).
+  On the most recent prior slate (2026-05-31) there ARE genuine ones,
+  e.g. Yoshinobu Yamamoto strikeouts proj 6.7 — DraftKings 8.5 (model
+  under) + Pinnacle 6.5 (model over), a true straddle (6.5 < 6.7 < 8.5)
+  -> even split -> correctly NO badge. Confirmed against raw per-book
+  lines; not fabricated.
+- Frontend-only (page.tsx, results/page.tsx, constants.ts); no engine
+  touched; FEATURE_COLS still 11; tsc clean; npm run build passes.
+
 Sharp-money agreement badge (feature 5) (this session):
 - Report from step 0: getSlate fetches edges (ONE baseline book per prop:
   pinnacle or "consensus") + projections + lines.fetched_at TIMESTAMP —

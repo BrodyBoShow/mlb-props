@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES, TRACKER_PROPS } from "@/lib/constants";
+import { ALL_PROP_TYPES, MIN_LINE, TRACKER_PROPS } from "@/lib/constants";
 import type {
   EvaluatedResult,
   PropType,
@@ -46,30 +46,10 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
   hitter_fantasy_score:   "actual_hitter_fantasy_score",
 };
 
-// Minimum line value to count as a "main market" line for the BETTING EDGE
-// section. Props absent from this map are not evaluated against book lines
-// at all -- they go through the Model Tracker section (calibration only,
-// no lines required).
-//
-// Betting Edge (these props): strikeouts, hits_allowed, outs_recorded,
-//                             pitcher_fantasy_score, hitter_fantasy_score
-// Model Tracker:             walks, earned_runs, hitter_hits,
-//                             hitter_total_bases (see TRACKER_PROPS below)
-// Excluded entirely:          home runs, runs, RBIs (one-sided markets).
-const MIN_LINE: Partial<Record<PropType, number>> = {
-  strikeouts:             3.5,
-  // Hits allowed: lowered from 3.5 to 2.5. Back-end-rotation arms with
-  // 5 IP expected lines posted at 2.5 were being dropped; the result was
-  // 0/0 rows for hits_allowed even when projections + logs both existed.
-  // 2.5 still excludes any 1.5 alternates posted on DFS books.
-  hits_allowed:           2.5,
-  // Outs recorded: ParlayAPI returns 0 player_pitcher_outs lines from
-  // every book we ingest. Effectively never evaluated -- the per-prop
-  // card surfaces this clearly with "no lines yet".
-  outs_recorded:          10.5,
-  pitcher_fantasy_score:  6.0,
-  hitter_fantasy_score:   4.0,
-};
+// MIN_LINE (main-market floor per prop) now lives in @/lib/constants as the
+// single source of truth — imported above. Betting Edge evaluates only props
+// present in that map; absent props (walks, earned_runs, hitter_hits,
+// hitter_total_bases) go through the Model Tracker section instead.
 
 // TRACKER_PROPS + ALL_PROP_TYPES now live in @/lib/constants — imported above.
 

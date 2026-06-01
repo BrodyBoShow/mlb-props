@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES, REAL_BOOKS } from "@/lib/constants";
+import { ALL_PROP_TYPES, MIN_LINE, REAL_BOOKS } from "@/lib/constants";
 import type { ByProp, FeaturedPlay, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
@@ -42,15 +42,9 @@ const FEATURED_MIN_EDGE = 0.12;
 // visibly off the line.
 const FEATURED_MIN_LEAN = 0.3;
 
-// Same MIN_LINE thresholds the /results page uses to filter alternate
-// lines out of the main-market hit rate. Featured plays must come from
-// the main market for the same reason — alt lines are easier to "hit"
-// and would inflate the apparent edge.
-const FEATURED_MIN_LINE: Partial<Record<PropType, number>> = {
-  strikeouts:    3.5,
-  hits_allowed:  2.5,
-  outs_recorded: 10.5,
-};
+// Featured plays + the sharp badge both use the shared MIN_LINE map (the same
+// thresholds /results uses) so alt lines never inflate a featured edge or a
+// sharp count. Imported from @/lib/constants — single source of truth.
 
 // ── Recent-form spark dots ───────────────────────────────────────────────────
 // Maps each pitcher prop that gets an L5 spark row to its actual column in
@@ -481,14 +475,29 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   // (counts toward total, agrees with neither side). The agreed direction is
   // the strict majority of non-push leans; an even split yields no majority
   // and therefore no badge.
+  //
+  // MIN_LINE gate (follow-up consistency fix): a book's line below the prop's
+  // main-market floor is an alternate — it's dropped BEFORE counting, so a
+  // book whose only stored line for the prop is a sub-threshold alt doesn't
+  // contribute to agree/total at all. Same floor /results + Featured Plays
+  // use. Props without a floor (walks, earned_runs) are counted as-is.
   function computeSharp(
     playerId: number,
     propType: PropType,
     projection: number | undefined,
   ): import("@/lib/types").SharpAgreement | undefined {
     if (projection === undefined || projection === null) return undefined;
-    const books = sharpByKey.get(`${playerId}|${propType}`);
-    if (!books || books.size < 2) return undefined;   // need 2+ real books
+    const allBooks = sharpByKey.get(`${playerId}|${propType}`);
+    if (!allBooks) return undefined;
+
+    // Drop alt lines below the prop's main-market floor (if it has one).
+    const floor = MIN_LINE[propType];
+    const books = new Map<string, number>();
+    for (const [book, line] of allBooks) {
+      if (floor !== undefined && line < floor) continue;
+      books.set(book, line);
+    }
+    if (books.size < 2) return undefined;   // need 2+ qualifying real books
 
     const overBooks: string[] = [];
     const underBooks: string[] = [];
@@ -600,7 +609,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
       // are just as featurable as large positive ones.
       const absEdge = Math.abs(edge);
       if (absEdge < FEATURED_MIN_EDGE) return null;
-      const lineMin = FEATURED_MIN_LINE[propType];
+      const lineMin = MIN_LINE[propType];
       if (lineMin === undefined || e.line < lineMin) return null;
 
       const proj = projIndex.get(`${e.player_id}|${e.prop_type}`);
