@@ -189,7 +189,6 @@ def grade_yesterday(
             "home_away":             side,
             "opp_k_rate":            opp_k_rate,
             "days_rest":             days_rest,
-            "projection":            float(proj["projection"]),
         })
         win_marker = "W" if actual_win else "—"
         print(
@@ -357,7 +356,6 @@ def grade_hitters_yesterday(
             "stolen_bases":       result["stolen_bases"],
             "actual_hitter_fantasy_score": actual_hitter_fp,
             "home_away":          result["home_away"],
-            "projection":         float(proj["projection"]),
         })
         print(
             f"  hitter {player_id}: projected {proj['projection']}"

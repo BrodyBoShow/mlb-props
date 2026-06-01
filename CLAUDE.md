@@ -244,6 +244,30 @@ the season as player_game_logs accumulates graded data: XGBoost activates once
 player_game_logs has >= 50 pitcher rows; calibration activates per-pitcher once
 5+ graded starts exist. No code changes needed for either to kick in.
 
+Audit follow-up (trackedFrom + projection column, this session):
+- web/app/results/page.tsx: trackedFrom was issuing 12 separate
+  round-trips (one per prop_type) sequentially-fired inside a
+  Promise.all. Replaced with ONE paginated, ordered-ascending scan
+  of (prop_type, game_date) on the lines table, then a JS reduce
+  that keeps the first occurrence per prop_type (= earliest date).
+  Fetched in parallel with projData/lineData/logData. Same
+  semantic result, but reduces /results page load by 11 round-trips.
+- player_game_logs.projection column dropped:
+  * grade.grade_yesterday()/grade_hitters_yesterday() no longer
+    write the "projection" key — the column held whichever prop's
+    projection happened to be selected last (ambiguous and unread).
+    Per-prop projections live in the projections table and are
+    joined on (player_id, game_id, prop_type, projection_date) when
+    needed.
+  * db/schema.sql: removed the `projection numeric` definition.
+  * db/migrations/drop_projection_column.sql: one-time manual
+    migration (run in Supabase SQL editor):
+      ALTER TABLE player_game_logs DROP COLUMN IF EXISTS projection;
+  * Verified: no engine or frontend code reads
+    player_game_logs.projection. The pipeline run on the existing
+    column continues to work after the schema strip because
+    PostgREST silently drops unknown payload keys.
+
 Audit cleanup pass (Groups 1-5, this session):
 - GROUP 1 (critical bugs):
   * web/app/page.tsx ALL_PROP_TYPES now includes both fantasy_score props

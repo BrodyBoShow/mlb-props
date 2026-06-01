@@ -173,7 +173,14 @@ async function getResults(): Promise<{
   // fetchAllPages helper from @/lib/supabase, which handles the Range-header
   // pagination uniformly across pages.
 
-  const [projData, lineData, logData] = await Promise.all([
+  // trackedFrom: earliest game_date per prop_type across ALL history (not
+  // just this window). Previously 12 separate round-trips (one per prop);
+  // now a single ordered scan with JS dedup. The select is paginated to
+  // bypass Supabase's 1000-row cap — lines accumulates roughly N_props ×
+  // N_books × N_days rows, well over 1000 for any non-trivial history.
+  type TrackedFromRow = { prop_type: string; game_date: string };
+
+  const [projData, lineData, logData, trackedFromRows] = await Promise.all([
     fetchAllPages<ProjectionRow>(
       (from, to) =>
         supabase
@@ -220,6 +227,20 @@ async function getResults(): Promise<{
           }>,
       "logs",
     ),
+
+    fetchAllPages<TrackedFromRow>(
+      (from, to) =>
+        supabase
+          .from("lines")
+          .select("prop_type, game_date")
+          .in("prop_type", ALL_PROP_TYPES as string[])
+          .order("game_date", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+            data: TrackedFromRow[] | null;
+            error: unknown;
+          }>,
+      "tracked-from",
+    ),
   ]);
 
   console.log(
@@ -231,26 +252,14 @@ async function getResults(): Promise<{
   const lines = lineData;
   const logs = logData;
 
-  // Per-prop "tracked from" — earliest game_date with any line for this
-  // prop_type. One round-trip per prop with LIMIT 1 ordered ascending
-  // (cheap; total lines table is small). This is the all-time first-tracked
-  // date, NOT just within the current window, so a prop tracked since
-  // April still shows "tracked from Apr ..." even when the window is
-  // 7 days. Props that have never been ingested return null.
-  const trackedFromEntries = await Promise.all(
-    ALL_PROP_TYPES.map(async (pt) => {
-      const { data } = await supabase
-        .from("lines")
-        .select("game_date")
-        .eq("prop_type", pt)
-        .order("game_date", { ascending: true })
-        .limit(1);
-      return [pt, (data?.[0]?.game_date as string | undefined) ?? null] as const;
-    }),
-  );
+  // Reduce the ordered-ascending trackedFromRows to one entry per prop_type
+  // by keeping the first occurrence (earliest date). The fetch above is
+  // ordered by game_date ascending so the first row seen per prop_type IS
+  // the all-time tracked-from date — even if this window only spans 7 days.
   const trackedFrom: Partial<Record<PropType, string>> = {};
-  for (const [pt, d] of trackedFromEntries) {
-    if (d) trackedFrom[pt] = d;
+  for (const row of trackedFromRows) {
+    const pt = row.prop_type as PropType;
+    if (!trackedFrom[pt]) trackedFrom[pt] = row.game_date;
   }
 
   // Diagnostic logging — visible in Vercel function logs / dev terminal.

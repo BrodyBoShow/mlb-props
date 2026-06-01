@@ -55,7 +55,6 @@ create table if not exists player_game_logs (
     home_away         text,        -- 'home' | 'away'
     opp_k_rate        numeric,     -- opposing team K% as batters (0–1)
     days_rest         integer,
-    projection        numeric,     -- what the model projected that day
     created_at        timestamptz default now(),
     unique (player_id, game_id)
 );
