@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
+import { BOOK_DISPLAY } from "@/lib/constants";
 import type { FeaturedSection } from "@/lib/types";
 
 // Runs on the Node runtime (uses process.env + fetch to Anthropic).
@@ -20,14 +21,28 @@ type PlayCtx = {
   oppKRate?: number;
   agree?: number;       // sharp-agreement count
   total?: number;
+  books?: string[];     // sharp-agreement book keys
+  dir?: "over" | "under";
+  graded?: number;      // graded games of history backing this play
   homeTeam: string;
   awayTeam: string;
 };
 
+// Human, analyst voice — the goal is reads that sound like a sharp texting a
+// friend, not a templated stat dump. We give it the real numbers and let it
+// phrase them naturally; the variety rules stop every card sounding identical.
 const SYSTEM_PROMPT =
-  "You write one-sentence baseball prop insights. Be specific, punchy, " +
-  "under 20 words. No filler. Don't start with 'The model' or 'The'. " +
-  "Lead with the key matchup factor.";
+  "You're a sharp baseball bettor firing off quick prop reads to a friend who " +
+  "knows the game. For each play write 1–2 tight sentences, max ~32 words. " +
+  "Work the REAL numbers in naturally — projection vs line, the edge, opponent " +
+  "strikeout rate, park factor, how many sharp books agree and which way, how " +
+  "much graded history backs it. Sound human and confident, not robotic. " +
+  "Hard rules: vary your openings — do NOT start every read with the player's " +
+  "name, and never start with 'The model', 'The', or 'Facing'. Lead with the " +
+  "single biggest factor for THIS play. No hedging, no filler, no emojis, no " +
+  "betting advice language like 'lock' or 'guaranteed'. If the history is thin " +
+  "(under 4 graded games) or it's a hitter prop (noisy, lines skew under), keep " +
+  "the confidence honest.";
 
 // Map prop_type -> a readable noun for the prompt.
 const PROP_NOUN: Record<string, string> = {
@@ -47,31 +62,63 @@ function matchupTeams(matchup: string): { away: string; home: string } {
   return { away: "", home: "" };
 }
 
-// One prompt line per play. HR plays omit edge/lean and lead with park context.
+function bookList(books?: string[]): string {
+  if (!books || books.length === 0) return "";
+  return books.map((b) => BOOK_DISPLAY[b] ?? b).join(", ");
+}
+
+function historyNote(graded?: number): string {
+  if (graded === undefined) return "";
+  if (graded === 0) return "no graded games yet (brand-new sample)";
+  if (graded < 4) return `thin history — only ${graded} graded game${graded === 1 ? "" : "s"}`;
+  return `${graded} graded games of track record`;
+}
+
+// One prompt block per play. HR plays omit edge/lean and lead with park context.
 function describePlay(p: PlayCtx, n: number): string {
+  const teams = p.homeTeam ? `${p.awayTeam} at ${p.homeTeam}` : "";
+
   if (p.section === "HR MATCHUPS") {
-    const pf = p.parkFactor !== undefined ? p.parkFactor.toFixed(2) : "1.00";
-    const venue = p.homeTeam ? `${p.homeTeam} ballpark` : "the ballpark";
-    return (
-      `${n}. [HR MATCHUP] ${p.player} (${p.awayTeam} @ ${p.homeTeam}), ` +
-      `projected ${p.proj.toFixed(2)} HR, ${venue} hit park factor ${pf}. ` +
-      `Lead with park + matchup; do not mention an edge or a betting line.`
-    );
+    const pf = p.parkFactor ?? 1.0;
+    const parkDesc =
+      pf >= 1.04
+        ? `a hitter-friendly park (hit factor ${pf.toFixed(2)})`
+        : pf <= 0.96
+          ? `a pitcher-suppressing park (hit factor ${pf.toFixed(2)})`
+          : `a neutral park (hit factor ${pf.toFixed(2)})`;
+    const bits = [
+      `${n}. SECTION HR MATCHUPS — ${p.player}, ${teams}`,
+      `home-run projection ${p.proj.toFixed(2)} in ${parkDesc}`,
+    ];
+    const h = historyNote(p.graded);
+    if (h) bits.push(h);
+    bits.push("lead with the park / power matchup; there is NO betting line or edge here");
+    return bits.join("; ") + ".";
   }
+
   const noun = PROP_NOUN[p.prop] ?? p.prop;
   const lean = p.lean === "over" ? "OVER" : "UNDER";
-  const parts = [
-    `${n}. [${p.section}] ${p.player} (${p.awayTeam} @ ${p.homeTeam}), ` +
-      `${noun}: projected ${p.proj.toFixed(1)} vs line ${p.line?.toFixed(1)}, ` +
-      `model leans ${lean} (edge ${p.edge?.toFixed(2)})`,
+  const bits = [
+    `${n}. SECTION ${p.section} — ${p.player}, ${teams}`,
+    `${noun}: model projects ${p.proj?.toFixed(1)} against a ${p.line?.toFixed(1)} line, ` +
+      `an ${lean} lean (model-vs-market edge ${(p.edge ?? 0).toFixed(2)}, where ~0.12+ is strong)`,
   ];
   if (p.oppKRate !== undefined) {
-    parts.push(`opponent lineup K rate ${(p.oppKRate * 100).toFixed(0)}%`);
+    bits.push(`opposing lineup strikes out ${(p.oppKRate * 100).toFixed(0)}% of the time`);
   }
   if (p.agree && p.total) {
-    parts.push(`${p.agree}/${p.total} sharp books agree`);
+    const names = bookList(p.books);
+    const where = p.dir ?? (p.lean as string);
+    bits.push(
+      `${p.agree} of ${p.total} sharp books${names ? ` (${names})` : ""} sit on the ${where}`,
+    );
   }
-  return parts.join(", ") + ".";
+  const h = historyNote(p.graded);
+  if (h) bits.push(h);
+  if (p.section === "HITTING EDGES") {
+    bits.push("hitter prop — noisy, lines skew under, so frame the edge honestly");
+  }
+  return bits.join("; ") + ".";
 }
 
 // The actual Anthropic call, cached by (the contexts) for 30 min. unstable_cache
@@ -83,9 +130,9 @@ const generateInsights = unstable_cache(
     if (!apiKey || ctxs.length === 0) return {};
 
     const userText =
-      "Write one insight sentence for each numbered play below. Return " +
-      "exactly one line per play, prefixed with its number (e.g. '1. ...'). " +
-      "Keep each under 20 words.\n\n" +
+      "Write a one- to two-sentence read for each numbered play below. Return " +
+      "exactly one line per play, prefixed with its number (e.g. '1. ...') and " +
+      "nothing else — no headers, no blank lines. Each read ~32 words max.\n\n" +
       ctxs.map((p, i) => describePlay(p, i + 1)).join("\n");
 
     try {
@@ -98,7 +145,7 @@ const generateInsights = unstable_cache(
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: Math.min(60 * ctxs.length, 1024),
+          max_tokens: Math.min(110 * ctxs.length, 2048),
           system: SYSTEM_PROMPT,
           messages: [{ role: "user", content: userText }],
         }),
@@ -163,6 +210,9 @@ export async function POST(req: Request) {
         oppKRate: p.oppKRate,
         agree: p.sharpAgreement?.agree,
         total: p.sharpAgreement?.total,
+        books: p.sharpAgreement?.books,
+        dir: p.sharpAgreement?.direction,
+        graded: p.gradedStarts,
         homeTeam: home,
         awayTeam: away,
       });

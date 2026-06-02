@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FeaturedPlay, FeaturedSection, PropType } from "@/lib/types";
 import SharpBadge from "./SharpBadge";
 
@@ -57,9 +57,12 @@ function ConfidenceLine({ count }: { count: number }) {
 
 // Insight line: shimmer while the POST is in flight (and a key is expected),
 // the AI sentence once it lands, or nothing when there's no key / no insight.
-// Long insights (>80 chars, a proxy for "overflows 2 lines") become tap-to-
-// expand: collapsed shows a 2-line clamp + "↓ more"; tapping the insight area
-// reveals the full text + "↑ less". Short insights stay a plain, static line.
+//
+// Tap-to-expand is driven by ACTUAL overflow, not a char-count proxy — every
+// card measures whether its clamped (2-line) text is being truncated and only
+// then shows the "↓ more" toggle. That keeps the behavior identical across
+// cards: a read that genuinely fits in two lines is static with no toggle; one
+// that's cut off gets the toggle, regardless of exact length.
 function InsightLine({
   text,
   loading,
@@ -68,19 +71,44 @@ function InsightLine({
   loading: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const pRef = useRef<HTMLParagraphElement>(null);
+
+  // Measure overflow only while collapsed (when expanded the clamp is removed,
+  // so scrollHeight == clientHeight and the signal would falsely read false).
+  // ResizeObserver re-checks on width changes (responsive grid / resize).
+  useEffect(() => {
+    if (expanded) return;
+    const el = pRef.current;
+    if (!el) return;
+    const check = () => setOverflows(el.scrollHeight - el.clientHeight > 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, expanded]);
 
   if (loading) {
     return <div className="mt-2 h-3 w-full animate-pulse rounded bg-slate-800" />;
   }
   if (!text) return null;
 
-  // Short enough to fit in two lines → no toggle, non-interactive.
-  if (text.length <= 80) {
-    return (
-      <p className="mt-2 line-clamp-2 text-[11px] italic leading-snug text-slate-400">
-        {text}
-      </p>
-    );
+  const interactive = overflows || expanded;
+
+  const paragraph = (
+    <p
+      ref={pRef}
+      className={`text-[11px] italic leading-snug text-slate-400 transition-all duration-200 ${
+        expanded ? "" : "line-clamp-2"
+      }`}
+    >
+      {text}
+    </p>
+  );
+
+  // Fits in two lines → plain, non-interactive line (no toggle).
+  if (!interactive) {
+    return <div className="mt-2">{paragraph}</div>;
   }
 
   return (
@@ -90,13 +118,7 @@ function InsightLine({
       aria-expanded={expanded}
       className="mt-2 block w-full cursor-pointer text-left"
     >
-      <p
-        className={`text-[11px] italic leading-snug text-slate-400 transition-all duration-200 ${
-          expanded ? "" : "line-clamp-2"
-        }`}
-      >
-        {text}
-      </p>
+      {paragraph}
       <span className="mt-0.5 inline-block text-[9px] uppercase tracking-wide text-slate-500">
         {expanded ? "↑ less" : "↓ more"}
       </span>
