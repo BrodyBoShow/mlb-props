@@ -31,21 +31,24 @@ export type { ByProp, GameGroup, Pitcher, PropType } from "@/lib/types";
 
 // ── prop metadata ─────────────────────────────────────────────────────────────
 
+// Labels carry a Pitcher/Hitter prefix so the filter tabs are unambiguous —
+// the two "Fantasy Score" props in particular (pitcher vs hitter) are otherwise
+// indistinguishable in the tab strip.
 const PROPS: { key: PropType; label: string; unit: string }[] = [
   // pitcher props
-  { key: "strikeouts",            label: "Strikeouts",     unit: "K"    },
-  { key: "hits_allowed",          label: "Hits Allowed",   unit: "HA"   },
-  { key: "walks",                 label: "Walks",          unit: "BB"   },
-  { key: "earned_runs",           label: "Earned Runs",    unit: "ER"   },
-  { key: "outs_recorded",         label: "Outs Recorded",  unit: "outs" },
-  { key: "pitcher_fantasy_score", label: "Fantasy Score",  unit: "FP"   },
+  { key: "strikeouts",            label: "Pitcher Strikeouts",    unit: "K"    },
+  { key: "hits_allowed",          label: "Pitcher Hits Allowed",  unit: "HA"   },
+  { key: "walks",                 label: "Pitcher Walks",         unit: "BB"   },
+  { key: "earned_runs",           label: "Pitcher Earned Runs",   unit: "ER"   },
+  { key: "outs_recorded",         label: "Pitcher Outs Recorded", unit: "outs" },
+  { key: "pitcher_fantasy_score", label: "Pitcher Fantasy Score", unit: "FP"   },
   // hitter props
-  { key: "hitter_hits",           label: "Hits",           unit: "H"    },
-  { key: "hitter_total_bases",    label: "Total Bases",    unit: "TB"   },
-  { key: "hitter_rbis",           label: "RBIs",           unit: "RBI"  },
-  { key: "hitter_runs",           label: "Runs",           unit: "R"    },
-  { key: "hitter_home_runs",      label: "Home Runs",      unit: "HR"   },
-  { key: "hitter_fantasy_score",  label: "Fantasy Score",  unit: "FP"   },
+  { key: "hitter_hits",           label: "Hitter Hits",           unit: "H"    },
+  { key: "hitter_total_bases",    label: "Hitter Total Bases",    unit: "TB"   },
+  { key: "hitter_rbis",           label: "Hitter RBIs",           unit: "RBI"  },
+  { key: "hitter_runs",           label: "Hitter Runs",           unit: "R"    },
+  { key: "hitter_home_runs",      label: "Hitter Home Runs",      unit: "HR"   },
+  { key: "hitter_fantasy_score",  label: "Hitter Fantasy Score",  unit: "FP"   },
 ];
 
 // EDGE_THRESHOLD and HITTER_PROPS now live in @/lib/constants — imported above.
