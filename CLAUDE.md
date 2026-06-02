@@ -2209,6 +2209,35 @@ Featured Plays HITTING EDGES populated — MIN_LINE floor fix (this session):
   featured plays. A board↔results alignment (point both at FEATURED_MIN_LINE) is
   a clean follow-up but out of this task's scope (board section only).
 
+/results Featured row unified with the board (FEATURED_MIN_LINE + REAL_BOOKS):
+- Goal: the board (page.tsx buildEdgePlays) now qualifies featured hitter plays
+  via FEATURED_MIN_LINE, but the /results "Featured Plays" hit-rate join still
+  used the shared MIN_LINE (pitcher floors only) -> the 34 board hitter_total_
+  bases plays weren't counted. Align the two definitions.
+- The task scoped this to "switch the floor only," BUT the diagnostic showed
+  featuredResults was ALSO missing the FEATURED_BOOKS filter the task assumed it
+  had. Switching only the floor surfaced the 35 hitter_total_bases (good) but
+  ALSO leaked 52 hitter_hits plays the board NEVER features (all hitter_hits
+  edges are bookmaker='consensus' — pinnacle posts no two-sided hits line — and
+  the board's FEATURED_BOOKS drops consensus). So floor-only FAILED the "same
+  prop/player rows" requirement. Fixed BOTH, entirely within the featured row:
+  * web/app/results/page.tsx featuredResults floor: MIN_LINE -> FEATURED_MIN_LINE
+    (the same map buildEdgePlays uses; shared MIN_LINE for Betting Edge untouched).
+  * Its edges fetch now also selects `bookmaker`; edgeByKey only keeps edges
+    whose bookmaker is in REAL_BOOKS (= FEATURED_BOOKS). consensus baselines
+    (hitter_hits, the 1 stray consensus strikeout) are dropped, matching the board.
+- VERIFIED (2026-06-02, paginated): /results Featured selection 38 (pitcher-only)
+  -> 73; board buildEdgePlays selection 72; overlap 72, only-board 0, only-results
+  1 (a benign line-source residual — the board grades vs the EDGE's line while
+  /results uses the BOOK_PREFERENCE line). Ezequiel Duran hitter_total_bases
+  (proj 2.0 vs 1.5) now in BOTH; hitter_hits = 0 in both. Betting Edge hit-rate
+  byte-identical (bettingResults uses MIN_LINE, never reads edgeByKey). tsc clean;
+  npm run build passes. Grading lag: today's hitter plays are mostly ungraded, so
+  the row counts them as they grade, not retroactively (expected, not backfilled).
+- Sim gotcha re-learned: a verification using .limit(50000) silently truncated at
+  Supabase's 1000-row cap and dropped Duran (beyond the first 1000); only .range()
+  pagination (fetchAllPages, which the real /results uses) returns the full set.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

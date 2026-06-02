@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES, MIN_LINE, TRACKER_PROPS } from "@/lib/constants";
+import { ALL_PROP_TYPES, FEATURED_MIN_LINE, MIN_LINE, REAL_BOOKS, TRACKER_PROPS } from "@/lib/constants";
 import type {
   EvaluatedResult,
   PropType,
@@ -107,13 +107,15 @@ type LineRow = {
   game_date: string;
 };
 
-// One edges-table row — only the de-vigged `edge` value is needed for the
-// Featured Plays |edge| gate (the line/classify come from the lines join).
+// One edges-table row. The de-vigged `edge` value drives the Featured |edge|
+// gate (line/classify come from the lines join); `bookmaker` applies the same
+// FEATURED_BOOKS gate the board's buildEdgePlays uses.
 type EdgeRow = {
   player_id: number;
   prop_type: string;
   game_date: string;
   edge: number | null;
+  bookmaker: string;
 };
 
 // player_game_logs rows hold every actual column. We index dynamically by
@@ -274,7 +276,7 @@ async function getResults(): Promise<{
       (from, to) =>
         supabase
           .from("edges")
-          .select("player_id, prop_type, game_date, edge")
+          .select("player_id, prop_type, game_date, edge, bookmaker")
           .gte("game_date", startDate)
           .lte("game_date", endDate)
           .in("prop_type", [...FEATURED_RESULT_PROPS] as string[])
@@ -474,7 +476,14 @@ async function getResults(): Promise<{
   // fetched above. HR matchups never appear (not in FEATURED_RESULT_PROPS).
   const edgeByKey = new Map<string, number>();
   for (const e of edgeData) {
-    if (e.edge !== null && e.edge !== undefined) {
+    // Only REAL_BOOKS edges count — the same FEATURED_BOOKS gate the board's
+    // buildEdgePlays applies. edge.py emits ONE baseline per (player, prop,
+    // date): 'pinnacle' (a real book) or 'consensus' (the synthetic DK/FD
+    // average). The board drops 'consensus', so we must too — otherwise
+    // hitter_hits (which only ever gets a consensus baseline, since pinnacle
+    // posts no two-sided hits line) would be counted here but never featured on
+    // the board. This + FEATURED_MIN_LINE make the two definitions identical.
+    if (e.edge !== null && e.edge !== undefined && REAL_BOOKS.includes(e.bookmaker)) {
       edgeByKey.set(`${e.player_id}|${e.prop_type}|${e.game_date}`, e.edge);
     }
   }
@@ -490,12 +499,14 @@ async function getResults(): Promise<{
       `${p.player_id}|${p.prop_type}|${p.projection_date}`,
     );
     if (!line) continue;
-    // Require a MIN_LINE floor, exactly like the board's buildEdgePlays AND
-    // bettingResults. MIN_LINE has no entry for hitter_hits/hitter_total_bases,
-    // so — like the board's HITTING EDGES section — they never qualify here.
-    // They stay in FEATURED_RESULT_PROPS so the breakdown lists them (showing
-    // 0/0) rather than silently hiding a prop the board claims to feature.
-    const minLine = MIN_LINE[propType];
+    // Featured-Plays floor — FEATURED_MIN_LINE, the SAME map the board's
+    // buildEdgePlays uses (NOT the shared MIN_LINE that drives Betting Edge
+    // above). MIN_LINE has no hitter_hits/hitter_total_bases entry, so this row
+    // used to silently exclude the hitter plays the board features;
+    // FEATURED_MIN_LINE adds the hitter main-market floors (total_bases 1.5,
+    // hits 0.5). Combined with the REAL_BOOKS gate on the edge above, this row
+    // and the board's buildEdgePlays now apply IDENTICAL Featured criteria.
+    const minLine = FEATURED_MIN_LINE[propType];
     if (minLine === undefined || line.line < minLine) continue;
 
     const edge = edgeByKey.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
