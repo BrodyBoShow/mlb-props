@@ -6,6 +6,15 @@ from zoneinfo import ZoneInfo as _ZoneInfo
 # Strikeout event types (Statcast)
 STRIKEOUT_EVENTS = {"strikeout", "strikeout_double_play"}
 
+# League-average hitter PrizePicks fantasy score per game — used as the floor
+# for build_hitter_fantasy_score_projections when a hitter has no usable game
+# history (debut / call-up) or the rolling average rounds to 0. A literal 0 FP
+# is a sentinel, not a real projection — no MLB starter projects to 0 fantasy
+# points. ~3.5 matches the typical starter's FP (the other lineup hitters
+# project 3.2–4.1 FP). Used ONLY for the empty/zero case; players with real
+# history keep their real projection.
+LEAGUE_AVG_HITTER_FP = 3.5
+
 
 # ─── timezone helpers ────────────────────────────────────────────────────────
 #

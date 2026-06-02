@@ -269,6 +269,42 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Hitter fantasy-score coverage: missing games + zero proj (this session):
+- Report (live DB, 2026-06-01): 9 games on slate, only 7 had
+  hitter_fantasy_score. hitter_hits AND hitter_fantasy_score had the
+  SAME 107 rows / same 7 games — so NOT a "hits populated but fantasy
+  isn't" case; both hitter prop types were missing the same 2 games
+  (Colorado@LAA 824027, LAD@ARI 825078). 1 zero-proj row (Jimmy Crooks).
+- Cause A (missing games): the 2 West Coast games' lineups post ~8 PM ET
+  but no cron runs between the 2 PM and 9 PM ET ticks; once hitter_hits
+  crosses the 100-row skip threshold, intermediate runs skip the whole
+  hitter pipeline and the late games never get filled. fetch_lineups()
+  now returns all 9 games (162 players incl. 18 each for the 2 missing),
+  confirming the lineups exist — they just weren't built.
+- Cause B (zero proj): build_hitter_fantasy_score_projections weighted-
+  averages per-game FP. Jimmy Crooks has 1 game (debut, 0 FP) -> avg 0.
+  The builder emitted 0 — a sentinel, not a projection. (The screenshot's
+  other "0 FP" are LIVE in-game actuals next to real "proj X.X", not
+  zero projections.)
+- Fix A — engine/main.py: extracted the 6-builder loop into
+  _build_and_upsert_hitters(players). The bulk-skip path now, before
+  returning, computes lineup players NOT in the existing hitter_hits id
+  set and runs a TARGETED FILL-IN for just those (covers late-posting
+  games even on a skip run). Returns [] so _run_lines_and_edges re-fetches
+  the COMPLETE set from the DB. (This run actually hit the full-rebuild
+  branch because the lineup grew enough to drop overlap below 80%; both
+  paths now cover all 9 games.)
+- Fix B — engine/baseline.py + constants.py: LEAGUE_AVG_HITTER_FP = 3.5.
+  build_hitter_fantasy_score_projections no longer skips empty-history
+  players or emits 0 — it floors to the league average when there's no
+  history OR the rolling avg is <= 0. Players with real history keep
+  their genuine projection (verified: Julio Rodriguez stayed 9.6).
+  Scoped to fantasy_score per the report (the reported prop).
+- Verified after fix: 9/9 games have hitter_fantasy_score (was 7);
+  0 zero-proj rows (Crooks/Smith/Arroyo now 3.5 via floor); Julio
+  Rodriguez unchanged at 9.6. Engine-only (baseline, constants, main);
+  model untouched; FEATURE_COLS still 11.
+
 "Last updated" now in the viewer's local timezone (this session):
 - Bug report: "updated 2h ago" while the absolute said 5:39 PM EDT and
   the user thought it was ~2 min old. Diagnosis (raw DB checked): the

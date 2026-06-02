@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 import stats
 from constants import (
+    LEAGUE_AVG_HITTER_FP,
     LOOKBACK_DAYS,
     OLDER_WEIGHT,
     RECENT_STARTS,
@@ -340,7 +341,23 @@ def build_hitter_fantasy_score_projections(
         player_id = p["player_id"]
         games = stats.get_hitter_games(player_id, LOOKBACK_DAYS, proj_date)
         if not games:
-            print(f"  no recent game-log data for hitter {player_id}, skipping")
+            # Debut / call-up with no game-log history. Never SKIP (the player
+            # is a confirmed starter and must get a projection) and never emit
+            # 0 — fall back to the league-average hitter FP floor.
+            projection = LEAGUE_AVG_HITTER_FP
+            rows.append(
+                {
+                    "game_id": p["game_id"],
+                    "player_id": player_id,
+                    "prop_type": "hitter_fantasy_score",
+                    "projection": projection,
+                    "projection_date": proj_date_str,
+                }
+            )
+            print(
+                f"  {p.get('full_name', player_id)}: no history -> "
+                f"{projection} FP (league-avg floor)"
+            )
             continue
         per_game_fp = [
             hitter_fantasy_score(
@@ -357,6 +374,21 @@ def build_hitter_fantasy_score_projections(
             for g in games
         ]
         projection = _weighted_projection(per_game_fp)
+        # A thin sample (1-2 games all scoring 0 FP) yields a 0 projection —
+        # a sentinel, not a real forecast. Floor it to the league average.
+        # Players with real history keep their genuine projection unchanged.
+        if projection <= 0:
+            projection = LEAGUE_AVG_HITTER_FP
+            print(
+                f"  {p.get('full_name', player_id)}: "
+                f"{[round(v, 1) for v in per_game_fp[:5]]} -> 0 (thin sample) "
+                f"-> {projection} FP (league-avg floor)"
+            )
+        else:
+            print(
+                f"  {p.get('full_name', player_id)}: "
+                f"{[round(v, 1) for v in per_game_fp[:5]]} -> {projection} FP"
+            )
         rows.append(
             {
                 "game_id": p["game_id"],
@@ -365,10 +397,6 @@ def build_hitter_fantasy_score_projections(
                 "projection": projection,
                 "projection_date": proj_date_str,
             }
-        )
-        print(
-            f"  {p.get('full_name', player_id)}: "
-            f"{[round(v, 1) for v in per_game_fp[:5]]} -> {projection} FP"
         )
     return rows
 

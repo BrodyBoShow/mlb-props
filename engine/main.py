@@ -308,11 +308,33 @@ def _run_hitter_pipeline(
         # so allow more excess tolerance than the pitcher path's 2.
         clean = len(excess) <= 15
         if match_ok and clean:
-            print(
-                f"  {existing_hitter} hitter_hits projections already exist for "
-                f"{today_str} -- skipping hitter baseline builders "
-                f"({len(overlap)}/{len(current_ids)} match, {len(excess)} excess)"
-            )
+            # Even when the bulk is "done", late-posting lineups (West Coast
+            # games whose lineups appear after the count crossed 100, between
+            # the 2 PM and 9 PM ET crons) leave whole games with NO hitter
+            # projections. Build those missing players — and ONLY those — so a
+            # skip run still covers newly-posted games. existing_ids is the
+            # set already projected (hitter_hits), so anyone in tonight's
+            # lineup but not in it is uncovered.
+            missing = [
+                p for p in lineup_players
+                if p.get("player_id") and p["player_id"] not in existing_ids
+            ]
+            if missing:
+                missing_games = {p["game_id"] for p in missing}
+                print(
+                    f"  {existing_hitter} hitter_hits already exist for {today_str}, "
+                    f"but {len(missing)} lineup players across {len(missing_games)} "
+                    f"game(s) have no hitter projections — filling those in"
+                )
+                _build_and_upsert_hitters(missing)
+            else:
+                print(
+                    f"  {existing_hitter} hitter_hits projections already exist for "
+                    f"{today_str} -- skipping hitter baseline builders "
+                    f"({len(overlap)}/{len(current_ids)} match, {len(excess)} excess)"
+                )
+            # Return [] so _run_lines_and_edges re-fetches the COMPLETE set
+            # from the DB (bulk + any fill-in just upserted), not a partial.
             return [], len(lineup_players)
         print(
             f"  WARNING: stored hitter projections for {today_str} appear stale "
@@ -324,23 +346,7 @@ def _run_hitter_pipeline(
         # tied to the wrong-slate game_ids).
         db.delete_projections_for_date_props(today_str, db._HITTER_PROP_TYPES)
 
-    hitter_projections: list[dict] = []
-    hitter_hit_rows: list[dict] = []
-    for builder, label in [
-        (baseline.build_hitter_hits_projections,        "hitter_hits"),
-        (baseline.build_hitter_total_bases_projections, "hitter_total_bases"),
-        (baseline.build_hitter_rbis_projections,        "hitter_rbis"),
-        (baseline.build_hitter_runs_projections,        "hitter_runs"),
-        (baseline.build_hitter_home_runs_projections,   "hitter_home_runs"),
-        (baseline.build_hitter_fantasy_score_projections, "hitter_fantasy_score"),
-    ]:
-        print(f"Building {label} projections...")
-        rows = builder(lineup_players)
-        if label == "hitter_hits":
-            hitter_hit_rows = rows
-        hitter_projections.extend(rows)
-        n = db.upsert_projections(rows)
-        print(f"  upserted {n} {label} projections")
+    hitter_projections, hitter_hit_rows = _build_and_upsert_hitters(lineup_players)
 
     # Sanity check: a full slate of confirmed lineups yields 200+ hitter
     # projections (18 batters/game x ~15 games). Far fewer means
@@ -354,6 +360,36 @@ def _run_hitter_pipeline(
     # name_to_id was mutated above (before the skip check) so hitter names
     # are available to the lines fetch regardless of which branch we took.
     return hitter_projections, len(lineup_players)
+
+
+def _build_and_upsert_hitters(
+    players: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Run all six hitter prop builders over `players` and upsert each.
+
+    Shared by the full-rebuild path and the targeted fill-in path (a subset
+    of lineup players whose games posted late). Returns
+    (all_hitter_projections, hitter_hits_rows) — the latter feeds the
+    full-path sanity check.
+    """
+    hitter_projections: list[dict] = []
+    hitter_hit_rows: list[dict] = []
+    for builder, label in [
+        (baseline.build_hitter_hits_projections,        "hitter_hits"),
+        (baseline.build_hitter_total_bases_projections, "hitter_total_bases"),
+        (baseline.build_hitter_rbis_projections,        "hitter_rbis"),
+        (baseline.build_hitter_runs_projections,        "hitter_runs"),
+        (baseline.build_hitter_home_runs_projections,   "hitter_home_runs"),
+        (baseline.build_hitter_fantasy_score_projections, "hitter_fantasy_score"),
+    ]:
+        print(f"Building {label} projections...")
+        rows = builder(players)
+        if label == "hitter_hits":
+            hitter_hit_rows = rows
+        hitter_projections.extend(rows)
+        n = db.upsert_projections(rows)
+        print(f"  upserted {n} {label} projections")
+    return hitter_projections, hitter_hit_rows
 
 
 def _run_lines_and_edges(
