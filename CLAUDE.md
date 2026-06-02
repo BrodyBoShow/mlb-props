@@ -269,6 +269,17 @@ Future-preview starter-ids false warning (this session):
   starter id populated; the few Nones are genuine (probables not yet
   announced for those teams).
 
+Added 8 PM ET cron — West Coast lineup window (this session):
+- Follow-up to the hitter-coverage fix. The cron schedule had a 7-hour
+  gap between the 2 PM and 9 PM ET runs. West Coast lineups post ~8 PM
+  ET, so a late game was posted-but-unbuilt from ~8 PM until the 9 PM
+  cron caught it (~1h window). Added a 7th cron at 0 0 * * * (8 PM ET)
+  so the _run_hitter_pipeline fill-in builds those late-posting games
+  within minutes of the lineup posting instead of up to an hour later.
+- Nearly free: it's a lines-only refresh that only builds the 1-2 newly
+  posted games via the fill-in path. .github/workflows/refresh.yml only;
+  no engine/frontend change. YAML validated (7 crons).
+
 Hitter fantasy-score coverage: missing games + zero proj (this session):
 - Report (live DB, 2026-06-01): 9 games on slate, only 7 had
   hitter_fantasy_score. hitter_hits AND hitter_fantasy_score had the

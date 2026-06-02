@@ -2,16 +2,20 @@ name: Refresh Projections
 
 on:
   schedule:
-    # Six runs/day. First run of the day does a full projection pass;
+    # Seven runs/day. First run of the day does a full projection pass;
     # subsequent runs detect that projections already exist for today
     # and skip the expensive baseline + XGBoost work, just refreshing
-    # lines + edges + calibration. See engine/main.py for the gates.
+    # lines + edges + calibration (and filling in late-posting lineups).
+    # See engine/main.py for the gates.
     - cron: "0 1 * * *"    # 9:00 PM ET — pitcher lines night before
     - cron: "0 5 * * *"    # 1:00 AM ET — overnight line updates
     - cron: "0 11 * * *"   # 7:00 AM ET — morning pitcher refresh
     - cron: "0 14 * * *"   # 10:00 AM ET — late pitcher + early hitter lines
     - cron: "0 17 * * *"   # 1:00 PM ET — main hitter lineup window
     - cron: "0 18 * * *"   # 2:00 PM ET — early game final capture
+    - cron: "0 0 * * *"    # 8:00 PM ET — West Coast lineup window (fills in
+                           #              late-posting hitter games via the
+                           #              _run_hitter_pipeline fill-in)
   workflow_dispatch:        # allow manual trigger from GitHub UI
 
 jobs:
