@@ -154,6 +154,11 @@ create table if not exists projections (
     -- db/migrations/add_opp_k_rate.sql. Frontend reads it for the
     -- "Facing a X% K lineup" context line. NULL on baseline-only props.
     opp_k_rate       numeric,
+    -- SHADOW: deterministic matchup-expected-K (lineup x per-batter K% x
+    -- platoon x expected PAs), set ONLY on strikeouts rows when the opposing
+    -- lineup is posted. Logged for calibration validation — NOT the displayed
+    -- projection. See engine/matchup_k.py + db/migrations/add_matchup_expected_k.sql.
+    matchup_expected_k numeric,
     updated_at       timestamptz default now(),
     primary key (game_id, player_id, prop_type, projection_date)
 );

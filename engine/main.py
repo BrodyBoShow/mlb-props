@@ -33,8 +33,10 @@ import edge
 import fetch
 import grade
 import lines
+import matchup_k
 import model as mlb_model
-from constants import BLEND_BASELINE_WEIGHT, BLEND_MODEL_WEIGHT, et_today
+import stats
+from constants import BLEND_BASELINE_WEIGHT, BLEND_MODEL_WEIGHT, LOOKBACK_DAYS, et_today
 
 
 # ─── blend helper (unchanged, just imports constants now) ────────────────────
@@ -392,6 +394,107 @@ def _build_and_upsert_hitters(
     return hitter_projections, hitter_hit_rows
 
 
+def _run_matchup_shadow(starters: list[dict], games: list[dict]) -> None:
+    """SHADOW MODE: deterministic matchup-expected-K stored ALONGSIDE the live
+    strikeout projection (projections.matchup_expected_k). NEVER changes the
+    displayed projection / edge / blend — it's logged only, pending calibration
+    validation against actuals (a separate future step that would flip it to
+    primary with the rolling average demoted to a light regularizer).
+
+    Needs the OPPOSING posted lineup, so it no-ops on morning runs (no lineup)
+    and populates on afternoon/evening runs. The caller wraps this in try/except
+    so any flakiness is absorbed — it must never affect the real pipeline.
+    """
+    from collections import defaultdict
+
+    today = et_today()
+    today_str = today.strftime("%Y-%m-%d")
+
+    lineup_players = fetch.fetch_lineups()
+    if not lineup_players:
+        print("  matchup-K shadow: no posted lineups yet — skipping (NULL stays)")
+        return
+
+    by_side: dict[tuple[int, str], list[dict]] = defaultdict(list)
+    for b in lineup_players:
+        by_side[(b["game_id"], b["home_away"])].append(b)
+
+    starter_ids = [s["player_id"] for s in starters]
+    hand = fetch._fetch_handedness_by_id(starter_ids)   # {id: {bats, throws}}
+    csw_map = db.get_latest_pitcher_csw(starter_ids)    # {id: recent CSW%}
+
+    updates: list[dict] = []
+    name_by_pid = {s["player_id"]: s.get("full_name", s["player_id"]) for s in starters}
+
+    for s in starters:
+        pid, gid = s["player_id"], s["game_id"]
+        ha = s.get("home_away", "home")
+        opp_lineup = by_side.get((gid, "away" if ha == "home" else "home"), [])
+        if len({b["batting_order"] for b in opp_lineup}) < 9:
+            continue  # opposing lineup not fully posted → leave matchup_expected_k NULL
+
+        # Pitcher stuff — recency-weighted recent K%/PA + expected IP (last 5
+        # starts, the recent 2 doubled, matching the project's baseline weights).
+        starts = stats.get_pitcher_starts(pid, LOOKBACK_DAYS, today)
+        recent = starts[:5]
+        w = [2, 2, 1, 1, 1][: len(recent)]
+        wK = sum(st["strikeouts"] * wi for st, wi in zip(recent, w))
+        wBF = sum(
+            (st["outs_recorded"] + st["hits_allowed"] + st["walks"]) * wi
+            for st, wi in zip(recent, w)
+        )
+        recent_k_per_pa = (wK / wBF) if wBF > 0 else None
+        expected_ip = (
+            sum((st["outs_recorded"] / 3.0) * wi for st, wi in zip(recent, w)) / sum(w)
+            if recent else None
+        )
+        pitcher_hand = (hand.get(pid) or {}).get("throws")
+        csw = csw_map.get(pid)
+
+        # Opposing lineup → per-batter recent K%/PA (engine regresses them) + bats.
+        lineup_in: list[dict] = []
+        for b in sorted(opp_lineup, key=lambda x: x["batting_order"])[:9]:
+            games_b = stats.get_hitter_games(b["player_id"], LOOKBACK_DAYS, today)[:15]
+            lineup_in.append({
+                "slot": b["batting_order"],
+                "strikeouts": sum(g["strikeouts"] for g in games_b),
+                "plate_appearances": sum(g["plate_appearances"] for g in games_b),
+                "bats": b.get("bats"),
+            })
+
+        mk = matchup_k.compute_matchup_expected_k(
+            csw, recent_k_per_pa, pitcher_hand, expected_ip, lineup_in
+        )
+        if mk is None:
+            continue
+        updates.append({
+            "game_id": gid, "player_id": pid,
+            "projection_date": today_str, "matchup_expected_k": mk,
+        })
+
+    if not updates:
+        print("  matchup-K shadow: no starters with a fully posted opposing lineup")
+        return
+
+    n = db.update_matchup_expected_k(updates)
+    print(f"  matchup-K shadow: wrote {n} matchup_expected_k values (shadow only)")
+
+    # Diagnostic: matchup-K vs the live strikeout baseline for a few starters.
+    live: dict[int, float] = {}
+    try:
+        for r in db.get_projections_for_date(today_str):
+            if r.get("prop_type") == "strikeouts" and r.get("player_id") is not None:
+                live[r["player_id"]] = r.get("projection")
+    except Exception:
+        pass
+    for u in updates[:6]:
+        base = live.get(u["player_id"])
+        print(
+            f"    {name_by_pid.get(u['player_id'])}: matchup-K "
+            f"{u['matchup_expected_k']} vs baseline {base}"
+        )
+
+
 def _run_lines_and_edges(
     name_to_id: dict[str, int],
     all_projections: list[dict],
@@ -548,6 +651,15 @@ def main() -> None:
         )
         hitter_projections, lineup_count = _run_hitter_pipeline(name_to_id)
         all_projections = pitcher_projections + hitter_projections
+
+        # SHADOW: matchup-expected-K (logged onto strikeouts rows, never the
+        # live projection). Decorative + experimental, so any failure is
+        # absorbed and never touches the real pipeline.
+        print("Computing matchup-expected-K (shadow)...")
+        try:
+            _run_matchup_shadow(starters, games)
+        except Exception as exc:
+            print(f"  matchup-K shadow failed ({exc}) -- skipping")
 
         _run_lines_and_edges(name_to_id, all_projections)
         _run_calibration(all_projections)

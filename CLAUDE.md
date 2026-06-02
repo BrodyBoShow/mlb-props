@@ -2044,6 +2044,66 @@ Whiff%/CSW% feature swap — INTENTIONAL model change (this session):
   baseline on calibration + realized edge. Skip raw zone-location (collinear
   with whiff once it's in) and the pitch->PA->start rebuild (gated on data).
 
+Feature liveness audit + matchup-K shadow baseline (this session):
+
+PART A — FEATURE LIVENESS AUDIT (report only, no code changed):
+- Ran the predict-time feature build across 18 of today's starters and checked
+  each of the 11 FEATURE_COLS for distinct values + whether every pitcher got
+  the imputed _CONTEXT_DEFAULTS constant.
+- FINDING: exactly ONE dead feature — lineup_lhh_pct. All 18 starters got 0.42
+  (distinct values = [0.42]); it's HARDCODED to 0.42 in
+  _build_pitcher_features_from_df ("only knowable once lineups post") while
+  grade.py logs the real value at grade time. So it VARIES in training but is
+  CONSTANT at inference — the same train/predict skew we fixed for whiff/CSW;
+  it's dead weight (1 of XGBoost's 11 inputs is a constant at predict).
+- All other 10 are live (vary across pitchers). park_factor_k showed only 2
+  distinct today but that's slate-coincidental (most parks neutral), not
+  structural — it's live. NO CHANGES MADE; a lineup_lhh_pct fix (compute it at
+  predict from today's posted lineup, like matchup-K does) is a separate
+  future task.
+
+PART B — MATCHUP-EXPECTED-K BASELINE (SHADOW MODE):
+- Deterministic batter-by-batter expected-K, computed + LOGGED per start but
+  NEVER the live projection/edge/blend. It's prior knowledge (doesn't train,
+  can't overfit), shadowed until its calibration is validated against actuals.
+- engine/matchup_k.py (NEW, pure math, prop-agnostic per-PA core):
+  expected_K = Σ over 9 posted batters of log5(regressed batter K%, pitcher
+  K%/PA) × platoon × expected_PAs(slot). Named, documented PRIORS:
+  K_PCT_REGRESSION_PA=50 (the one most likely miscalibrated — shrinks a
+  12-PA/5-K hitter from 0.417 -> 0.258 toward league 0.22), CSW_TO_K_SLOPE,
+  W_STUFF_CSW=0.6/W_STUFF_RECENT=0.4 (EDGE DESIGN — lean on FAST whiff/CSW so
+  it can diverge from a slow line), bounded PLATOON_SAME/OPP_HAND, SLOT_PA_CURVE
+  scaled by expected IP. NO DOUBLE-COUNT: standalone in shadow; at flip-time it
+  becomes primary with the rolling average demoted to a light regularizer (NOT
+  50/50).
+- engine/main.py: _run_matchup_shadow(starters, games) runs AFTER the hitter
+  pipeline (needs the OPPOSING posted lineup; no-ops on morning runs).
+  Gathers recency-weighted pitcher K%/PA + expected IP (get_pitcher_starts),
+  recent CSW (db.get_latest_pitcher_csw), throws (fetch._fetch_handedness_by_id),
+  and per-batter recent K%/PA (get_hitter_games) + bats per slot, computes
+  matchup-K, and does a TARGETED update of projections.matchup_expected_k.
+  Wrapped in try/except so it never affects the real pipeline. Diagnostic logs
+  matchup-K vs baseline (verified they DIVERGE: Cavalli 6.86 vs 5.4, Richardson
+  1.41 vs 3.7 — not consensus-replication).
+- engine/db.py: update_matchup_expected_k (per-row UPDATE of ONLY the shadow
+  column, PGRST204 strip-and-skip pre-migration) + get_latest_pitcher_csw.
+- db/schema.sql + db/migrations/add_matchup_expected_k.sql: new nullable
+  projections.matchup_expected_k. ACTION REQUIRED: run that migration in
+  Supabase — until then the step computes + logs but the write PGRST204-skips
+  (verified).
+- engine/_validate_matchup_k.py (NEW, standalone): joins matchup_expected_k to
+  actual_strikeouts + the book line and reports, for BOTH matchup-K and the
+  current baseline, (a) calibration in the line region (reliability of P(over),
+  not MAE) and (b) realized edge on divergences (when leans disagree, who won).
+  Notes ~60 starts is a sanity check, not enough to tune priors. Runs clean
+  now and reports the pre-migration/no-data state gracefully.
+- Verified: FEATURE_COLS still EXACTLY 11, matchup_expected_k never in it;
+  python engine/main.py clean (edges still 554, no change to displayed
+  projection/edge); hand-check EXACT (Griffin Jax 9-batter breakdown sums to
+  3.64 = compute()); small-sample regression confirmed (0.258); PGRST204
+  pre-migration path works. SHADOW ONLY — flipping to primary is a separate
+  future step gated on the validation scaffolding.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

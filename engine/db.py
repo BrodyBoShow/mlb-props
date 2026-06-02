@@ -491,6 +491,77 @@ def upsert_projections(rows: "list[ProjectionRow] | list[dict]") -> int:
         raise
 
 
+def update_matchup_expected_k(updates: list[dict]) -> int:
+    """SHADOW: set projections.matchup_expected_k on existing strikeouts rows.
+
+    Each update: {game_id, player_id, projection_date, matchup_expected_k}.
+    A targeted UPDATE (not an upsert) so it ONLY touches the shadow column and
+    never disturbs the live projection/opp_k_rate. Returns the count written.
+
+    Defensive: the column only exists after db/migrations/add_matchup_expected_k
+    .sql is applied; if it's missing PostgREST returns PGRST204 — we warn once
+    and skip (the pipeline keeps running pre-migration). Per-row round-trips,
+    but a slate is only ~15-18 starters.
+    """
+    if not updates:
+        return 0
+    client = _client()
+    written = 0
+    for u in updates:
+        try:
+            (
+                client.table("projections")
+                .update({"matchup_expected_k": u["matchup_expected_k"]})
+                .eq("game_id", u["game_id"])
+                .eq("player_id", u["player_id"])
+                .eq("prop_type", "strikeouts")
+                .eq("projection_date", u["projection_date"])
+                .execute()
+            )
+            written += 1
+        except Exception as exc:
+            msg = str(exc)
+            if "matchup_expected_k" in msg and ("PGRST204" in msg or "Could not find" in msg):
+                print(
+                    "  WARNING: projections missing matchup_expected_k column -- "
+                    "skipping shadow write. Run "
+                    "db/migrations/add_matchup_expected_k.sql to enable it."
+                )
+                return 0
+            raise
+    return written
+
+
+def get_latest_pitcher_csw(player_ids: list[int]) -> dict[int, float]:
+    """Most-recent non-null pitcher_csw_pct_30d per pitcher from player_game_logs.
+
+    Used by the matchup-K shadow step as the pitcher's recent CSW% stuff input
+    without an extra Statcast fetch (grade.py already logs it per start). Returns
+    {} on any error or if the column isn't present yet.
+    """
+    if not player_ids:
+        return {}
+    try:
+        resp = (
+            _client()
+            .table("player_game_logs")
+            .select("player_id, pitcher_csw_pct_30d, game_date")
+            .in_("player_id", list(player_ids))
+            .not_.is_("pitcher_csw_pct_30d", "null")
+            .order("game_date", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        print(f"  could not fetch pitcher_csw_pct_30d: {exc}")
+        return {}
+    out: dict[int, float] = {}
+    for r in resp.data or []:
+        pid = int(r["player_id"])
+        if pid not in out and r.get("pitcher_csw_pct_30d") is not None:
+            out[pid] = float(r["pitcher_csw_pct_30d"])  # rows are newest-first
+    return out
+
+
 # PrizePicks-only fantasy props whose lines arrive as a goblin/standard/demon
 # alt-line ladder. ParlayAPI returns a RANDOM rung per call, so a single fetch
 # can't tell which value is the real (standard) line. We accumulate the distinct
