@@ -125,6 +125,33 @@ def _resolved_schedule(date_str: str | None):
                 }
             )
 
+    # The lookup_player payload omits batSide/pitchHand and returns a nameless
+    # currentTeam, so team/bats/throws above come back None. Backfill all three
+    # in ONE bulk MLB /people call — the SAME helper the lineup path uses. We
+    # keep lookup_player ONLY for the fuzzy name→id resolution; bio comes from
+    # /people. Runs once per date (this function is lru_cached), so the enriched
+    # records are shared by fetch_games / fetch_starters / fetch_probable_pitchers
+    # / fetch_starters_for_date for free. Failure → bio stays None (graceful).
+    if records:
+        bio = _fetch_handedness_by_id([r["player_id"] for r in records])
+        resolved = 0
+        for r in records:
+            b = bio.get(r["player_id"])
+            if not b:
+                continue
+            if b.get("bats"):
+                r["bats"] = b["bats"]
+            if b.get("throws"):
+                r["throws"] = b["throws"]
+            if b.get("team"):
+                r["team"] = b["team"]
+            if b.get("throws") or b.get("team"):
+                resolved += 1
+        print(
+            f"  resolved bio (team/bats/throws) for {resolved} / {len(records)} "
+            f"probable starters via MLB /people"
+        )
+
     return schedule, records, starter_ids_by_game
 
 
@@ -286,22 +313,28 @@ def fetch_lineups(date_str: str | None = None) -> list[dict]:
 
 
 def _fetch_handedness_by_id(player_ids: list[int]) -> dict[int, dict]:
-    """Resolve player_id -> {bats, throws} via the MLB Stats API /people endpoint.
+    """Resolve player_id -> {bats, throws, team} via the MLB Stats API /people.
 
-    A SINGLE bulk request resolves any number of player ids; the alternative
-    (statsapi.boxscore_data → person.batSide / person.pitchHand) is empty in
-    the modern response and statsapi.lookup_player also returns batSide=None.
-    Returns {} on any failure so callers can fall back to defaults.
+    A SINGLE bulk request resolves any number of player ids; the alternatives
+    (statsapi.boxscore_data → person.batSide / person.pitchHand, and
+    statsapi.lookup_player) both return batSide/pitchHand=None and a nameless
+    currentTeam. Returns {} on any failure so callers can fall back to defaults.
 
-    Each value is shaped {"bats": "L"|"R"|"S"|None, "throws": "L"|"R"|None}.
-    Players not in the response are silently dropped — caller treats absence
-    as "unknown" and uses defaults.
+    hydrate=currentTeam is required for the team NAME — the default /people
+    response returns currentTeam with only an id. The full team-name string it
+    yields matches games.home_team (statsapi home_name), which the HR-composite
+    platoon term compares against.
+
+    Each value is shaped {"bats": "L"|"R"|"S"|None, "throws": "L"|"R"|None,
+    "team": str|None}. Players not in the response are silently dropped — caller
+    treats absence as "unknown" and uses defaults. (Lineup callers that only read
+    bats/throws are unaffected by the added team key.)
     """
     if not player_ids:
         return {}
     ids_csv = ",".join(str(int(p)) for p in player_ids)
     try:
-        resp = statsapi.get("people", {"personIds": ids_csv})
+        resp = statsapi.get("people", {"personIds": ids_csv, "hydrate": "currentTeam"})
     except Exception as exc:
         print(f"  WARNING: statsapi.get('people') failed: {exc}")
         return {}
@@ -313,6 +346,7 @@ def _fetch_handedness_by_id(player_ids: list[int]) -> dict[int, dict]:
         out[int(pid)] = {
             "bats":   (p.get("batSide") or {}).get("code"),
             "throws": (p.get("pitchHand") or {}).get("code"),
+            "team":   (p.get("currentTeam") or {}).get("name"),
         }
     return out
 
