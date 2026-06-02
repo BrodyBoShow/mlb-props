@@ -57,6 +57,9 @@ function ConfidenceLine({ count }: { count: number }) {
 
 // Insight line: shimmer while the POST is in flight (and a key is expected),
 // the AI sentence once it lands, or nothing when there's no key / no insight.
+// Long insights (>80 chars, a proxy for "overflows 2 lines") become tap-to-
+// expand: collapsed shows a 2-line clamp + "↓ more"; tapping the insight area
+// reveals the full text + "↑ less". Short insights stay a plain, static line.
 function InsightLine({
   text,
   loading,
@@ -64,14 +67,40 @@ function InsightLine({
   text: string | undefined;
   loading: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   if (loading) {
     return <div className="mt-2 h-3 w-full animate-pulse rounded bg-slate-800" />;
   }
   if (!text) return null;
+
+  // Short enough to fit in two lines → no toggle, non-interactive.
+  if (text.length <= 80) {
+    return (
+      <p className="mt-2 line-clamp-2 text-[11px] italic leading-snug text-slate-400">
+        {text}
+      </p>
+    );
+  }
+
   return (
-    <p className="mt-2 line-clamp-2 text-[11px] italic leading-snug text-slate-400">
-      {text}
-    </p>
+    <button
+      type="button"
+      onClick={() => setExpanded((v) => !v)}
+      aria-expanded={expanded}
+      className="mt-2 block w-full cursor-pointer text-left"
+    >
+      <p
+        className={`text-[11px] italic leading-snug text-slate-400 transition-all duration-200 ${
+          expanded ? "" : "line-clamp-2"
+        }`}
+      >
+        {text}
+      </p>
+      <span className="mt-0.5 inline-block text-[9px] uppercase tracking-wide text-slate-500">
+        {expanded ? "↑ less" : "↓ more"}
+      </span>
+    </button>
   );
 }
 
