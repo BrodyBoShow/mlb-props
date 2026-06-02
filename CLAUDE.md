@@ -1877,6 +1877,65 @@ PrizePicks-direct standard fantasy lines (this session — the real fix):
   West Coast games imminent) than a midday run. Uncovered players fall back to
   the ParlayAPI/median path. Frontend unchanged; FEATURE_COLS untouched.
 
+Featured Plays redesign — 3 sections + AI insights (this session):
+- Replaced the single top-5 Featured Plays list with THREE independently
+  ranked sections (each capped at 3 cards, never padded), each with an
+  AI-generated one-sentence insight per card. Frontend + a new API route;
+  engine untouched.
+- web/lib/types.ts: FeaturedPlay.line/edge/bookmaker/lean are now OPTIONAL
+  (HR plays carry none); added parkFactor?, hrScore?, oppKRate?, insight?.
+  New FeaturedSection { label, plays }.
+- web/app/page.tsx getSlate():
+  * FEATURED_PROPS split into FEATURED_PITCHER_PROPS ({strikeouts,
+    hits_allowed, outs_recorded}) and FEATURED_HITTER_PROPS ({hitter_hits,
+    hitter_total_bases}).
+  * buildEdgePlays(propSet) helper — same qualification as the old featured
+    build (FEATURED_BOOKS, |edge|>=0.12, line>=MIN_LINE, |proj-line|>=0.3),
+    sorted by abs(edge) desc, sliced to 3. Used for sections 1 + 2.
+  * Section 3 (HR MATCHUPS): from byProp["hitter_home_runs"], score =
+    projection × PARK_FACTORS_HITS[home_team] (home_team parsed from the
+    "Away @ Home" matchup, same as ParkTag), filter proj>0.05, sort desc,
+    top 3. No edge/line — pure matchup context.
+  * graded-start counts now cover all 3 sections (FEATURED_ACTUAL_COL
+    extended with actual_hits / actual_total_bases / actual_home_runs; one
+    player_game_logs query across both player types).
+  * Returns featuredSections: FeaturedSection[] (replaces featuredPlays);
+    emptyResult + future-preview path return [].
+- web/app/api/featured-insights/route.ts (NEW): POST { sections } -> builds a
+  compact per-play context, batches ALL plays into ONE Anthropic call
+  (claude-haiku-4-5-20251001, max_tokens min(60*n,1024)), parses numbered
+  responses back by index, returns { enabled, insights: {`pid|prop`: text} }.
+  HR-play prompts omit edge/lean and lead with park context. Wrapped in
+  unstable_cache(revalidate=1800) keyed on the play contexts so identical
+  slates reuse insights and a new slate regenerates. Degrades gracefully:
+  no ANTHROPIC_API_KEY -> { enabled:false, insights:{} }; any API error ->
+  logged + {} (page never breaks). Uses fetch (no @anthropic-ai/sdk dep).
+- web/app/FeaturedPlays.tsx (rewritten): accepts sections; on mount POSTs the
+  sections (deps on a stable play-set signature, not object identity, so soft
+  refreshes don't refetch) and merges insights by `pid|prop`. Renders all 3
+  section headers always (thin border-t, text-[10px] uppercase tracking-widest
+  slate-400); empty section shows "No qualifying plays". Card: name + prop
+  label, matchup, divider, then for edge plays proj/line + lean arrow + Edge
+  (book in the Edge title tooltip — the "BOOK: PINNACLE" line was removed) +
+  sharp badge; for HR plays "Park ↑ 1.12 · Proj 0.12 HR" + park label, no
+  badge. Insight line: animate-pulse shimmer while loading (only when a key is
+  expected), AI sentence once loaded, nothing if no key. Confidence dot +
+  graded-history line kept. Whole section hidden only when ALL sections empty.
+- web/app/PropBoard.tsx: passes featuredSections instead of featuredPlays;
+  FutureSlate path unchanged (Featured Plays absent on future-preview dates by
+  construction — that path renders FutureSlate, not PropBoard).
+- Verified: tsc --noEmit clean; npm run build passes (route shows as
+  ƒ /api/featured-insights). Cross-checked vs live DB: pitching top-3 (Avila
+  outs +0.56, Madden hits-allowed +0.48, Drohan +0.42), hitting top-3 earlier
+  in the day (Schmitt/Julio/Bleday total-bases ~0.55), HR ranking proj×park
+  (JJ Bleday 0.40×1.08=0.432 ranks above Dingler 0.40×0.96=0.384 — park
+  weighting active, not raw proj). Dev-server render confirmed all 3 headers,
+  cards, sharp badges, park labels, and a legitimate "No qualifying plays"
+  for hitting when late-night line pulls leave it empty. No-key route path
+  returns {enabled:false} and the page renders insight-free with no error.
+- ANTHROPIC_API_KEY added to Vercel env by the user (confirmed). Without it
+  the sections still render correctly; insights are simply blank.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES, EDGE_THRESHOLD, MIN_LINE, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
-import type { ByProp, FeaturedPlay, FormDot, GameGroup, PropType } from "@/lib/types";
+import { ALL_PROP_TYPES, EDGE_THRESHOLD, MIN_LINE, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
 import LiveUpdated from "./LiveUpdated";
@@ -21,16 +21,18 @@ const FEATURED_BOOKS: ReadonlySet<string> = new Set([
   "pinnacle", "draftkings", "fanduel", "bet365", "caesars",
 ]);
 
-// Clean pitcher props only. We deliberately exclude:
-//   - walks / earned_runs: thin two-sided line coverage; the few lines that
-//     exist often come from a single book, leaving the de-vig fragile.
-//   - all hitter props: 1.5-line dominance + DFS-skewed coverage create a
-//     systemic under-lean bias that the Model Tracker section is designed
-//     to surface, not the Featured Plays section to promote.
-//   - fantasy_score: PrizePicks-only lines (PRIZEPICKS_ONLY_PROPS enforced
-//     at ingest), so no two-sided baseline exists.
-const FEATURED_PROPS: ReadonlySet<PropType> = new Set([
+// Section 1 (PITCHING EDGES) props. Clean pitcher props only — we exclude
+// walks/earned_runs (thin two-sided coverage, fragile de-vig) and the
+// PrizePicks-only fantasy score (no two-sided baseline).
+const FEATURED_PITCHER_PROPS: ReadonlySet<PropType> = new Set([
   "strikeouts", "hits_allowed", "outs_recorded",
+]);
+
+// Section 2 (HITTING EDGES) props. Hitter props can carry a systemic under-lean
+// bias (the Model Tracker surfaces this); the AI insight is written to be honest
+// about the signal rather than filtering these out — the user wants them shown.
+const FEATURED_HITTER_PROPS: ReadonlySet<PropType> = new Set([
+  "hitter_hits", "hitter_total_bases",
 ]);
 
 // Edge threshold is set ABOVE the regular display threshold (0.10) so we
@@ -106,7 +108,7 @@ type SlateResult = {
   nextDate: string | null;
   byProp: ByProp;
   futureGames: FutureGame[] | null;
-  featuredPlays: FeaturedPlay[];
+  featuredSections: FeaturedSection[];
   // True when at least one projection_date in the DB is >= today (ET).
   // Used by the page component to suppress the "stale" banner when the
   // user is intentionally browsing a past date but current data exists.
@@ -123,7 +125,7 @@ const emptyResult = (date: string | null = null): SlateResult => ({
     ALL_PROP_TYPES.map((p) => [p, []])
   ) as unknown as ByProp,
   futureGames: null,
-  featuredPlays: [],
+  featuredSections: [],
   hasCurrentProjections: false,
 });
 
@@ -316,7 +318,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         ALL_PROP_TYPES.map((p) => [p, []]),
       ) as unknown as ByProp,
       futureGames: (futureGameRows as FutureGame[] | null) ?? null,
-      featuredPlays: [],
+      featuredSections: [],
       hasCurrentProjections,
     };
   }
@@ -641,79 +643,117 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   for (const r of rows) {
     projIndex.set(`${r.player_id}|${r.prop_type}`, r);
   }
-  const featuredPlays: FeaturedPlay[] = edgeData
-    .map((e): FeaturedPlay | null => {
-      if (!FEATURED_BOOKS.has(e.bookmaker)) return null;
-      const propType = e.prop_type as PropType;
-      if (!FEATURED_PROPS.has(propType)) return null;
-      const edge = e.edge;
-      if (edge === null || edge === undefined) return null;
-      // Edge magnitude must clear the featured threshold AFTER taking
-      // absolute value — large negative edges (model favors UNDER strongly)
-      // are just as featurable as large positive ones.
-      const absEdge = Math.abs(edge);
-      if (absEdge < FEATURED_MIN_EDGE) return null;
-      const lineMin = MIN_LINE[propType];
-      if (lineMin === undefined || e.line < lineMin) return null;
 
-      const proj = projIndex.get(`${e.player_id}|${e.prop_type}`);
-      if (!proj) return null;
-      // Meaningful lean: the projection must sit at least FEATURED_MIN_LEAN
-      // away from the line. Keeps the section from featuring plays where
-      // the model is technically off the line but barely.
-      if (Math.abs(proj.projection - e.line) < FEATURED_MIN_LEAN) return null;
+  // Build one EDGE section (pitching or hitting) from edgeData for the given
+  // prop set. Same qualification as the original Featured Plays, just scoped
+  // to the section's props, sorted by abs(edge) desc and capped at 3.
+  const buildEdgePlays = (propSet: ReadonlySet<PropType>): FeaturedPlay[] =>
+    edgeData
+      .map((e): FeaturedPlay | null => {
+        if (!FEATURED_BOOKS.has(e.bookmaker)) return null;
+        const propType = e.prop_type as PropType;
+        if (!propSet.has(propType)) return null;
+        const edge = e.edge;
+        if (edge === null || edge === undefined) return null;
+        const absEdge = Math.abs(edge);
+        if (absEdge < FEATURED_MIN_EDGE) return null;
+        const lineMin = MIN_LINE[propType];
+        if (lineMin === undefined || e.line < lineMin) return null;
 
-      const lean: "over" | "under" =
-        proj.projection > e.line ? "over" : "under";
-      const matchup = proj.games
-        ? `${proj.games.away_team} @ ${proj.games.home_team}`
-        : `Game ${proj.game_id}`;
+        const proj = projIndex.get(`${e.player_id}|${e.prop_type}`);
+        if (!proj) return null;
+        if (Math.abs(proj.projection - e.line) < FEATURED_MIN_LEAN) return null;
 
-      return {
-        playerId: e.player_id,
-        playerName: proj.players?.full_name ?? "Unknown player",
-        propType,
-        projection: proj.projection,
-        line: e.line,
-        edge: absEdge,
-        bookmaker: e.bookmaker,
-        lean,
-        gameId: proj.game_id,
-        matchup,
-        gradedStarts: 0, // enriched below in ONE query for the top-5
-        // Multi-book sharp agreement (feature 5). Direction from the signed
-        // edge (e.edge), so it matches this play's lean and never ~Even.
-        sharpAgreement: computeSharp(e.player_id, propType, proj.projection, e.edge),
-      };
-    })
-    .filter((p): p is FeaturedPlay => p !== null)
-    .sort((a, b) => b.edge - a.edge)
-    .slice(0, 5);
+        const lean: "over" | "under" =
+          proj.projection > e.line ? "over" : "under";
+        const matchup = proj.games
+          ? `${proj.games.away_team} @ ${proj.games.home_team}`
+          : `Game ${proj.game_id}`;
+        const parkFactor = proj.games
+          ? PARK_FACTORS_HITS[proj.games.home_team] ?? 1.0
+          : undefined;
 
-  // ── graded-start counts for the featured plays ──────────────────────────
-  // player_game_logs has NO prop_type column — actuals live as columns on
-  // one row per (player_id, game_id). So a "graded start" for a given prop
-  // is a row where that prop's actual column is non-null. We map each
-  // featured pitcher prop to its actual column, fetch those columns for the
-  // (≤5) featured players in ONE query, and count non-null per player+prop.
-  // Volume is tiny (≤5 players × a few dozen games), well under the 1000-row
-  // cap, so no pagination needed.
+        return {
+          playerId: e.player_id,
+          playerName: proj.players?.full_name ?? "Unknown player",
+          propType,
+          projection: proj.projection,
+          line: e.line,
+          edge: absEdge,
+          bookmaker: e.bookmaker,
+          lean,
+          gameId: proj.game_id,
+          matchup,
+          gradedStarts: 0, // enriched below in ONE query across all sections
+          sharpAgreement: computeSharp(e.player_id, propType, proj.projection, e.edge),
+          parkFactor,
+          // opp K rate lives only on strikeouts rows (pitching context).
+          oppKRate: oppKByPlayer.get(e.player_id),
+        };
+      })
+      .filter((p): p is FeaturedPlay => p !== null)
+      .sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0))
+      .slice(0, 3);
+
+  const pitchingPlays = buildEdgePlays(FEATURED_PITCHER_PROPS);
+  const hittingPlays = buildEdgePlays(FEATURED_HITTER_PROPS);
+
+  // ── Section 3: HR MATCHUPS (matchup-ranked, not edge-based) ──────────────
+  // Rank tonight's projected hitters by park-adjusted HR projection:
+  //   score = hitter_home_runs_projection × park_factor_hits(home_team)
+  // No book line / edge required — this section is pure context. home_team is
+  // parsed from the matchup string ("Away @ Home"), same as the park tag.
+  const hrPlays: FeaturedPlay[] = [];
+  for (const g of byProp["hitter_home_runs"] ?? []) {
+    const homeTeam = g.matchup.includes(" @ ") ? g.matchup.split(" @ ")[1] : "";
+    const parkFactor = PARK_FACTORS_HITS[homeTeam] ?? 1.0;
+    for (const h of g.pitchers) {
+      if (h.projection <= 0.05) continue; // drop no-hopers
+      hrPlays.push({
+        playerId: h.player_id,
+        playerName: h.name,
+        propType: "hitter_home_runs",
+        projection: h.projection,
+        gameId: g.game_id,
+        matchup: g.matchup,
+        gradedStarts: 0,
+        parkFactor,
+        hrScore: h.projection * parkFactor,
+      });
+    }
+  }
+  const hrMatchups = hrPlays
+    .sort((a, b) => (b.hrScore ?? 0) - (a.hrScore ?? 0))
+    .slice(0, 3);
+
+  // ── graded-start counts across all three sections ───────────────────────
+  // player_game_logs has NO prop_type column — actuals live as columns on one
+  // row per (player_id, game_id). A "graded game" for a prop is a row where
+  // that prop's actual column is non-null. Map each featured prop (pitcher AND
+  // hitter) to its actual column, fetch them for the (≤9) featured players in
+  // ONE query, and count non-null per player+prop. Volume is tiny.
   const FEATURED_ACTUAL_COL: Partial<Record<PropType, string>> = {
-    strikeouts:    "actual_strikeouts",
-    hits_allowed:  "actual_hits_allowed",
-    outs_recorded: "actual_outs_recorded",
+    strikeouts:         "actual_strikeouts",
+    hits_allowed:       "actual_hits_allowed",
+    outs_recorded:      "actual_outs_recorded",
+    hitter_hits:        "actual_hits",
+    hitter_total_bases: "actual_total_bases",
+    hitter_home_runs:   "actual_home_runs",
   };
-  const featuredPlayerIds = [...new Set(featuredPlays.map((p) => p.playerId))];
+  const allFeaturedPlays = [...pitchingPlays, ...hittingPlays, ...hrMatchups];
+  const featuredPlayerIds = [...new Set(allFeaturedPlays.map((p) => p.playerId))];
   if (featuredPlayerIds.length > 0) {
+    const cols = [
+      "player_id",
+      ...new Set(Object.values(FEATURED_ACTUAL_COL)),
+    ].join(", ");
     const { data: gradeRows } = await supabase
       .from("player_game_logs")
-      .select("player_id, actual_strikeouts, actual_hits_allowed, actual_outs_recorded")
-      .eq("player_type", "pitcher")
+      .select(cols)
       .in("player_id", featuredPlayerIds);
 
-    // counts keyed by `${player_id}|${prop_type}`
     const gradedCounts: Record<string, number> = {};
-    for (const row of (gradeRows ?? []) as Array<Record<string, unknown>>) {
+    for (const row of (gradeRows ?? []) as unknown as Array<Record<string, unknown>>) {
       const pid = row.player_id;
       for (const [prop, col] of Object.entries(FEATURED_ACTUAL_COL)) {
         if (row[col] !== null && row[col] !== undefined) {
@@ -722,10 +762,16 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         }
       }
     }
-    for (const p of featuredPlays) {
+    for (const p of allFeaturedPlays) {
       p.gradedStarts = gradedCounts[`${p.playerId}|${p.propType}`] ?? 0;
     }
   }
+
+  const featuredSections: FeaturedSection[] = [
+    { label: "PITCHING EDGES", plays: pitchingPlays },
+    { label: "HITTING EDGES",  plays: hittingPlays },
+    { label: "HR MATCHUPS",    plays: hrMatchups },
+  ];
 
   return {
     date: selectedDate,
@@ -734,7 +780,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     nextDate,
     byProp,
     futureGames: null,
-    featuredPlays,
+    featuredSections,
     hasCurrentProjections,
   };
 }
@@ -767,7 +813,7 @@ export default async function Home({
     nextDate,
     byProp,
     futureGames,
-    featuredPlays,
+    featuredSections,
     hasCurrentProjections,
   } = await getSlate(dateOverride);
 
@@ -827,7 +873,7 @@ export default async function Home({
           prevDate={prevDate}
           nextDate={nextDate}
           byProp={byProp}
-          featuredPlays={featuredPlays}
+          featuredSections={featuredSections}
         />
       ) : date && futureGames !== null ? (
         <FutureSlate

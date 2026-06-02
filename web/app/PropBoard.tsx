@@ -9,7 +9,7 @@ import { useLiveGameStatus } from "./useLiveGameStatus";
 import { useLiveBoxScores } from "./useLiveBoxScores";
 import type {
   ByProp,
-  FeaturedPlay,
+  FeaturedSection,
   FormDot,
   GameStatus,
   Pitcher,
@@ -491,13 +491,13 @@ export default function PropBoard({
   prevDate,
   nextDate,
   byProp,
-  featuredPlays = [],
+  featuredSections = [],
 }: {
   date: string;
   prevDate: string | null;
   nextDate: string | null;
   byProp: ByProp;
-  featuredPlays?: FeaturedPlay[];
+  featuredSections?: FeaturedSection[];
 }) {
   const [active, setActive] = useState<PropType>("strikeouts");
 
@@ -527,8 +527,8 @@ export default function PropBoard({
       {/* date navigation */}
       <DateNav currentDate={date} prevDate={prevDate} nextDate={nextDate} />
 
-      {/* featured plays — hidden when fewer than 3 qualifying plays */}
-      <FeaturedPlays plays={featuredPlays} />
+      {/* featured plays — three ranked sections with AI insights */}
+      <FeaturedPlays sections={featuredSections} />
 
       {/* prop selector tabs */}
       <div className="mb-3 flex gap-2 overflow-x-auto pb-1">

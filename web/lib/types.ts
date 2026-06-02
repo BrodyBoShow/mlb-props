@@ -162,19 +162,40 @@ export type FeaturedPlay = {
   playerName: string;
   propType: PropType;
   projection: number;
-  line: number;
-  edge: number;        // always > 0 — under-leans flip the sign at build time
-  bookmaker: string;
-  lean: "over" | "under";
+  // line / edge / bookmaker / lean are present for the two EDGE sections
+  // (pitching + hitting). They're ABSENT on HR-matchup plays, which are ranked
+  // by park-adjusted projection, not by a book line.
+  line?: number;
+  edge?: number;       // always > 0 — under-leans flip the sign at build time
+  bookmaker?: string;
+  lean?: "over" | "under";
   gameId: number;
   matchup: string;
-  // Count of graded game logs backing this pitcher+prop. A "graded start"
+  // Count of graded game logs backing this player+prop. A "graded start"
   // = a player_game_logs row where the prop's actual column is non-null.
   // Surfaced on the card so users can weigh edges with thin history
   // differently from edges with a real track record. 0 = no history yet.
   gradedStarts: number;
   // Multi-book sharp agreement (feature 5) for this featured pitcher+prop.
   sharpAgreement?: SharpAgreement;
+  // HR-matchup section: home-park hit factor (display) + proj × parkFactor
+  // ranking score (not displayed, used only for the sort).
+  parkFactor?: number;
+  hrScore?: number;
+  // Opponent lineup season K rate (0–1) when available — pitching-edge AI
+  // context only (it lives on strikeouts projection rows).
+  oppKRate?: number;
+  // AI-generated one-sentence insight. undefined until /api/featured-insights
+  // resolves (or permanently if ANTHROPIC_API_KEY isn't set).
+  insight?: string;
+};
+
+// One of the three Featured Plays sections. Each is independently ranked and
+// capped at 3 plays; an empty plays array renders a "No qualifying plays" note
+// under the header rather than padding.
+export type FeaturedSection = {
+  label: string;   // "PITCHING EDGES" | "HITTING EDGES" | "HR MATCHUPS"
+  plays: FeaturedPlay[];
 };
 
 // Live status for one MLB game. The MLB Stats API gamePk matches our
