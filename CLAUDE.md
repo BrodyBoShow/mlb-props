@@ -2003,6 +2003,47 @@ Featured Plays hit-rate row on /results (this session):
   classify(), bettingResults, Model Tracker, the weekly-trend chart, engine,
   FEATURE_COLS all unchanged. tsc clean; build passes.
 
+Whiff%/CSW% feature swap — INTENTIONAL model change (this session):
+- Swapped the two highest-signal strikeout predictors INTO FEATURE_COLS and
+  dropped two weak ones. Predictions WILL change — that's the point, not a bug.
+- FEATURE_COLS held at EXACTLY 11: added pitcher_whiff_pct_30d +
+  pitcher_csw_pct_30d; removed last5_k_rate (high-variance on tiny samples,
+  subsumed by last30 + whiff) AND pitcher_fastball_pct (only crudely proxies
+  the swing-and-miss whiff/CSW measure directly). NOTE the prompt's arithmetic
+  (add 2, drop 1) = 12; to honor "exactly 11" a SECOND drop was required —
+  fastball_pct per the stated weak-feature ranking.
+- COLUMN NAMES: the live DB columns are pitcher_whiff_pct_30d /
+  pitcher_csw_pct_30d (PREFIXED), not the un-prefixed names in the prompt.
+  FEATURE_COLS uses the prefixed names so train() (get_game_logs select("*"))
+  reads the real stored values.
+- grade.py ALREADY logs both at grade time (_pitcher_platoon_30d). The gap was
+  PREDICT time: _build_pitcher_features_from_df didn't compute them, so without
+  the fix every prediction would have gotten the imputed constant. Added the
+  predict-time computation from the bulk Statcast df using grade.py's EXACT
+  definitions — whiff% = whiffs/swings (whiffs = swinging_strike/_blocked;
+  swings += foul/foul_tip/hit_into_play), CSW% = (called_strike + whiffs)/
+  pitches. Strict-prior (the bulk 30d window excludes today's unplayed game).
+- _CONTEXT_DEFAULTS: dropped pitcher_fastball_pct; added whiff 0.22 / CSW 0.27
+  (live-pool means — these are grade.py's per-SWING/per-pitch rates, NOT the
+  ~0.11 per-pitch SwStr% the prompt guessed). train() imputes nulls; predict()
+  setdefault fills them for the legacy _build_pitcher_features fallback (which
+  still returns a valid 11-vec).
+- Verified end-to-end: FEATURE_COLS = exactly 11 (last5 + fastball_pct gone,
+  whiff + csw in); train() on 60 rows -> all NaN counts 0 after imputation,
+  XGBoost fits; predict-time whiff/CSW VARY across pitchers (8 distinct, 0.06-
+  0.36, not the 0.22 constant -> predict wiring confirmed); cross-check EXACT
+  vs direct statcast_pitcher 30d (pid 670280: model 0.328/0.275 = direct
+  0.328/0.275); python engine/main.py clean in refresh mode; predict() runs
+  end-to-end with the 11-feature vec (real K projections, no shape error).
+- Design note (deferred, per the matchup-baseline discussion): the next real
+  step is a deterministic batter-by-batter matchup-expected-K BASELINE (posted
+  lineup x per-batter K% x platoon x logged whiff/CSW), blended into the
+  rolling baseline — NOT another XGBoost feature (a near-complete causal
+  estimate as a feature is gated on the training pool exactly like everything
+  else; as a baseline it contributes full signal day one). Validate as a
+  baseline on calibration + realized edge. Skip raw zone-location (collinear
+  with whiff once it's in) and the pitch->PA->start rebuild (gated on data).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

@@ -53,7 +53,6 @@ OFFSPEED_TYPES = {"CH", "FS", "FO", "SC"}
 # rows graded before the schema migration. train() imputes the NULLs with
 # the per-feature defaults below so adding columns never blocks training.
 FEATURE_COLS = [
-    "last5_k_rate",
     "last30_k_rate",
     "is_home",
     "days_rest",
@@ -62,21 +61,32 @@ FEATURE_COLS = [
     "lineup_lhh_pct",
     "pitcher_k_vs_lhh",
     "pitcher_k_vs_rhh",
-    "pitcher_fastball_pct",
     "pitcher_avg_velo",
     "park_factor_k",
+    # Swing-and-miss — the highest-signal K predictors (30-day window). Same
+    # definitions as grade.py's _pitcher_platoon_30d: whiff% = whiffs/swings,
+    # CSW% = (called + swinging strikes)/pitches. These REPLACED last5_k_rate
+    # (high-variance on tiny samples, subsumed by last30 + whiff) and
+    # pitcher_fastball_pct (fastball% only crudely proxies the swing-and-miss
+    # these measure directly). Count held at exactly 11.
+    "pitcher_whiff_pct_30d",
+    "pitcher_csw_pct_30d",
 ]
 
 # (column, default-when-missing). Used by train() to fill NULLs without
 # dropping rows; also used at predict-time as the constant value for any
 # context feature that can't be computed for a particular pitcher.
 _CONTEXT_DEFAULTS: list[tuple[str, float]] = [
-    ("lineup_lhh_pct",       0.42),
-    ("pitcher_k_vs_lhh",     LEAGUE_AVG_K_PCT),
-    ("pitcher_k_vs_rhh",     LEAGUE_AVG_K_PCT),
-    ("pitcher_fastball_pct", 0.55),
-    ("pitcher_avg_velo",     93.5),
-    ("park_factor_k",        1.0),
+    ("lineup_lhh_pct",        0.42),
+    ("pitcher_k_vs_lhh",      LEAGUE_AVG_K_PCT),
+    ("pitcher_k_vs_rhh",      LEAGUE_AVG_K_PCT),
+    ("pitcher_avg_velo",      93.5),
+    ("park_factor_k",         1.0),
+    # Swing-and-miss league means from the live pool. NOTE these match
+    # grade.py's per-SWING / per-pitch definitions (whiffs/swings ~0.22,
+    # CSW ~0.27) — NOT the ~0.11 per-pitch SwStr% metric.
+    ("pitcher_whiff_pct_30d", 0.22),
+    ("pitcher_csw_pct_30d",   0.27),
 ]
 
 
@@ -194,6 +204,28 @@ def _build_pitcher_features_from_df(
         avg_velo = 93.5
         velo_trend = 0.0
 
+    # ── swing-and-miss: whiff% / CSW% (30-day window) ──────────────────────
+    # Computed from the SAME pitch-event definitions as grade.py's
+    # _pitcher_platoon_30d so train (stored column) and predict agree. The bulk
+    # window already excludes today's unplayed game, so this is strict-prior.
+    # Fall back to the league default only when the pitcher has no pitches of
+    # the relevant kind in the window.
+    if "description" in df.columns and total_pitches > 0:
+        desc = df["description"]
+        whiffs = int(desc.isin(["swinging_strike", "swinging_strike_blocked"]).sum())
+        swings = int(
+            desc.isin(
+                ["swinging_strike", "swinging_strike_blocked",
+                 "foul", "foul_tip", "hit_into_play"]
+            ).sum()
+        )
+        called = int(desc.isin(["called_strike"]).sum())
+        whiff_pct_30d = round(whiffs / swings, 3) if swings > 0 else 0.22
+        csw_pct_30d = round((called + whiffs) / total_pitches, 3)
+    else:
+        whiff_pct_30d = 0.22
+        csw_pct_30d = 0.27
+
     # ── park factor (K) ───────────────────────────────────────────────────
     park_k = get_park_factor_k(home_team) if home_team else 1.0
 
@@ -213,6 +245,9 @@ def _build_pitcher_features_from_df(
         "pitcher_avg_velo":     round(float(avg_velo), 1),
         "pitcher_velo_trend":   velo_trend,
         "park_factor_k":        park_k,
+        # swing-and-miss (the two new FEATURE_COLS entries)
+        "pitcher_whiff_pct_30d": whiff_pct_30d,
+        "pitcher_csw_pct_30d":   csw_pct_30d,
         # lineup_lhh_pct is only knowable once lineups post. Imputed to the
         # league average here so the predict-time row matches FEATURE_COLS;
         # train() also imputes the same value for rows graded pre-migration.
@@ -314,10 +349,8 @@ def train() -> XGBRegressor | None:
     # first-row values with the league pitcher K average (~5.0 per start)
     # instead of dropping them — this preserves the training pool.
     df["is_home"] = (df["home_away"] == "home").astype(int)
-    df["last5_k_rate"] = (
-        df.groupby("player_id")["actual_strikeouts"]
-        .transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean())
-    )
+    # last5_k_rate was dropped from FEATURE_COLS (high-variance on tiny samples);
+    # only the 30-day rolling K rate remains as the recency baseline feature.
     df["last30_k_rate"] = (
         df.groupby("player_id")["actual_strikeouts"]
         .transform(lambda x: x.shift(1).rolling(30, min_periods=1).mean())
@@ -327,7 +360,6 @@ def train() -> XGBRegressor | None:
     # while FanGraphs returned 403 on the Actions runner; days_rest may be
     # NULL on the first row of the season. Fill rather than drop.
     league_pitcher_k = float(df["actual_strikeouts"].mean()) if len(df) else 5.0
-    df["last5_k_rate"]  = df["last5_k_rate"].fillna(league_pitcher_k)
     df["last30_k_rate"] = df["last30_k_rate"].fillna(league_pitcher_k)
     if "opp_k_rate" not in df.columns:
         df["opp_k_rate"] = LEAGUE_AVG_K_PCT
