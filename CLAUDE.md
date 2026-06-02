@@ -2104,6 +2104,43 @@ PART B — MATCHUP-EXPECTED-K BASELINE (SHADOW MODE):
   pre-migration path works. SHADOW ONLY — flipping to primary is a separate
   future step gated on the validation scaffolding.
 
+lineup_lhh_pct now LIVE at predict — resolves PART A dead feature (this session):
+- INTENTIONAL model change: the feature PART A flagged as dead-at-inference
+  (hardcoded 0.42 in _build_pitcher_features_from_df) now computes its real
+  value from the OPPOSING posted lineup. Post-lineup pitcher predictions shift —
+  expected. FEATURE_COLS unchanged at exactly 11 (no add/drop; an existing slot
+  made live). matchup_expected_k stays out of FEATURE_COLS.
+- Ordering fix = option (a): fetch lineups BEFORE the pitcher pipeline.
+  main._opposing_lineup_lhh(starters) fetches fetch_lineups() once, splits by
+  side, calls fetch.compute_lineup_handedness PER SIDE, and maps each starter to
+  the team it FACES (home pitcher → away lineup, away pitcher → home lineup) ->
+  {player_id: lhh_pct}. Threaded through _run_pitcher_pipeline into
+  mlb_model.predict(..., lineup_lhh_by_pid=...).
+- predict() OVERRIDES the 0.42 placeholder with the real value when present;
+  stays 0.42 only when no lineup is posted (morning runs / unconfirmed game) —
+  a genuine "no lineup yet" fallback, not a permanent hardcode. The legacy
+  _build_pitcher_features fallback path also benefits (override before the
+  _CONTEXT_DEFAULTS setdefault).
+- DEFINITION matches grade.py exactly: opposing starting nine, lhh =
+  Σ(L=1.0 / S=0.5 / R=0.0)/n, round 3 (compute_lineup_handedness uses the same
+  weighting; minor edge case — it defaults unknown bats to R while grade skips
+  them, negligible because fetch_lineups backfills all bats via /people). So the
+  trained weight applies correctly.
+- PRODUCTION TIMING CAVEAT: the pitcher predict runs in FULL mode (first run of
+  the day, morning) when lineups aren't posted -> 0.42; afternoon runs are
+  refresh-mode and SKIP the predict. So in steady state the DISPLAYED strikeouts
+  projection still uses 0.42 UNLESS a predict happens post-lineup (manual run,
+  stale rebuild — one fired during this session's verify run and the feature
+  went live: "using real opposing-lineup handedness for 18 starters"). Making it
+  live for the displayed projection on every slate would need a post-lineup
+  re-predict step (like matchup-K); out of scope here. The fix resolves the
+  STRUCTURAL hardcode and makes the feature live whenever predict runs.
+- Verified: FEATURE_COLS still 11; lineup_lhh_pct went from 1 distinct value
+  (DEAD) to 8 distinct across 18 starters (LIVE); hand-check EXACT (Griffin Jax
+  opp lineup R:5/L:3/S:1 -> 0.389 = predict value, matches grade.py); no-lineup
+  -> 0.42 cleanly; train() 0 NaN after imputation; python engine/main.py clean
+  (exit 0; the live predict log appeared + rebuilt 18 strikeout projections).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

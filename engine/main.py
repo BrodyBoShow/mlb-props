@@ -144,8 +144,38 @@ def _setup_games_and_pitchers() -> tuple[list[dict], list[dict]]:
     return games, starters
 
 
+def _opposing_lineup_lhh(starters: list[dict]) -> dict[int, float]:
+    """{starter player_id -> opposing lineup LHH fraction} for predict-time.
+
+    Fetches today's confirmed lineups and, per starter, returns the handedness
+    of the team the pitcher actually FACES (home pitcher → away lineup, away
+    pitcher → home lineup). Uses fetch.compute_lineup_handedness per side so the
+    metric matches grade.py's _opp_lineup_handedness (switch hitters 0.5/side).
+    Returns {} when no lineups are posted yet (morning runs) — predict() then
+    falls back to the 0.42 placeholder.
+    """
+    lineup_players = fetch.fetch_lineups()
+    if not lineup_players:
+        return {}
+    home = fetch.compute_lineup_handedness(
+        [p for p in lineup_players if p.get("home_away") == "home"]
+    )
+    away = fetch.compute_lineup_handedness(
+        [p for p in lineup_players if p.get("home_away") == "away"]
+    )
+    out: dict[int, float] = {}
+    for s in starters:
+        # The pitcher faces the OTHER side's batters.
+        src = away if s.get("home_away") == "home" else home
+        v = src.get(s["game_id"], {}).get("lhh_pct")
+        if v is not None:
+            out[s["player_id"]] = v
+    return out
+
+
 def _run_pitcher_pipeline(
-    starters: list[dict], games: list[dict]
+    starters: list[dict], games: list[dict],
+    lineup_lhh_by_pid: dict[int, float] | None = None,
 ) -> tuple[list[dict], dict[str, int], int]:
     """Build + upsert all pitcher prop projections.
 
@@ -209,7 +239,14 @@ def _run_pitcher_pipeline(
 
     if trained_model is not None:
         print("Running XGBoost predictions...")
-        model_projections, bulk_df = mlb_model.predict(trained_model, starters, games)
+        if lineup_lhh_by_pid:
+            print(
+                f"  using real opposing-lineup handedness for "
+                f"{len(lineup_lhh_by_pid)} starters (lineup_lhh_pct now live)"
+            )
+        model_projections, bulk_df = mlb_model.predict(
+            trained_model, starters, games, lineup_lhh_by_pid=lineup_lhh_by_pid
+        )
     else:
         print("  no trained model — using baseline only")
         model_projections = []
@@ -646,8 +683,12 @@ def main() -> None:
 
         _grade_previous_slate()
         games, starters = _setup_games_and_pitchers()
+        # Opposing-lineup handedness for the strikeouts model — fetched BEFORE
+        # the pitcher pipeline so predict() can use the real lineup_lhh_pct when
+        # lineups are posted ({} on morning runs → 0.42 fallback).
+        lineup_lhh_by_pid = _opposing_lineup_lhh(starters)
         pitcher_projections, name_to_id, n_strikeout = _run_pitcher_pipeline(
-            starters, games
+            starters, games, lineup_lhh_by_pid=lineup_lhh_by_pid
         )
         hitter_projections, lineup_count = _run_hitter_pipeline(name_to_id)
         all_projections = pitcher_projections + hitter_projections

@@ -248,9 +248,10 @@ def _build_pitcher_features_from_df(
         # swing-and-miss (the two new FEATURE_COLS entries)
         "pitcher_whiff_pct_30d": whiff_pct_30d,
         "pitcher_csw_pct_30d":   csw_pct_30d,
-        # lineup_lhh_pct is only knowable once lineups post. Imputed to the
-        # league average here so the predict-time row matches FEATURE_COLS;
-        # train() also imputes the same value for rows graded pre-migration.
+        # lineup_lhh_pct: placeholder. predict() OVERRIDES this with the real
+        # opposing-lineup value (via lineup_lhh_by_pid) when lineups are posted;
+        # it stays 0.42 only on pre-lineup (morning) runs. train() imputes the
+        # same league average for rows graded before lineup handedness was logged.
         "lineup_lhh_pct":       0.42,
     }
 
@@ -410,6 +411,7 @@ def predict(
     starters: list[dict],
     games: list[dict],
     projection_date: date | None = None,
+    lineup_lhh_by_pid: dict[int, float] | None = None,
 ) -> "tuple[list[ProjectionRow], pd.DataFrame]":
     """Run the trained model and return projection rows + the bulk Statcast frame.
 
@@ -465,6 +467,16 @@ def predict(
         if feats is None:
             print(f"  no features for {s.get('full_name', s['player_id'])} — skipping model")
             continue
+
+        # lineup_lhh_pct: when the OPPOSING posted lineup is available, override
+        # the 0.42 placeholder from the feature builder with the real value
+        # (same metric grade.py logs, so the trained weight applies). Stays 0.42
+        # when no lineup is posted (morning runs) — the genuine "no lineup yet"
+        # fallback, not a permanent hardcode.
+        if lineup_lhh_by_pid:
+            lh = lineup_lhh_by_pid.get(s["player_id"])
+            if lh is not None:
+                feats["lineup_lhh_pct"] = lh
 
         # Fill any missing context features with their training defaults so
         # the legacy fallback (_build_pitcher_features) — which only returns
