@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
 import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
@@ -899,7 +899,51 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
       });
     }
   }
-  const hrMatchups = hrPlays
+  // ── min-sample guard: exclude thin-history hitters from the curated top-3 ──
+  // The composite MULTIPLIES the HR projection, and a hitter with ~1 recent game
+  // gets baseline-projected to ~1.0 HR — dominating the score and crowding out
+  // established hitters. Gate on graded games (the SAME signal as the card's
+  // "N GAMES TRACKED" footer: player_game_logs rows with a non-null
+  // actual_home_runs). Below HR_MIN_GAMES_TRACKED a hitter still appears on the
+  // normal HR prop tab — just not in the curated top-3. Manually paginated (so a
+  // deep graded history never gets 1000-cap-truncated → under-counted → wrongly
+  // excluded). On query FAILURE the gate disables (degrades to the prior
+  // composite-only top-3) — a broken query must never empty the section.
+  const hrGradedByPlayer = new Map<number, number>();
+  let hrGateAvailable = false;
+  {
+    const hrIds = [...new Set(hrPlays.map((p) => p.playerId))];
+    if (hrIds.length > 0) {
+      let ok = true;
+      for (let page = 0; page < 50; page++) {
+        const { data, error } = await supabase
+          .from("player_game_logs")
+          .select("player_id, actual_home_runs")
+          .in("player_id", hrIds)
+          .range(page * 1000, page * 1000 + 999);
+        if (error) {
+          console.log(
+            `[home-diag] HR min-sample gate disabled — graded-count fetch failed (${String(error)})`,
+          );
+          ok = false;
+          break;
+        }
+        const batch = (data ?? []) as Array<{ player_id: number; actual_home_runs: number | null }>;
+        for (const r of batch) {
+          if (r.actual_home_runs !== null && r.actual_home_runs !== undefined) {
+            hrGradedByPlayer.set(r.player_id, (hrGradedByPlayer.get(r.player_id) ?? 0) + 1);
+          }
+        }
+        if (batch.length < 1000) break;
+      }
+      hrGateAvailable = ok;
+    }
+  }
+  const hrMatchups = (
+    hrGateAvailable
+      ? hrPlays.filter((p) => (hrGradedByPlayer.get(p.playerId) ?? 0) >= HR_MIN_GAMES_TRACKED)
+      : hrPlays
+  )
     .sort((a, b) => (b.hrScore ?? 0) - (a.hrScore ?? 0))
     .slice(0, 3);
 

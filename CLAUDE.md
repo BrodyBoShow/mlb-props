@@ -2436,6 +2436,75 @@ HR MATCHUPS smart selection — composite ranking (this session):
   selections unchanged. Future adds: enrich probable-pitcher throws + hitter team
   (lights up platoon); add opp-SP HR/9 (the omitted 4th term).
 
+HR composite — probable-pitcher bio fix + min-sample guard + sweet-spot finding:
+- PART A (commit 6e6b9e8) — probable-pitcher team/bats/throws now resolve, so the
+  HR-composite platoon term works. ROOT CAUSE (diagnosed): statsapi.lookup_player
+  returns batSide/pitchHand=None and a nameless currentTeam ({'id':139}), so
+  _resolved_schedule's records had null team/bats/throws. FIX (engine/fetch.py):
+  keep lookup_player for name→id resolution ONLY; backfill bio in ONE bulk MLB
+  /people call inside _resolved_schedule (lru_cached → once per date, shared by
+  fetch_games/fetch_starters/fetch_probable_pitchers/fetch_starters_for_date).
+  REUSED the existing _fetch_handedness_by_id helper the lineup path uses — now
+  also returns team (added hydrate=currentTeam; the default /people omits the
+  team name). No second integration. Verified: 29/29 starters resolve
+  team/bats/throws (Steven Matz → Tampa Bay Rays, throws L). Lineup path
+  unaffected (ignores the new team key). NOTE: the platoon term goes LIVE on the
+  frontend only after the NEXT cron upserts the enriched starters (players.throws
+  is None in the DB until then); audited fresh via /people = 172/180 candidates
+  get a non-neutral platoon factor.
+- PART B (this commit) — min-sample guard so thin-history hitters stop topping the
+  HR section. PROBLEM: the composite MULTIPLIES the HR projection, and a hitter
+  with ~1 recent game gets baseline-projected (baseline._build_hitter_from_games
+  weights the last-30-day MLB game log; [1.0]→1.0) straight to ~1.0 HR, which
+  dominates (Torres 1.00/0 graded + Ward 1.00/1 graded ranked #1/#2 over real
+  ~0.40 hitters). SIGNAL: the "N GAMES TRACKED" footer = gradedStarts = count of
+  player_game_logs rows with a non-null actual_home_runs — but it's computed
+  AFTER selection, so it didn't gate. APPROACH = Option 1 (EXCLUSION), chosen
+  because the live distribution (180 candidates, graded {0:7,1:24,2:80,3:69},
+  max 3) shows threshold ≥2 leaves 149 eligible (NOT empty) while excluding the
+  0–1-game hitters. web/lib/constants.ts HR_MIN_GAMES_TRACKED = 2 (named,
+  tunable — raise as graded history deepens). web/app/page.tsx: a manually-
+  paginated (avoids the 1000-cap under-count as history deepens), failure-
+  tolerant graded-count read; on query FAILURE the gate DISABLES (degrades to the
+  prior composite top-3 — a broken query never empties the section); <3 eligible
+  → show fewer (honest empty > padded). Hitters below the floor still appear on
+  the normal HR prop tab (byProp untouched). DISPLAYED HR PROJECTION UNCHANGED
+  (exclusion, no ranking-projection regression). Verified: NEW top-3 = Acuña
+  (0.539, R-vs-R unfavorable platoon 0.88, 2 graded) / Jarren Duran (0.479,
+  tailwind 1.07 × L-vs-R favorable 1.12, 2 graded) / Miguel Vargas (0.448, R-vs-L
+  favorable, 3 graded); Torres (0 graded) + Ward (1 graded) EXCLUDED. Attribution:
+  platoon = PART A (live, 172/180); power/sweet-spot = STILL NEUTRAL (0 live).
+  PITCHING/HITTING/normal-HR-tab/other selections unchanged; FEATURE_COLS 11;
+  model byte-identical; tsc clean; npm run build passes; engine imports clean.
+- PART C (report only — NO code change) — sweet-spot / power term does NOT
+  self-heal on a fresh slate; it's a STRUCTURAL wiring gap, not the one-time
+  mid-day-ship gap the task assumed. Findings:
+  * GATE: main.py line 771 is_refresh = (proj_count >= 20); _run_pitcher_pipeline
+    (line 251 `if existing >= 20`) SKIPS and returns bulk_df=None (line 271) on
+    refresh runs. Sweet-spot (line 488 `if bulk_df is not None` →
+    sweet_spot.compute_sweet_spot) sits inside _build_and_upsert_hitters, so it
+    fires ONLY when (a) the pitcher pipeline ran FULL this run (bulk_df present)
+    AND (b) the hitter pipeline actually builds (lineups posted — else it returns
+    early at line 374).
+  * Those two conditions NEVER coincide in the normal cron flow: the first run
+    with et_today()=D is the 1 AM ET tick — it builds D's pitcher projections
+    FULL (bulk_df fetched) but lineups aren't posted yet → hitter pipeline skips →
+    no sweet-spot. Every later run that day finds pitcher projections already
+    exist → refresh → bulk_df=None → sweet-spot skipped even once lineups post.
+    So TOMORROW's fresh slate does NOT compute sweet-spot. (Only coincidental
+    exception: a day where the morning full run fails and the first SUCCESSFUL
+    full pitcher build happens after lineups post — not reliable.)
+  * WORKFLOW: there is NO separate full-run workflow — refresh.yml is the ONLY
+    workflow; all 7 crons run main.py and full-vs-refresh is a RUNTIME decision
+    (the projection-count gate). So "which workflow populates sweet-spot" =
+    refresh.yml, but as shown none of its runs currently do.
+  * RECOMMENDED FIX (flagged, NOT built per instructions): decouple sweet-spot
+    from the pitcher pipeline's bulk_df — e.g. in _build_and_upsert_hitters, when
+    bulk_df is None but we're building hitter_home_runs, fetch the bulk Statcast
+    frame independently (model._fetch_bulk_statcast(et_today())), or add a
+    dedicated sweet-spot step that always fetches Statcast when hitters are built.
+    Until then the HR-composite power term stays permanently neutral.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

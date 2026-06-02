@@ -269,6 +269,17 @@ export const HR_COMPOSITE = {
   PLATOON_WEIGHT: 0.12,
 } as const;
 
+// Minimum graded games a hitter needs to be ELIGIBLE for the HR-section top-3.
+// The composite multiplies the HR projection, and a thin-sample hitter (e.g. 1
+// recent game with a HR) gets baseline-projected straight to ~1.0 HR, which
+// dominates the score and crowds out established hitters. We gate selection on
+// the SAME signal the card footer shows ("N GAMES TRACKED" = count of graded
+// player_game_logs rows with a non-null actual_home_runs). Below this, a hitter
+// still appears on the normal HR prop tab — just not in the curated top-3.
+// Tunable: 2 excludes 0–1 graded-game debuts/call-ups while keeping the section
+// populated on the current (shallow) graded history; raise it as that deepens.
+export const HR_MIN_GAMES_TRACKED = 2;
+
 // Display labels — single source of truth for both pages.
 export const PROP_LABELS: Record<PropType, string> = {
   strikeouts:            "Strikeouts",
