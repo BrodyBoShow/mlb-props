@@ -247,6 +247,28 @@ export function getParkBearing(homeTeam: string): number | null {
   return PARK_ORIENTATION[homeTeam] ?? null;
 }
 
+// ── HR MATCHUPS composite ranking weights ────────────────────────────────────
+// Named, tunable weights for the HR-section SELECTION heuristic (web/lib/
+// hrComposite.ts). This is a RANKING score for which 3 HR matchups to surface —
+// NOT a model feature, NOT a calibrated probability, NOT an edge. It never feeds
+// the model (FEATURE_COLS stays 11) and never changes the displayed projection.
+// Each term is a bounded multiplier around 1.0 that degrades to 1.0 (neutral)
+// when its data is missing, so with no extra data the composite reduces exactly
+// to the old projection × park-factor ranking.
+export const HR_COMPOSITE = {
+  // Wind-adjusted park: ± this fraction of the park factor at/above WIND_STRONG_MPH.
+  WIND_WEIGHT: 0.25,
+  WIND_STRONG_MPH: 15,
+  // Recent power contact (sweet-spot % + avg exit velo), normalized floor→elite.
+  POWER_WEIGHT: 0.3,
+  POWER_SWEET_FLOOR: 0.3,
+  POWER_SWEET_ELITE: 0.42,
+  POWER_EV_FLOOR: 86,
+  POWER_EV_ELITE: 94,
+  // Platoon: ± this fraction for a favorable / unfavorable hand matchup.
+  PLATOON_WEIGHT: 0.12,
+} as const;
+
 // Display labels — single source of truth for both pages.
 export const PROP_LABELS: Record<PropType, string> = {
   strikeouts:            "Strikeouts",

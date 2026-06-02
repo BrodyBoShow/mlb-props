@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
 import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import { hrComposite } from "@/lib/hrComposite";
 import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
@@ -779,24 +780,114 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   //   score = hitter_home_runs_projection × park_factor_hits(home_team)
   // No book line / edge required — this section is pure context. home_team is
   // parsed from the matchup string ("Away @ Home"), same as the park tag.
+  // ── platoon inputs for the HR composite (SELECTION only, not display) ─────
+  // Two ISOLATED, failure-tolerant reads of already-stored data (no new external
+  // fetch): per-game starters (to find each hitter's opposing SP) and per-player
+  // bats/throws/team. On any error the maps stay empty and the composite's
+  // platoon term degrades to neutral — the ranking still uses power + wind +
+  // park. The columns are pre-existing schema (no migration gating).
+  const gameInfoById = new Map<
+    number,
+    { homeTeam: string; awayTeam: string; homeStarter: number | null; awayStarter: number | null }
+  >();
+  {
+    const { data, error } = await supabase
+      .from("games")
+      .select("game_id, home_team, away_team, home_starter_id, away_starter_id")
+      .eq("game_date", selectedDate);
+    if (error) {
+      console.log(`[home-diag] HR composite: game-starters fetch skipped (${String(error)})`);
+    } else {
+      for (const r of (data ?? []) as Array<{
+        game_id: number;
+        home_team: string;
+        away_team: string;
+        home_starter_id: number | null;
+        away_starter_id: number | null;
+      }>) {
+        gameInfoById.set(r.game_id, {
+          homeTeam: r.home_team,
+          awayTeam: r.away_team,
+          homeStarter: r.home_starter_id,
+          awayStarter: r.away_starter_id,
+        });
+      }
+    }
+  }
+  const handById = new Map<number, { bats: string | null; throws: string | null; team: string | null }>();
+  {
+    const hitterIds = (byProp["hitter_home_runs"] ?? []).flatMap((g) =>
+      g.pitchers.map((h) => h.player_id),
+    );
+    const starterIds = [...gameInfoById.values()].flatMap((g) => [g.homeStarter, g.awayStarter]);
+    const ids = [...new Set([...hitterIds, ...starterIds].filter((x): x is number => x != null))];
+    if (ids.length > 0) {
+      const { data, error } = await supabase
+        .from("players")
+        .select("player_id, bats, throws, team")
+        .in("player_id", ids);
+      if (error) {
+        console.log(`[home-diag] HR composite: player-hand fetch skipped (${String(error)})`);
+      } else {
+        for (const r of (data ?? []) as Array<{
+          player_id: number;
+          bats: string | null;
+          throws: string | null;
+          team: string | null;
+        }>) {
+          handById.set(r.player_id, { bats: r.bats, throws: r.throws, team: r.team });
+        }
+      }
+    }
+  }
+
   const hrPlays: FeaturedPlay[] = [];
   for (const g of byProp["hitter_home_runs"] ?? []) {
     const homeTeam = g.matchup.includes(" @ ") ? g.matchup.split(" @ ")[1] : "";
     const parkFactor = PARK_FACTORS_HITS[homeTeam] ?? 1.0;
     const wind = windByGame.get(g.game_id);
+    const gi = gameInfoById.get(g.game_id);
     for (const h of g.pitchers) {
       if (h.projection <= 0.05) continue; // drop no-hopers
       const sweet = sweetByPlayer.get(h.player_id);
+
+      // Opposing SP throwing hand: the hitter faces the OTHER side's starter.
+      // Side is resolved from the hitter's team vs the game's home/away team;
+      // unknown side or missing starter → oppThrows null → platoon neutral.
+      const hitter = handById.get(h.player_id);
+      let oppThrows: string | null = null;
+      if (gi && hitter?.team) {
+        const side =
+          hitter.team === gi.homeTeam ? "home" : hitter.team === gi.awayTeam ? "away" : null;
+        if (side) {
+          const oppStarter = side === "home" ? gi.awayStarter : gi.homeStarter;
+          oppThrows = oppStarter != null ? handById.get(oppStarter)?.throws ?? null : null;
+        }
+      }
+
+      // Composite RANKING score (selection only). Displayed projection unchanged.
+      const comp = hrComposite({
+        projection: h.projection,
+        homeTeam,
+        windSpeed: wind?.windSpeed ?? null,
+        windDirDeg: wind?.windDirDeg ?? null,
+        isDome: wind?.isDome ?? null,
+        sweetSpotPct: sweet?.sweetSpotPct ?? null,
+        avgExitVelo: sweet?.avgExitVelo ?? null,
+        hitterBats: hitter?.bats ?? null,
+        oppPitcherThrows: oppThrows,
+      });
+
       hrPlays.push({
         playerId: h.player_id,
         playerName: h.name,
         propType: "hitter_home_runs",
-        projection: h.projection,
+        projection: h.projection, // UNCHANGED display value
         gameId: g.game_id,
         matchup: g.matchup,
         gradedStarts: 0,
         parkFactor,
-        hrScore: h.projection * parkFactor,
+        hrScore: comp.score, // composite drives selection/sort only
         // Wind tag context (display-only). homeTeam → PARK_ORIENTATION lookup.
         homeTeam,
         windSpeed: wind?.windSpeed ?? null,

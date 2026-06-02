@@ -2385,6 +2385,57 @@ PARK_ORIENTATION — Detroit + Sacramento filled (this session):
   npx tsc --noEmit clean; npm run build passes. Forbidden-arc validation: 330°
   outside [150,315]; 151° the confirmed Comerica exception.
 
+HR MATCHUPS smart selection — composite ranking (this session):
+- Replaced the HR-section SELECTION ranking. OLD: hrScore = projection ×
+  PARK_FACTORS_HITS[home] (near-flat proj × static park → cards didn't
+  differentiate). NEW: a composite ranking heuristic. Frontend-only selection
+  change — NOT a model feature (FEATURE_COLS stays 11, model byte-identical),
+  NOT a calibrated probability, NOT an edge. Does NOT change the displayed HR
+  projection (still h.projection — verified byte-identical), does NOT touch
+  PITCHING/HITTING EDGES, buildEdgePlays, classify(), or any edge math.
+- COMPOSITE (web/lib/hrComposite.ts): score = projection × windAdjPark ×
+  powerFactor × platoonFactor. Each factor is a bounded multiplier around 1.0
+  that DEGRADES TO 1.0 when its data is missing — so with no extra data the
+  composite reduces EXACTLY to the old projection × parkFactor ranking (verified:
+  OLD top-3 == NEW top-3 today, since power/platoon are currently degraded).
+  Named, tunable weights in web/lib/constants.ts HR_COMPOSITE (WIND_WEIGHT 0.25 /
+  WIND_STRONG_MPH 15, POWER_WEIGHT 0.30 + sweet/EV floor→elite refs, PLATOON_
+  WEIGHT 0.12).
+  * windAdjPark: park hit-factor scaled by today's wind. REUSES the Phase-1 wind
+    math — extracted to web/lib/wind.ts as windRelativeAngle() + windBucket() +
+    windParkMultiplier(); FeaturedPlays.windTag() now imports the SAME helpers
+    (no duplicate wind implementation). Tailwind out → scale up, headwind in →
+    down, cross/calm/dome → park factor unchanged.
+  * powerFactor: recent batted-ball quality (sweet_spot_pct + avg_exit_velo, the
+    same Statcast data the sweet-spot footer uses), normalized floor→elite.
+  * platoonFactor: hitter bats vs opposing SP throwing hand (favorable +W, same-
+    hand −W, switch favorable). Sourced via TWO isolated, failure-tolerant reads
+    in page.tsx getSlate (games starters + players bats/throws/team) — no new
+    external fetch, pre-existing schema (no migration gating). Hitter side =
+    players.team vs games.home/away_team → opposing starter → its throws.
+  * opp-SP HR vulnerability: OMITTED — not logged on the hitter row anywhere
+    (player_game_logs has opp_sp_k/era/whip but no HR/9, and not on projections).
+    Documented as a future add (would need an engine/schema change).
+- HONESTY GUARDS honored: a missing term degrades THAT hitter's factor to neutral
+  (never drops the hitter, never fabricates). The card copy / AI insight are
+  unchanged and still say HR cards have "NO betting line or edge" — the composite
+  is internal (never shown as a number, never passed to the AI).
+- CURRENT LIVE STATE (2026-06-02 slate, 158 HR candidates): wind LIVE for 43
+  (reorders the mid-pack — e.g. Schwarber 0.42→0.368 on a −12% headwind, Joc
+  Pederson 0.294→0.241 −18%); power DEGRADED (add_sweet_spot.sql applied but
+  values null until a FULL run computes sweet-spot — refresh runs skip it);
+  platoon DEGRADED (players.team AND probable-pitcher throws are None — the known
+  lookup_player bio-field gap). So today the composite = old ranking + wind. It
+  progressively sharpens as a full run populates sweet-spot and as probable-
+  pitcher throws / hitter team get enriched (a known follow-up). Illustrative
+  check (injecting power+platoon) confirmed the full composite reorders sensibly
+  — JJ Bleday (0.40 proj, elite contact + hitter park + favorable platoon) leaps
+  Acuña (0.60 proj, poor contact).
+- VERIFIED: FEATURE_COLS still 11 (printed); engine imports clean; tsc --noEmit
+  clean; npm run build passes; displayed HR proj byte-identical; PITCHING/HITTING
+  selections unchanged. Future adds: enrich probable-pitcher throws + hitter team
+  (lights up platoon); add opp-SP HR/9 (the omitted 4th term).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FeaturedPlay, FeaturedSection, PropType } from "@/lib/types";
 import { getParkBearing } from "@/lib/constants";
+import { windBucket, windRelativeAngle } from "@/lib/wind";
 import SharpBadge from "./SharpBadge";
 
 // Display labels for every prop that can appear across the three sections.
@@ -51,22 +52,21 @@ function windTag(play: FeaturedPlay): WindTagResult {
   if (speed == null || bearing == null || play.windDirDeg == null) return staticTag;
   if (speed < 5) return { ...staticTag, text: `${pl.text} park · calm` };
 
-  const windToward = (play.windDirDeg + 180) % 360;       // direction wind blows TOWARD
-  const rel = ((windToward - bearing + 540) % 360) - 180; // normalize to (-180, 180]
-  const abs = Math.abs(rel);
+  // Reuse the SHARED wind math (web/lib/wind.ts) — same relative-angle helper the
+  // HR composite ranks on, so display and ranking never diverge.
+  const rel = windRelativeAngle(play.windDirDeg, bearing);
+  const bucket = windBucket(rel);
   const mph = Math.round(speed);
   const tip =
     `Wind ${mph} mph from ${Math.round(play.windDirDeg)}° · ` +
     `CF bearing ${bearing}° · field-relative ${Math.round(rel)}°`;
 
-  // |rel| small → blowing out toward CF (tailwind, helps HR); |rel| near 180 →
-  // blowing in from CF (headwind); in between → crossing. rel>0 leans to the
-  // RF side, rel<0 to the LF side (facing CF, right hand points clockwise).
-  if (abs <= 45) {
+  // rel>0 leans to the RF side, rel<0 to the LF side (facing CF, right is CW).
+  if (bucket === "out") {
     const side = rel < -15 ? "LF" : rel > 15 ? "RF" : "CF";
     return { text: `${mph} mph Out to ${side}`, arrow: "↑", tone: "text-emerald-400", tooltip: tip };
   }
-  if (abs >= 135) {
+  if (bucket === "in") {
     return { text: `${mph} mph In from CF`, arrow: "↓", tone: "text-red-400", tooltip: tip };
   }
   const side = rel > 0 ? "RF" : "LF";
