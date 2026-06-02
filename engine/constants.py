@@ -155,16 +155,18 @@ IS_DOME: set[str] = {
 # azimuth (0=N, clockwise) from home plate toward center field. Validated against
 # the two reference anchors: Fenway resolves to 45° (EXACT match to the known
 # value) and Wrigley to 37° (NNE) — confirming `direction` is the home→CF bearing.
-# 22 parks populated from that feed below.
-# Left None (not populated):
-#   - 7 fixed/closed-roof domes (skip — wind never reaches the field):
-#     Arizona, Houston, Miami, Milwaukee, Tampa Bay, Texas, Toronto.
-#   - Detroit (Comerica): the feed reports 151°, which falls in the physically-
-#     impossible 150°–315° arc (no MLB park faces SSE–NW) — flagged, left None
-#     pending manual review rather than writing a suspect value.
-#   - "Athletics" (Sacramento / Sutter Health Park, the 2025+ relocation): not
-#     present in the venue feed yet → None. "Oakland Athletics" (legacy key) is
-#     populated from the Oakland Coliseum azimuth.
+# 24 parks populated (22 from the feed + two confirmed outliers, see below).
+# Two genuine orientation outliers near/outside the 150°–315° heuristic arc,
+# both confirmed and now populated:
+#   - Detroit (Comerica): genuinely faces ~SSE; 151° is correct, not an error.
+#   - "Athletics" (Sutter Health Park, West Sacramento — the A's 2025–26 home):
+#     CF points NNW, ~330° (just past 315°, a rare but valid orientation). This
+#     is the key A's home games resolve through — fetch.fetch_games sets
+#     games.home_team from statsapi home_name, which is "Athletics" for the
+#     relocated club. The "Oakland Athletics" key (Coliseum 56°) is RETIRED —
+#     no current game resolves to it (kept only as a historical value).
+# Left None — the 7 fixed/closed-roof domes (wind never reaches the field):
+#   Arizona, Houston, Miami, Milwaukee, Tampa Bay, Texas, Toronto.
 # Seattle (T-Mobile, retractable) IS populated — usable whenever the roof is open.
 PARK_ORIENTATION: dict[str, float | None] = {
     "Arizona Diamondbacks":   None,    # dome — bearing moot
@@ -176,7 +178,7 @@ PARK_ORIENTATION: dict[str, float | None] = {
     "Cincinnati Reds":        123.0,   # Great American Ball Park (faces the Ohio River)
     "Cleveland Guardians":    359.0,   # Progressive Field — CF nearly due N
     "Colorado Rockies":       5.0,     # Coors Field
-    "Detroit Tigers":         None,    # Comerica feed=151° → forbidden arc; flagged for review
+    "Detroit Tigers":         151.0,   # Comerica Park — genuine SSE outlier (confirmed)
     "Houston Astros":         None,    # dome — bearing moot
     "Kansas City Royals":     47.0,    # Kauffman Stadium
     "Los Angeles Angels":     44.0,    # Angel Stadium
@@ -186,8 +188,8 @@ PARK_ORIENTATION: dict[str, float | None] = {
     "Minnesota Twins":        90.0,    # Target Field — CF due E
     "New York Mets":          14.0,    # Citi Field
     "New York Yankees":       75.0,    # Yankee Stadium — CF toward the ENE
-    "Athletics":              None,    # Sacramento (Sutter Health Park) — not in venue feed
-    "Oakland Athletics":      56.0,    # Oakland Coliseum (legacy key)
+    "Athletics":              330.0,   # Sutter Health Park, W. Sacramento (A's 2025+ home) — CF to NNW
+    "Oakland Athletics":      56.0,    # Oakland Coliseum — RETIRED (superseded by "Athletics"); not hit by current games
     "Philadelphia Phillies":  9.0,     # Citizens Bank Park
     "Pittsburgh Pirates":     116.0,   # PNC Park (CF toward the downtown skyline)
     "San Diego Padres":       0.0,     # Petco Park — CF due N

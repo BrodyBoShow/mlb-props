@@ -2362,6 +2362,29 @@ PARK_ORIENTATION filled — 22 parks from the MLB venue feed (this session):
   (22 populated); npx tsc --noEmit clean; npm run build passes. No other file
   touched.
 
+PARK_ORIENTATION — Detroit + Sacramento filled (this session):
+- Populated the two parks the bearings pass had flagged/left null. Data-only
+  change to PARK_ORIENTATION in BOTH engine/constants.py and web/lib/constants.ts
+  (kept byte-identical). No logic/schema/model/other-file change.
+- Detroit (Comerica Park) = 151°: the MLB feed value tripped the 150°–315°
+  forbidden-arc heuristic by 1°, but Comerica is a confirmed real-world SSE
+  outlier — 151° is correct. Populated (technically inside the heuristic arc; the
+  guard was a sanity check, Comerica is the documented exception).
+- "Athletics" = 330°: the A's play 2025–26 home games at Sutter Health Park,
+  West Sacramento (NOT the Coliseum). CF points NNW (~330°, just past 315° → a
+  rare but valid orientation, OUTSIDE the forbidden arc). RESOLUTION CONFIRMED:
+  the HR card derives homeTeam from games.home_team, and fetch.fetch_games sets
+  home_team = statsapi home_name = "Athletics" for the relocated club — so a 2026
+  A's home game resolves through the "Athletics" key and now gets 330°, not 56°.
+  The "Oakland Athletics" key (Coliseum 56°) is retired in place — no current
+  game resolves to it (kept only as a historical value).
+- Populated count now 24 (was 22). Null is now ONLY the 7 fixed/closed-roof
+  domes (Arizona, Houston, Miami, Milwaukee, Tampa Bay, Texas, Toronto).
+- VERIFIED: the two maps are byte-identical (31 keys, same values — scripted
+  compare, 0 diffs); python -c "import engine.constants" clean (24 populated);
+  npx tsc --noEmit clean; npm run build passes. Forbidden-arc validation: 330°
+  outside [150,315]; 151° the confirmed Comerica exception.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

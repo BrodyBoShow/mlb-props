@@ -200,13 +200,14 @@ export function getParkProfile(homeTeam: string): ParkProfile {
 //
 // SOURCE: MLB Stats API venue feed `direction` field = compass azimuth (0=N,
 // clockwise) from home plate toward center field. Validated against the anchors:
-// Fenway → 45° (exact) and Wrigley → 37° (NNE). 22 parks populated. Left null:
-// the 7 fixed/closed-roof domes (Arizona/Houston/Miami/Milwaukee/Tampa Bay/Texas/
-// Toronto); Detroit (feed 151° falls in the impossible 150–315 arc → flagged);
-// and "Athletics" (Sacramento/Sutter Health Park, not in the feed — "Oakland
-// Athletics" carries the legacy Coliseum value). Seattle (retractable) IS
-// populated (valid roof-open). A wrong bearing produces a wrong label, so we
-// never guess — unknowns stay null and degrade to the static park label.
+// Fenway → 45° (exact) and Wrigley → 37° (NNE). 24 parks populated (22 from the
+// feed + two confirmed outliers): Detroit/Comerica genuinely faces ~SSE (151°),
+// and "Athletics" = Sutter Health Park, W. Sacramento (the A's 2025+ home) faces
+// CF to the NNW (~330°). The A's HR cards resolve through the "Athletics" key
+// (games.home_team), so it carries 330°; "Oakland Athletics" (Coliseum 56°) is
+// retired and never hit by a current game. Left null: the 7 fixed/closed-roof
+// domes (Arizona/Houston/Miami/Milwaukee/Tampa Bay/Texas/Toronto). Seattle
+// (retractable) IS populated. Unknowns stay null and degrade to the static label.
 export const PARK_ORIENTATION: Record<string, number | null> = {
   "Arizona Diamondbacks":  null, // dome — bearing moot
   "Atlanta Braves":        149,  // Truist Park
@@ -217,7 +218,7 @@ export const PARK_ORIENTATION: Record<string, number | null> = {
   "Cincinnati Reds":       123,  // Great American (faces the Ohio River)
   "Cleveland Guardians":   359,  // Progressive — CF nearly due N
   "Colorado Rockies":      5,    // Coors Field
-  "Detroit Tigers":        null, // Comerica feed=151° → forbidden arc; flagged
+  "Detroit Tigers":        151,  // Comerica Park — genuine SSE outlier (confirmed)
   "Houston Astros":        null, // dome — bearing moot
   "Kansas City Royals":    47,   // Kauffman Stadium
   "Los Angeles Angels":    44,   // Angel Stadium
@@ -227,8 +228,8 @@ export const PARK_ORIENTATION: Record<string, number | null> = {
   "Minnesota Twins":       90,   // Target Field — CF due E
   "New York Mets":         14,   // Citi Field
   "New York Yankees":      75,   // Yankee Stadium — CF toward the ENE
-  "Athletics":             null, // Sacramento (Sutter Health Park) — not in feed
-  "Oakland Athletics":     56,   // Oakland Coliseum (legacy key)
+  "Athletics":             330,  // Sutter Health Park, W. Sacramento (A's 2025+ home) — CF to NNW
+  "Oakland Athletics":     56,   // Oakland Coliseum — RETIRED (superseded by "Athletics"); not hit by current games
   "Philadelphia Phillies": 9,    // Citizens Bank Park
   "Pittsburgh Pirates":    116,  // PNC Park (CF toward downtown skyline)
   "San Diego Padres":      0,    // Petco Park — CF due N
