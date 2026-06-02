@@ -520,11 +520,17 @@ def _resolve_fantasy_ladder(rows: list[dict]) -> bool:
     """
     import statistics
 
+    # Rows that ALREADY carry observed_lines are authoritative (the producer set
+    # the standard line directly — PrizePicks-direct). They bypass the median
+    # merge entirely: their single observed_lines value resets the day's
+    # accumulation to the true standard. Only rows WITHOUT observed_lines (the
+    # ParlayAPI ladder fallback) get accumulated/median-resolved here.
     fantasy = [
         r for r in rows
         if r.get("prop_type") in _FANTASY_LADDER_PROPS
         and r.get("bookmaker") == "prizepicks"
         and r.get("line") is not None
+        and not r.get("observed_lines")
     ]
     if not fantasy:
         return False

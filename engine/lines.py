@@ -8,8 +8,10 @@ pipeline keeps running untouched.
 Reads PARLAY_API_KEY from the environment (via python-dotenv).
 """
 
+import json
 import os
 import unicodedata
+import urllib.request
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -144,6 +146,97 @@ def _normalize(name: str) -> str:
     return " ".join(s.split())   # collapse extra whitespace
 
 
+# PrizePicks' own projections API returns each fantasy line tagged with
+# odds_type ('standard' | 'goblin' | 'demon') — the discriminator ParlayAPI
+# strips when it normalizes DFS payouts. We read the STANDARD rung directly so
+# the stored fantasy line is the real PrizePicks line, not a random alt rung.
+_PP_STAT_TO_PROP = {
+    "Hitter Fantasy Score":  "hitter_fantasy_score",
+    "Pitcher Fantasy Score": "pitcher_fantasy_score",
+}
+_PP_PROJECTIONS_URL = "https://api.prizepicks.com/projections?league_id=2&per_page=1000"
+
+
+def _fetch_prizepicks_standard_fantasy(
+    name_to_id: dict[str, int],
+    normalized_to_id: dict[str, int],
+) -> dict[tuple[int, str], float]:
+    """Fetch PrizePicks STANDARD fantasy-score lines straight from PrizePicks.
+
+    Returns {(player_id, prop_type): standard_line} for players we can match to
+    name_to_id. Free (no ParlayAPI credits) and DETERMINISTIC — filters to
+    odds_type == 'standard', so there's no goblin/demon alt-line ambiguity.
+
+    Fully defensive: any failure (network, Cloudflare block on a datacenter IP,
+    shape change) prints and returns {}, and fetch_prop_lines falls back to the
+    ParlayAPI ladder + the db.py median accumulation. PrizePicks is behind
+    Cloudflare and MAY block GitHub Actions IPs — the fallback is why that's not
+    fatal.
+    """
+    out: dict[tuple[int, str], float] = {}
+    try:
+        page = 1
+        total_pages = 1
+        while page <= total_pages and page <= 20:
+            url = f"{_PP_PROJECTIONS_URL}&page={page}"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0 Safari/537.36"
+                    ),
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.load(resp)
+
+            total_pages = (data.get("meta", {}) or {}).get("total_pages", 1) or 1
+
+            # included[] carries new_player rows: id -> display_name.
+            pp_players = {
+                inc["id"]: (inc.get("attributes", {}) or {}).get("display_name")
+                for inc in data.get("included", [])
+                if inc.get("type") == "new_player"
+            }
+
+            for d in data.get("data", []):
+                a = d.get("attributes", {}) or {}
+                if a.get("odds_type") != "standard":
+                    continue
+                prop_type = _PP_STAT_TO_PROP.get(a.get("stat_type"))
+                if prop_type is None:
+                    continue
+                line = a.get("line_score")
+                if line is None:
+                    continue
+                try:
+                    pp_pid = d["relationships"]["new_player"]["data"]["id"]
+                except (KeyError, TypeError):
+                    continue
+                nm = pp_players.get(pp_pid)
+                if not nm:
+                    continue
+                player_id = name_to_id.get(nm)
+                if player_id is None:
+                    player_id = normalized_to_id.get(_normalize(nm))
+                if player_id is None:
+                    continue
+                out[(player_id, prop_type)] = float(line)
+
+            page += 1
+    except Exception as exc:
+        print(
+            f"  PrizePicks-direct fantasy fetch failed: {exc} -- "
+            f"falling back to ParlayAPI ladder + median accumulation"
+        )
+        return {}
+
+    return out
+
+
 def fetch_prop_lines(
     name_to_id: dict[str, int],   # full_name -> player_id (pitchers + hitters)
     game_date: date,
@@ -236,8 +329,11 @@ def fetch_prop_lines(
         })
         per_prop[prop_type] += 1
 
-    # Deduplicate: keep one row per (player_id, prop_type, bookmaker, game_date)
-    # ParlayAPI returns main + alt lines — keep the first (main line).
+    # Deduplicate: keep one row per (player_id, prop_type, bookmaker, game_date).
+    # For non-fantasy props ParlayAPI returns main + alt lines and the first is
+    # the main line. For the two PrizePicks fantasy props the API returns a
+    # RANDOM rung of the goblin/standard/demon ladder, so "first" is unreliable —
+    # those get overridden below with the PrizePicks-direct standard line.
     seen: set[tuple] = set()
     deduped: list[dict] = []
     for r in rows:
@@ -247,10 +343,53 @@ def fetch_prop_lines(
             deduped.append(r)
     rows = deduped
 
+    # ── PrizePicks-direct standard fantasy lines (authoritative override) ─────
+    # Replace the ParlayAPI fantasy rows (random alt rung) with the real
+    # PrizePicks STANDARD line read straight from PrizePicks. We set
+    # observed_lines to the single standard value so db.upsert_lines treats the
+    # row as authoritative and does NOT median-merge it. Players PrizePicks-
+    # direct doesn't cover keep their ParlayAPI row, which still flows through
+    # the median accumulation as a fallback. If PrizePicks-direct fails entirely
+    # (e.g. Cloudflare blocks the runner), pp_standard is {} and every fantasy
+    # row falls back to the ladder/median path — no regression.
+    pp_standard = _fetch_prizepicks_standard_fantasy(name_to_id, normalized_to_id)
+    pp_applied = 0
+    if pp_standard:
+        # Map player_id -> display name from the rows we already have, so the
+        # authoritative rows carry a sensible player_name label.
+        id_to_name = {r["player_id"]: r["player_name"] for r in rows}
+        kept: list[dict] = []
+        for r in rows:
+            if r["prop_type"] in PRIZEPICKS_ONLY_PROPS:
+                key = (r["player_id"], r["prop_type"])
+                if key in pp_standard:
+                    continue   # drop the ParlayAPI alt rung; replaced below
+            kept.append(r)
+        for (player_id, prop_type), line in pp_standard.items():
+            kept.append({
+                "player_id":      player_id,
+                "player_name":    id_to_name.get(player_id, ""),
+                "prop_type":      prop_type,
+                "bookmaker":      "prizepicks",
+                "line":           line,
+                "over_price":     100,
+                "under_price":    -100,
+                "game_date":      game_date_str,
+                # Single value marks this row authoritative -> db.py stores it
+                # verbatim and resets the day's median accumulation to it.
+                "observed_lines": str(line),
+            })
+            pp_applied += 1
+        rows = kept
+
     norm_note = f" [{normalized_matches} via normalized match]" if normalized_matches else ""
     pp_note = f" [{pp_only_dropped} non-PrizePicks fantasy lines dropped]" if pp_only_dropped else ""
+    ppd_note = (
+        f" [{pp_applied} fantasy lines from PrizePicks-direct standard]"
+        if pp_applied else " [PrizePicks-direct unavailable -- fantasy via ladder/median]"
+    )
     summary = ", ".join(f"{p}: {n}" for p, n in per_prop.items())
-    print(f"  fetched {len(rows)} lines ({summary}){norm_note}{pp_note}")
+    print(f"  fetched {len(rows)} lines ({summary}){norm_note}{pp_note}{ppd_note}")
 
     # ── per-book breakdown ──────────────────────────────────────────────────
     # Surfaces which books are actually returning lines vs which are dead

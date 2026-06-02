@@ -1824,6 +1824,59 @@ PrizePicks fantasy "alt line" bug — store the STANDARD rung (this session):
   Until then the pipeline keeps working but fantasy lines stay single-sample
   (the old random-rung behavior).
 
+PrizePicks-direct standard fantasy lines (this session — the real fix):
+- Follow-up to the median-accumulation fix above: user showed PrizePicks'
+  own board (clean standard lines, O -119 / U -119) vs our board still wrong
+  for several players. Root cause confirmed: the median-of-accumulated-rungs
+  approach is only exact once ALL THREE ladder rungs (goblin/standard/demon)
+  are observed; with only 2 rungs caught the median is the MIDPOINT, not the
+  standard (e.g. Julio observed {2.5,6.0} -> median 4.0, but 6.0 IS the
+  standard; Ohtani {4.5,13.5} -> 9.0 vs real 8.5). ParlayAPI normalizes away
+  the goblin/standard/demon distinction entirely (reports flat -137/+100 for
+  every rung), so it can never identify the standard from a single call.
+- THE FIX: read fantasy lines straight from PrizePicks' own public API
+  (api.prizepicks.com/projections?league_id=2), which tags every projection
+  with odds_type ('standard' | 'goblin' | 'demon'). Filtering to
+  odds_type=='standard' gives the exact line DETERMINISTICALLY — no ladder
+  guessing, no accumulation needed. Free (no ParlayAPI credits — critical
+  given the 1000-credit/month, 3-credits-per-call budget). Verified: every
+  flagged player matches the screenshots exactly (Ohtani 8.5, Soto 7.0,
+  Julio 6.0, Crawford 5.0, Raley 4.5, Benge 5.5, Bichette 5.0, Marte 6.0,
+  Carroll 6.5, E-Rod 22.5).
+- engine/lines.py:
+  * _fetch_prizepicks_standard_fantasy(name_to_id, normalized_to_id) — new.
+    urllib (stdlib, no new dep) GET with a browser UA, paginates meta
+    .total_pages, reads included[] new_player -> display_name, keeps
+    odds_type=='standard' rows for the two fantasy stat_types, maps PP names
+    to our player_ids via the same exact/normalized matching ParlayAPI uses.
+    Returns {(player_id, prop_type): standard_line}. FULLY DEFENSIVE: any
+    failure (network, Cloudflare block on the GitHub Actions IP, shape drift)
+    prints + returns {} and the pipeline falls back to the ParlayAPI ladder +
+    median accumulation — no regression.
+  * fetch_prop_lines: after the ParlayAPI dedup, calls the PP-direct fetch and
+    REPLACES the fantasy rows for covered players with authoritative standard
+    rows (bookmaker=prizepicks, observed_lines=str(standard) as the
+    authoritative marker). Players PP-direct doesn't cover keep their ParlayAPI
+    row -> median fallback. Log line reports pp_applied count or
+    "PrizePicks-direct unavailable -- fantasy via ladder/median".
+- engine/db.py: _resolve_fantasy_ladder now SKIPS rows that already carry
+  observed_lines (authoritative PP-direct) — they upsert verbatim and reset
+  the day's accumulation to the true standard. Only ParlayAPI-fallback rows
+  (no observed_lines) get median-merged.
+- CI-reliability caveat: PrizePicks is behind Cloudflare and MAY block
+  datacenter IPs (GitHub Actions). Works from local/residential IPs (verified).
+  If blocked in CI the defensive fallback keeps the median-ladder behavior,
+  so fantasy lines still resolve (less precisely) rather than breaking. Watch
+  the cron logs for "PrizePicks-direct unavailable" to know which path ran.
+- Immediate correction: ran the PP-direct fetch + upsert manually for the
+  2026-06-01 slate (39 standard fantasy lines) so the live board shows the
+  correct lines NOW instead of waiting for the next cron. Verified in DB:
+  Ohtani 8.5 / Soto 7.0 / Crawford 5.0 / Bichette 5.0 / Raley 4.5 / Benge 5.5.
+- Note: PP-direct coverage varies by time of day — PrizePicks pulls lines as
+  games start, so a late run sees fewer standard rows (39 at ~00:30 UTC with
+  West Coast games imminent) than a midday run. Uncovered players fall back to
+  the ParlayAPI/median path. Frontend unchanged; FEATURE_COLS untouched.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 
