@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
-import { ALL_PROP_TYPES, EDGE_THRESHOLD, MIN_LINE, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
@@ -657,7 +657,11 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         if (edge === null || edge === undefined) return null;
         const absEdge = Math.abs(edge);
         if (absEdge < FEATURED_MIN_EDGE) return null;
-        const lineMin = MIN_LINE[propType];
+        // Featured-Plays-specific floor (NOT the shared MIN_LINE). MIN_LINE has
+        // no hitter_hits/hitter_total_bases entry, so using it dropped every
+        // hitter play here; FEATURED_MIN_LINE adds the hitter main-market floors
+        // while keeping the pitcher floors identical (PITCHING EDGES unchanged).
+        const lineMin = FEATURED_MIN_LINE[propType];
         if (lineMin === undefined || e.line < lineMin) return null;
 
         const proj = projIndex.get(`${e.player_id}|${e.prop_type}`);

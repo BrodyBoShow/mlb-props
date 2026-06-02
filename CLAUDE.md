@@ -2176,6 +2176,39 @@ datetime cleanup + PrizePicks-direct proxy support (this session):
   runs exactly as today (direct -> 403 -> median fallback). The real CI proof
   is the next post-lineup cron log showing "via proxy" instead of the 403.
 
+Featured Plays HITTING EDGES populated — MIN_LINE floor fix (this session):
+- DIAGNOSED (per-stage drop counter vs live DB, 2026-06-02 post-lineup) why the
+  board's HITTING EDGES section was always empty. TWO distinct causes:
+  * hitter_total_bases: 183 edges, 179 real-book (pinnacle posts two-sided TB
+    lines), 170 clear |edge|>=0.12 (magnitudes up to 0.55) — then ALL dropped at
+    buildEdgePlays' `lineMin === undefined` check because the shared MIN_LINE has
+    NO hitter_total_bases entry. The floor stage zeroed them; 88 would surface
+    with a real floor + the |proj-line|>=0.3 gate.
+  * hitter_hits: 114 edges but ALL bookmaker='consensus' (pinnacle posts no
+    two-sided hitter_hits line, so edge.py emits only the synthetic consensus
+    baseline) -> dropped EARLIER, at the FEATURED_BOOKS filter. A floor fix
+    can't help this one; deliberately NOT forced in (broadening books would
+    change the protected PITCHING section + risks the hitter under-lean bias).
+- FIX (frontend-only, a Featured-Plays-specific floor — kept SEPARATE from the
+  shared MIN_LINE, exactly like SHARP_MIN_LINE):
+  * web/lib/constants.ts: new FEATURED_MIN_LINE { strikeouts 3.5, hits_allowed
+    2.5, outs_recorded 10.5, hitter_hits 0.5, hitter_total_bases 1.5 }. Pitcher
+    values IDENTICAL to MIN_LINE (PITCHING EDGES unchanged); hitter values are
+    each prop's real main market (TB 1.5; 0.5 is the alt. hits 0.5 = 1+ hit).
+  * web/app/page.tsx buildEdgePlays: uses FEATURED_MIN_LINE instead of MIN_LINE
+    (MIN_LINE import removed — unused). The shared MIN_LINE (/results Betting
+    Edge + the featured-row + sharp badge floors) is untouched.
+- VERIFIED: qualifying hitter plays 0 -> 34 (all hitter_total_bases; hitter_hits
+  stays 0 as diagnosed). Top 3 surface: Ezequiel Duran 0.55 / Ben Rice 0.55 /
+  Miguel Vargas 0.53 (all pinnacle, line 1.5, OVER). Cross-checked Duran vs raw
+  DB: pinnacle two-sided 1.5 TB line (+152/-206) -> fair_over 0.371, model_over
+  0.923 (proj 2.0), edge 0.553 — legitimate, de-viggable, real-book. tsc clean;
+  npm run build passes. PITCHING/HR/classify()/engine/FEATURE_COLS unchanged.
+- KNOWN (not changed): the /results "Featured Plays" hit-rate row still uses the
+  shared MIN_LINE (pitcher-only), so it won't yet count the new hitter_total_bases
+  featured plays. A board↔results alignment (point both at FEATURED_MIN_LINE) is
+  a clean follow-up but out of this task's scope (board section only).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

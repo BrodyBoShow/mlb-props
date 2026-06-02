@@ -83,6 +83,28 @@ export const SHARP_MIN_LINE: Partial<Record<PropType, number>> = {
   pitcher_fantasy_score: 6.0,
 };
 
+// The home-board Featured Plays' OWN main-market floor — SEPARATE from the
+// shared MIN_LINE (which drives /results Betting-Edge and must stay as-is).
+// buildEdgePlays in page.tsx uses THIS. Pitcher values are IDENTICAL to
+// MIN_LINE so the PITCHING EDGES section is unchanged; the hitter entries are
+// the actual fix: MIN_LINE had NO floor for hitter_hits / hitter_total_bases,
+// so `lineMin === undefined` dropped EVERY hitter play — even 170 strong
+// pinnacle-anchored hitter_total_bases edges (|edge| up to 0.55) — before they
+// could surface (diagnostic 2026-06-02). Floors are each prop's real main
+// market:
+//   - hitter_total_bases 1.5  (the standard line; 0.5 is the alt)
+//   - hitter_hits        0.5  (1+ hit, the standard market). NOTE hitter_hits
+//     still won't surface on the board because pinnacle posts no two-sided
+//     hitter_hits line, so edge.py only emits a `consensus` baseline that
+//     FEATURED_BOOKS excludes — a SEPARATE cause, deliberately not forced in.
+export const FEATURED_MIN_LINE: Partial<Record<PropType, number>> = {
+  strikeouts:            3.5,
+  hits_allowed:          2.5,
+  outs_recorded:         10.5,
+  hitter_hits:           0.5,
+  hitter_total_bases:    1.5,
+};
+
 // Real, two-sided sportsbooks — the only books that count toward sharp-money
 // agreement (feature 5). DFS apps (prizepicks/underdog/sleeper/betr) post flat
 // single-number lines, not two-sided over/under markets, so they're excluded.
