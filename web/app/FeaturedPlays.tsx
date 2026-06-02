@@ -97,7 +97,14 @@ function InsightLine({
   }
   if (!text) return null;
 
-  const interactive = overflows || expanded;
+  // Show the toggle when the insight overflows two lines. The scrollHeight
+  // measurement above is PRECISE but browser-dependent (some browsers report
+  // scrollHeight as the clamped height under -webkit-line-clamp, so it reads
+  // no overflow). A deterministic length fallback guarantees the toggle for the
+  // long AI reads (~100–200 chars, which always wrap past two lines on these
+  // narrow cards) regardless of the browser's scrollHeight quirk. Short
+  // one-line insights (< ~90 chars) correctly stay static.
+  const interactive = overflows || expanded || text.length > 90;
 
   const paragraph = (
     <p
