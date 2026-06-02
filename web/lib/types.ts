@@ -216,6 +216,9 @@ export type FeaturedPlay = {
   // Opponent lineup season K rate (0–1) when available — pitching-edge AI
   // context only (it lives on strikeouts projection rows).
   oppKRate?: number;
+  // The team the pitcher FACES (opponent) — names which team oppKRate belongs to
+  // so the AI insight attributes it correctly (not to the pitcher's own team).
+  oppTeam?: string;
   // AI-generated one-sentence insight. undefined until /api/featured-insights
   // resolves (or permanently if ANTHROPIC_API_KEY isn't set).
   insight?: string;

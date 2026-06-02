@@ -2589,6 +2589,38 @@ Wind tag extended to game headers + total-bases cards (this session):
   min-sample guard, prop selection, edges, engine, FEATURE_COLS (11), schema — all
   unchanged. VERIFIED: tsc --noEmit clean; npm run build passes.
 
+AI insight K-rate mis-attributed to the pitcher's own team — fixed (this session):
+- BUG (user-reported, Eric Lauer card): the Featured-Plays AI insight attributed
+  the opposing-lineup K-rate to the WRONG team. Abbott (Reds pitcher facing the
+  Royals) read "backed by the Reds' 21% K-rate" — but 21% is the ROYALS' rate;
+  the Reds are his own team.
+- DIAGNOSIS (live, 2026-06-02): the stored opp_k_rate is ALWAYS correct (the
+  opponent's): Lauer (away/Dodgers, faces ARI) opp_k_rate 0.2035 = Diamondbacks'
+  actual 0.2035; Abbott (home/Reds, faces KC) 0.214 = Royals' 0.214; Gage Jump
+  (faces CHC) 0.2119 = Cubs' 0.212. The data is right — only the AI labeling was
+  wrong. ROOT CAUSE: featured-insights/route.ts told the LLM "opposing lineup
+  strikes out X%" WITHOUT naming the team, so the LLM guessed and named the
+  pitcher's own team.
+- FIX (frontend + prompt, no engine/model/schema change):
+  * page.tsx: moved the gameInfoById (per-game starters + teams) isolated query
+    ABOVE buildEdgePlays so it can name the opponent. For each featured pitching
+    play the featured player IS the game's starter, so oppTeam = the OTHER team
+    (player_id == homeStarter → awayTeam, == awayStarter → homeTeam; undefined
+    when the starter id isn't resolved → falls back to "the opposing lineup").
+    Attached oppTeam to the FeaturedPlay. (gameInfoById is still reused by the HR
+    composite platoon term — just defined earlier now.)
+  * types.ts: FeaturedPlay gains oppTeam?: string.
+  * featured-insights/route.ts: PlayCtx carries oppTeam; the K-rate prompt bit is
+    now "the {oppTeam} lineup (the team {pitcher} is facing) strikes out X%", and
+    a CRITICAL system rule was added: "any strikeout/K rate given is the OPPONENT
+    lineup's — attribute it to that opponent, NEVER the pitcher's own team." The
+    unstable_cache key includes oppTeam, so insights regenerate with the fix.
+- VERIFIED: oppTeam resolves correctly (Lauer→Arizona Diamondbacks, Abbott→Kansas
+  City Royals, Jump→Chicago Cubs); new prompt line names the right team; tsc
+  --noEmit clean; npm run build passes. Engine/model/FEATURE_COLS/schema
+  untouched. (The board's OppContextLine "Facing a X% K lineup" was already
+  correct — it never named a team.)
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

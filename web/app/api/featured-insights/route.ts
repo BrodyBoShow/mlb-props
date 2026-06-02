@@ -19,6 +19,7 @@ type PlayCtx = {
   lean?: "over" | "under";
   parkFactor?: number;
   oppKRate?: number;
+  oppTeam?: string;     // team the pitcher faces — the owner of oppKRate
   agree?: number;       // sharp-agreement count
   total?: number;
   books?: string[];     // sharp-agreement book keys
@@ -37,6 +38,9 @@ const SYSTEM_PROMPT =
   "Work the REAL numbers in naturally — projection vs line, the edge, opponent " +
   "strikeout rate, park factor, how many sharp books agree and which way, how " +
   "much graded history backs it. Sound human and confident, not robotic. " +
+  "CRITICAL: any strikeout/K rate given is the OPPONENT lineup's (the team the " +
+  "pitcher is facing) — attribute it to that opponent, NEVER to the pitcher's " +
+  "own team. " +
   "Hard rules: vary your openings — do NOT start every read with the player's " +
   "name, and never start with 'The model', 'The', or 'Facing'. Lead with the " +
   "single biggest factor for THIS play. No hedging, no filler, no emojis, no " +
@@ -104,7 +108,11 @@ function describePlay(p: PlayCtx, n: number): string {
       `an ${lean} lean (model-vs-market edge ${(p.edge ?? 0).toFixed(2)}, where ~0.12+ is strong)`,
   ];
   if (p.oppKRate !== undefined) {
-    bits.push(`opposing lineup strikes out ${(p.oppKRate * 100).toFixed(0)}% of the time`);
+    // Name the OPPONENT so the LLM attributes the K-rate to the right team — it
+    // was previously naming the pitcher's OWN team (e.g. "the Reds' 21% K-rate"
+    // for a Reds pitcher facing the Royals). oppKRate is always the opponent's.
+    const lineup = p.oppTeam ? `the ${p.oppTeam} lineup` : "the opposing lineup";
+    bits.push(`${lineup} (the team ${p.player} is facing) strikes out ${(p.oppKRate * 100).toFixed(0)}% of the time`);
   }
   if (p.agree && p.total) {
     const names = bookList(p.books);
@@ -208,6 +216,7 @@ export async function POST(req: Request) {
         lean: p.lean,
         parkFactor: p.parkFactor,
         oppKRate: p.oppKRate,
+        oppTeam: p.oppTeam,
         agree: p.sharpAgreement?.agree,
         total: p.sharpAgreement?.total,
         books: p.sharpAgreement?.books,

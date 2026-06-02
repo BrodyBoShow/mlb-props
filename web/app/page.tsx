@@ -722,6 +722,40 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     projIndex.set(`${r.player_id}|${r.prop_type}`, r);
   }
 
+  // Per-game starters + teams — ISOLATED, failure-tolerant read of already-stored
+  // data. Used to (1) name the OPPONENT a pitcher faces (so the AI insight
+  // attributes the opposing lineup's K-rate to the right team, not the pitcher's
+  // own), and (2) find each hitter's opposing SP for the HR composite platoon
+  // term. On error the map stays empty and both degrade gracefully.
+  const gameInfoById = new Map<
+    number,
+    { homeTeam: string; awayTeam: string; homeStarter: number | null; awayStarter: number | null }
+  >();
+  {
+    const { data, error } = await supabase
+      .from("games")
+      .select("game_id, home_team, away_team, home_starter_id, away_starter_id")
+      .eq("game_date", selectedDate);
+    if (error) {
+      console.log(`[home-diag] game-starters fetch skipped (${String(error)})`);
+    } else {
+      for (const r of (data ?? []) as Array<{
+        game_id: number;
+        home_team: string;
+        away_team: string;
+        home_starter_id: number | null;
+        away_starter_id: number | null;
+      }>) {
+        gameInfoById.set(r.game_id, {
+          homeTeam: r.home_team,
+          awayTeam: r.away_team,
+          homeStarter: r.home_starter_id,
+          awayStarter: r.away_starter_id,
+        });
+      }
+    }
+  }
+
   // Build one EDGE section (pitching or hitting) from edgeData for the given
   // prop set. Same qualification as the original Featured Plays, just scoped
   // to the section's props, sorted by abs(edge) desc and capped at 3.
@@ -755,6 +789,20 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           ? PARK_FACTORS_HITS[proj.games.home_team] ?? 1.0
           : undefined;
 
+        // Opponent the pitcher faces — the featured player IS the game's starter,
+        // so the opponent is the OTHER team. Used to attribute the opposing
+        // lineup's K-rate to the correct team in the AI insight (the bug: the LLM
+        // was naming the pitcher's OWN team). undefined when the starter id isn't
+        // resolved → the insight falls back to "the opposing lineup".
+        const gi = gameInfoById.get(proj.game_id);
+        const oppTeam = gi
+          ? e.player_id === gi.homeStarter
+            ? gi.awayTeam
+            : e.player_id === gi.awayStarter
+              ? gi.homeTeam
+              : undefined
+          : undefined;
+
         return {
           playerId: e.player_id,
           playerName: proj.players?.full_name ?? "Unknown player",
@@ -771,6 +819,8 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           parkFactor,
           // opp K rate lives only on strikeouts rows (pitching context).
           oppKRate: oppKByPlayer.get(e.player_id),
+          // The team this pitcher faces — names the K-rate's owner in the insight.
+          oppTeam,
         };
       })
       .filter((p): p is FeaturedPlay => p !== null)
@@ -786,39 +836,10 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   // No book line / edge required — this section is pure context. home_team is
   // parsed from the matchup string ("Away @ Home"), same as the park tag.
   // ── platoon inputs for the HR composite (SELECTION only, not display) ─────
-  // Two ISOLATED, failure-tolerant reads of already-stored data (no new external
-  // fetch): per-game starters (to find each hitter's opposing SP) and per-player
-  // bats/throws/team. On any error the maps stay empty and the composite's
-  // platoon term degrades to neutral — the ranking still uses power + wind +
-  // park. The columns are pre-existing schema (no migration gating).
-  const gameInfoById = new Map<
-    number,
-    { homeTeam: string; awayTeam: string; homeStarter: number | null; awayStarter: number | null }
-  >();
-  {
-    const { data, error } = await supabase
-      .from("games")
-      .select("game_id, home_team, away_team, home_starter_id, away_starter_id")
-      .eq("game_date", selectedDate);
-    if (error) {
-      console.log(`[home-diag] HR composite: game-starters fetch skipped (${String(error)})`);
-    } else {
-      for (const r of (data ?? []) as Array<{
-        game_id: number;
-        home_team: string;
-        away_team: string;
-        home_starter_id: number | null;
-        away_starter_id: number | null;
-      }>) {
-        gameInfoById.set(r.game_id, {
-          homeTeam: r.home_team,
-          awayTeam: r.away_team,
-          homeStarter: r.home_starter_id,
-          awayStarter: r.away_starter_id,
-        });
-      }
-    }
-  }
+  // gameInfoById (built above) gives per-game starters; handById is an ISOLATED,
+  // failure-tolerant read of per-player bats/throws/team. On error the map stays
+  // empty and the composite's platoon term degrades to neutral — the ranking
+  // still uses power + wind + park. Pre-existing schema (no migration gating).
   const handById = new Map<number, { bats: string | null; throws: string | null; team: string | null }>();
   {
     const hitterIds = (byProp["hitter_home_runs"] ?? []).flatMap((g) =>
