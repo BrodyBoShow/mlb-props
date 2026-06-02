@@ -475,20 +475,53 @@ def _build_and_upsert_hitters(
     full-path sanity check.
 
     bulk_df (whole-window Statcast) drives the DISPLAY-ONLY sweet-spot footer:
-    a rolling 7-day sweet-spot% + avg exit velo per hitter is computed once and
-    attached to the hitter_home_runs rows so the HR card can show batted-ball
-    quality. None/empty bulk_df (refresh runs) → no sweet-spot, the card keeps
-    its "N games tracked" footer. These values never enter the model.
+    a rolling 7-day sweet-spot% + avg exit velo per hitter, attached to the
+    hitter_home_runs rows so the HR card (and the HR-composite power term) can use
+    batted-ball quality. These values never enter the model.
+
+    The frame comes from EITHER the pitcher pipeline's bulk_df (full run, free) OR
+    — when that's None (refresh run) — an INDEPENDENT _fetch_bulk_statcast call.
+    Decoupling sweet-spot from bulk_df is what makes the power term actually live:
+    the first hitter build of the day happens on a refresh run (lineups post after
+    the 1 AM full pitcher run), so without the independent fetch the frame never
+    reached this step and sweet-spot was skipped every run, every day.
     """
-    # Display-only batted-ball quality for the HR-card footer. Computed ONCE
-    # from the bulk frame; hitters with < 5 batted balls (or no frame) are
-    # omitted → footer degrades. Wrapped so a Statcast-shape surprise can never
-    # break the hitter projections.
+    # Display-only batted-ball quality for the HR-card footer / composite power
+    # term. Resolve the Statcast frame, then compute ONCE (covers all hitters);
+    # hitters with < 5 batted balls are omitted → footer/power degrade.
+    today = et_today()
+    player_ids = [p["player_id"] for p in players if p.get("player_id")]
+    df = bulk_df
+    _have_frame = df is not None and not bool(getattr(df, "empty", False))
+    if not _have_frame and player_ids:
+        # Refresh run (no full-pitcher bulk_df). Fetch independently — but ONLY
+        # when sweet-spot is actually MISSING for these hitters' hitter_home_runs
+        # rows (guard c: never refetch to recompute values that already exist).
+        # One fetch per run (covers all hitters), pybaseball-cached, try/except
+        # so a Statcast flake leaves sweet-spot null (power term degrades).
+        have = db.get_players_with_sweet_spot(today.strftime("%Y-%m-%d"))
+        need = [pid for pid in player_ids if pid not in have]
+        if not need:
+            print(
+                "  sweet-spot already present for these hitters -- "
+                "skipping independent bulk Statcast fetch"
+            )
+            df = None
+        else:
+            try:
+                print(
+                    f"  refresh run: independent bulk Statcast fetch for sweet-spot "
+                    f"({len(need)}/{len(player_ids)} hitters missing)..."
+                )
+                df = mlb_model._fetch_bulk_statcast(today)
+            except Exception as exc:
+                print(f"  sweet-spot bulk fetch failed ({exc}) -- leaving sweet-spot null")
+                df = None
+
     sweet: dict[int, dict] = {}
-    if bulk_df is not None:
+    if player_ids and df is not None and not bool(getattr(df, "empty", False)):
         try:
-            player_ids = [p["player_id"] for p in players if p.get("player_id")]
-            sweet = sweet_spot.compute_sweet_spot(bulk_df, player_ids, et_today())
+            sweet = sweet_spot.compute_sweet_spot(df, player_ids, today)
             if sweet:
                 print(f"  sweet-spot: computed for {len(sweet)} hitters (HR footer)")
         except Exception as exc:

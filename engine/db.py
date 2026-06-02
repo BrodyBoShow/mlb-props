@@ -330,6 +330,43 @@ def get_projection_player_ids_for_date(
         return set()
 
 
+def get_players_with_sweet_spot(date_str: str) -> set[int]:
+    """player_ids whose hitter_home_runs row on `date_str` already has a non-null
+    sweet_spot_pct.
+
+    Gates the independent Statcast fetch in main._build_and_upsert_hitters
+    (efficiency guard c): if the hitters being built already have sweet-spot, the
+    expensive _fetch_bulk_statcast call is skipped entirely. Returns an empty set
+    on any error (or pre-migration, where the column is absent) — the caller then
+    treats every hitter as "missing" and will attempt the fetch, the safe default.
+    """
+    try:
+        out: set[int] = set()
+        page_size = 1000
+        for page in range(20):
+            start = page * page_size
+            end = start + page_size - 1
+            resp = (
+                _client()
+                .table("projections")
+                .select("player_id, sweet_spot_pct")
+                .eq("projection_date", date_str)
+                .eq("prop_type", "hitter_home_runs")
+                .range(start, end)
+                .execute()
+            )
+            batch = resp.data or []
+            for r in batch:
+                if r.get("sweet_spot_pct") is not None:
+                    out.add(int(r["player_id"]))
+            if len(batch) < page_size:
+                break
+        return out
+    except Exception as exc:
+        print(f"  could not check existing sweet-spot ({exc}) — assuming none")
+        return set()
+
+
 _PITCHER_PROP_TYPES = (
     "strikeouts", "hits_allowed", "walks", "earned_runs",
     "outs_recorded", "pitcher_fantasy_score",

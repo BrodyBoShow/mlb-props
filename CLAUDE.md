@@ -2505,6 +2505,47 @@ HR composite — probable-pitcher bio fix + min-sample guard + sweet-spot findin
     dedicated sweet-spot step that always fetches Statcast when hitters are built.
     Until then the HR-composite power term stays permanently neutral.
 
+Sweet-spot decoupled from pitcher bulk_df — HR composite power term now LIVE:
+- Fixes the structural deadness reported last session (PART C): sweet-spot only
+  computed when bulk_df was present, but bulk_df is None on every refresh run and
+  the only full pitcher run (1 AM ET) precedes lineups, so the hitter pipeline
+  early-returned and the sweet-spot step never ran — every run, every day.
+- FIX (engine/main.py _build_and_upsert_hitters): resolve the Statcast frame from
+  EITHER the pitcher pipeline's bulk_df (full run, free) OR — when that's None
+  (refresh run) — an INDEPENDENT mlb_model._fetch_bulk_statcast(et_today()) call
+  (the SAME helper the pitcher pipeline uses; no new fetch). The independent
+  fetch fires ONLY when ALL hold: (a) building hitter_home_runs (this function),
+  (b) no full-run bulk_df, (c) sweet-spot is actually MISSING for these hitters'
+  hitter_home_runs rows. Guard (c) = new db.get_players_with_sweet_spot(date)
+  (player_ids whose hitter_home_runs row already has non-null sweet_spot_pct) —
+  if all present, the expensive fetch is SKIPPED. One fetch per run (covers all
+  hitters), pybaseball-cached (cache.enable() at startup, unchanged), wrapped in
+  try/except so a Statcast flake leaves sweet-spot null (composite power term
+  degrades to neutral). A full pitcher run still reuses its own bulk_df (the
+  independent branch is skipped when a frame is passed) — no double fetch.
+- WHY THIS WORKS in the normal flow: the FIRST hitter build of the day (when
+  lineups post, ~1 PM ET) runs in refresh mode (existing_hitter < 100 → full
+  build path → _build_and_upsert_hitters), so the independent fetch fires there
+  and populates sweet-spot for the whole slate. Later runs skip it via guard (c).
+  This is NOT a backfill script — it's the regular pipeline computing sweet-spot
+  when missing, so it self-heals each fresh slate (and backfilled today's slate
+  as a side effect during verification).
+- NOT a model input — sweet-spot never enters FEATURE_COLS (still 11). Untouched:
+  the is_refresh gate, the lineup early-return, the composite logic, model,
+  projections, edges, wind tag, the HR min-sample guard.
+- VERIFIED (live, 2026-06-02): refresh-path build (bulk_df=None) → "independent
+  bulk Statcast fetch for sweet-spot (270/270 hitters missing)" fired ONCE →
+  "computed for 254 hitters"; hitter_home_runs sweet-spot coverage 0 → 254 (16
+  with < 5 BBE correctly omitted). Re-run → "sweet-spot already present ...
+  skipping independent bulk Statcast fetch" (guard c, no double fetch). Spot-
+  check player 802415: compute_sweet_spot {sweet 0.174, EV 77.8, BBE 23} ==
+  hand-filter (launch_angle 8–32°, ≥5 BBE) {0.174, 77.8, 23} exactly. FEATURE_
+  COLS 11; model byte-identical; engine imports clean; no migration needed
+  (add_sweet_spot.sql already applied). Composite audit: power term NON-neutral
+  for 159/184 candidates (was 0) — now live alongside platoon (PART A, 176) and
+  the min-sample gate (PART B, 31 excluded). New top-3: Acuña (power 0.839 ×
+  platoon 0.880), Soto (0.929 × 1.120), Duran (1.056 × 1.120 × tailwind 1.070).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 
