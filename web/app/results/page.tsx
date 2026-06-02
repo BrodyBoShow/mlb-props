@@ -6,8 +6,24 @@ import type {
   PropType,
   TrackerResult,
   Verdict,
+  WeeklyBucket,
 } from "@/lib/types";
 import ResultsBoard from "./ResultsBoard";
+
+// Days of history for the weekly Betting Edge trend chart (6 ISO weeks). This
+// is a SEPARATE, wider window than the 7-day main results table.
+const TREND_LOOKBACK_DAYS = 42;
+
+// Monday (ISO week start) for a "YYYY-MM-DD" date, returned as a date string.
+// Computed entirely in UTC so the bucketing is deterministic regardless of the
+// server timezone (Vercel runs UTC; game_date is date-only).
+function startOfISOWeek(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const day = d.getUTCDay(); // 0=Sun … 6=Sat
+  const diff = day === 0 ? -6 : 1 - day; // shift back to Monday
+  d.setUTCDate(d.getUTCDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
 
 // Always read fresh — graded rows land throughout the day as games finish.
 export const dynamic = "force-dynamic";
@@ -100,6 +116,7 @@ async function getResults(): Promise<{
   trackerResults: TrackerResult[];
   dateRange: { start: string; end: string } | null;
   trackedFrom: Partial<Record<PropType, string>>;
+  weeklyTrend: WeeklyBucket[];
 }> {
   const supabase = getSupabaseClient();
 
@@ -126,7 +143,7 @@ async function getResults(): Promise<{
   const latestLineDate = latestLine?.[0]?.game_date as string | undefined;
   // Empty state: nothing graded AND no lines either.
   if (!latestLogDate && !latestLineDate) {
-    return { bettingResults: [], trackerResults: [], dateRange: null, trackedFrom: {} };
+    return { bettingResults: [], trackerResults: [], dateRange: null, trackedFrom: {}, weeklyTrend: [] };
   }
   const endDate =
     latestLogDate && latestLineDate
@@ -401,11 +418,125 @@ async function getResults(): Promise<{
   bettingResults.sort(sortNewestFirst);
   trackerResults.sort(sortNewestFirst);
 
+  // ── Weekly Betting Edge trend (Feature 6) ────────────────────────────────
+  // A SECOND, wider 42-day window anchored on the same endDate. Same tables,
+  // same book-preference reduction, same MIN_LINE floor, same classify()
+  // formula as the main Betting Edge join — just bucketed by ISO week. Scoped
+  // to the Betting Edge props (the MIN_LINE keys) to keep the fetch lean.
+  // Paginated via fetchAllPages so the 1000-row Supabase cap can't truncate it.
+  const trendStartObj = new Date(`${endDate}T00:00:00Z`);
+  trendStartObj.setUTCDate(trendStartObj.getUTCDate() - (TREND_LOOKBACK_DAYS - 1));
+  const trendStart = trendStartObj.toISOString().slice(0, 10);
+  const BETTING_PROPS = Object.keys(MIN_LINE) as PropType[];
+
+  const [trendProj, trendLines, trendLogs] = await Promise.all([
+    fetchAllPages<ProjectionRow>(
+      (from, to) =>
+        supabase
+          .from("projections")
+          .select(
+            "game_id, player_id, prop_type, projection, projection_date, " +
+              "players(full_name), games(home_team, away_team)",
+          )
+          .gte("projection_date", trendStart)
+          .lte("projection_date", endDate)
+          .in("prop_type", BETTING_PROPS as string[])
+          .range(from, to) as unknown as PromiseLike<{
+            data: ProjectionRow[] | null;
+            error: unknown;
+          }>,
+      "trend-projections",
+    ),
+    fetchAllPages<LineRow>(
+      (from, to) =>
+        supabase
+          .from("lines")
+          .select("player_id, prop_type, bookmaker, line, game_date")
+          .gte("game_date", trendStart)
+          .lte("game_date", endDate)
+          .in("prop_type", BETTING_PROPS as string[])
+          .range(from, to) as unknown as PromiseLike<{
+            data: LineRow[] | null;
+            error: unknown;
+          }>,
+      "trend-lines",
+    ),
+    fetchAllPages<LogRow>(
+      (from, to) =>
+        supabase
+          .from("player_game_logs")
+          .select("player_id, game_date, " + Object.values(ACTUAL_COLUMN).join(", "))
+          .gte("game_date", trendStart)
+          .lte("game_date", endDate)
+          .range(from, to) as unknown as PromiseLike<{
+            data: LogRow[] | null;
+            error: unknown;
+          }>,
+      "trend-logs",
+    ),
+  ]);
+
+  // Reduce trend lines to one per (player, prop, date) by book preference —
+  // identical to the main join (reuses the same bookRank).
+  const trendLineByKey = new Map<string, LineRow>();
+  for (const l of trendLines) {
+    const key = `${l.player_id}|${l.prop_type}|${l.game_date}`;
+    const existing = trendLineByKey.get(key);
+    if (!existing || bookRank(l.bookmaker) < bookRank(existing.bookmaker)) {
+      trendLineByKey.set(key, l);
+    }
+  }
+  const trendLogByKey = new Map<string, LogRow>();
+  for (const l of trendLogs) trendLogByKey.set(`${l.player_id}|${l.game_date}`, l);
+
+  // Classify each projection (same MIN_LINE + classify() as the main path) and
+  // accumulate per ISO week.
+  const weekAgg = new Map<string, { correct: number; wrong: number; skip: number }>();
+  for (const p of trendProj) {
+    const propType = p.prop_type as PropType;
+    const minLine = MIN_LINE[propType];
+    if (minLine === undefined) continue;
+    const actualCol = ACTUAL_COLUMN[propType];
+    if (!actualCol) continue;
+
+    const line = trendLineByKey.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
+    if (!line || line.line < minLine) continue;
+    const log = trendLogByKey.get(`${p.player_id}|${p.projection_date}`);
+    if (!log) continue;
+    const actualRaw = log[actualCol];
+    if (actualRaw === null || actualRaw === undefined) continue;
+    const actual = Number(actualRaw);
+    if (!Number.isFinite(actual)) continue;
+
+    const verdict = classify(p.projection, line.line, actual);
+    const wk = startOfISOWeek(p.projection_date);
+    const agg = weekAgg.get(wk) ?? { correct: 0, wrong: 0, skip: 0 };
+    agg[verdict] += 1;
+    weekAgg.set(wk, agg);
+  }
+
+  const weeklyTrend: WeeklyBucket[] = [...weekAgg.entries()]
+    .map(([week, a]) => ({
+      week,
+      correct: a.correct,
+      wrong: a.wrong,
+      skip: a.skip,
+      rate: a.correct + a.wrong > 0 ? a.correct / (a.correct + a.wrong) : 0,
+    }))
+    .filter((b) => b.correct + b.wrong > 0) // omit weeks with no evaluable plays
+    .sort((x, y) => (x.week < y.week ? -1 : 1)); // ascending by week
+
+  console.log(
+    `[results-diag] weekly trend: ${weeklyTrend.length} evaluable weeks ` +
+      `(${trendStart}..${endDate})`,
+  );
+
   return {
     bettingResults,
     trackerResults,
     dateRange: { start: startDate, end: endDate },
     trackedFrom,
+    weeklyTrend,
   };
 }
 
@@ -419,7 +550,7 @@ function formatDate(iso: string): string {
 }
 
 export default async function ResultsPage() {
-  const { bettingResults, trackerResults, dateRange, trackedFrom } =
+  const { bettingResults, trackerResults, dateRange, trackedFrom, weeklyTrend } =
     await getResults();
   const hasAny = bettingResults.length + trackerResults.length > 0;
 
@@ -447,6 +578,7 @@ export default async function ResultsPage() {
           bettingResults={bettingResults}
           trackerResults={trackerResults}
           trackedFrom={trackedFrom}
+          weeklyTrend={weeklyTrend}
         />
       ) : (
         <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">

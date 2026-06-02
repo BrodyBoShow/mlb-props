@@ -109,6 +109,17 @@ export type EvaluatedResult = {
   verdict: Verdict;
 };
 
+// One ISO-week bucket of Betting Edge results for the weekly trend chart.
+// week = start-of-week (Monday) date string "YYYY-MM-DD". rate = correct /
+// (correct + wrong); weeks with no evaluable plays are omitted upstream.
+export type WeeklyBucket = {
+  week: string;
+  correct: number;
+  wrong: number;
+  skip: number;
+  rate: number;
+};
+
 // Model Tracker result — projection + actual only, no book line.
 export type TrackerResult = {
   gameId: number;

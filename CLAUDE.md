@@ -1936,6 +1936,40 @@ Featured Plays redesign — 3 sections + AI insights (this session):
 - ANTHROPIC_API_KEY added to Vercel env by the user (confirmed). Without it
   the sections still render correctly; insights are simply blank.
 
+Weekly Betting Edge trend chart on /results (Feature 6, this session):
+- Adds a weekly hit-rate trend chart between the Betting Edge OverallCard and
+  the per-prop breakdown. Frontend-only (data extension + new client
+  component); classify() / the 7-day main window / engine all untouched.
+- STEP 0 finding: recharts is NOT installed (spec assumed it was). Rather than
+  add a ~500KB chart dep for one 120px chart (against the project's simplicity
+  rule + zero existing chart deps), built a dependency-free Tailwind bar chart
+  that matches the spec visual exactly.
+- web/lib/types.ts: WeeklyBucket { week, correct, wrong, skip, rate }.
+- web/app/results/page.tsx getResults(): a SECOND 42-day (6-week) window
+  anchored on the same endDate as the 7-day main window. Same tables, same
+  fetchAllPages pagination (1000-row cap), same BOOK_PREFERENCE reduction,
+  same MIN_LINE floor, same classify() — scoped to the 5 Betting Edge props
+  (MIN_LINE keys) to keep the fetch lean. Buckets by ISO week via
+  startOfISOWeek() (UTC Monday, server-TZ-independent); omits weeks with
+  correct+wrong==0; sorts ascending. Returns weeklyTrend: WeeklyBucket[].
+  TREND_LOOKBACK_DAYS=42. [results-diag] logs the evaluable-week count.
+- web/app/results/ResultsTrendChart.tsx (new client component): one bar per
+  week, height = hit rate %; dashed 50% reference line + faint 25/75 gridlines;
+  y-axis 0–100% every 25%; x labels "MMM D" (parsed as local midnight so no
+  TZ day-shift); bar color emerald>=55% / amber 45–55% / slate<45%; hover
+  tooltip "Week of <date>: N correct, M wrong — X% hit rate". <2 buckets ->
+  "Trend builds as more graded slates accumulate" placeholder (no single-bar
+  glitch); 0 buckets -> null.
+- web/app/results/ResultsBoard.tsx: accepts weeklyTrend, renders
+  <ResultsTrendChart> between OverallCard and per-prop card. The chart is the
+  FULL unfiltered trend — prop/game filter chips don't touch it.
+- Verified: tsc clean; npm run build passes. Live DB (42-day window
+  2026-04-21..2026-06-01): exactly 1 evaluable week (2026-05-25: 43 correct /
+  21 wrong / 3 skip -> 67%), which MATCHES the live OverallCard (67%, 43/21/3)
+  — confirms the trend join is consistent with the main path. With 1 week the
+  placeholder renders (confirmed on dev server); the bar chart activates
+  automatically once a 2nd week accumulates. 7-day main results unchanged.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

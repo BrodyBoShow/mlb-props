@@ -6,8 +6,10 @@ import type {
   PropType,
   TrackerResult,
   Verdict,
+  WeeklyBucket,
 } from "@/lib/types";
 import { PROP_LABELS } from "@/lib/constants";
+import ResultsTrendChart from "./ResultsTrendChart";
 
 // Re-export types/labels so callers `import { ..., type PropType } from
 // "./ResultsBoard"` keep working without changes.
@@ -622,11 +624,15 @@ export default function ResultsBoard({
   bettingResults,
   trackerResults,
   trackedFrom,
+  weeklyTrend,
 }: {
   bettingResults: EvaluatedResult[];
   trackerResults: TrackerResult[];
   // Per-prop earliest-line-ingested date — display only, no filtering effect.
   trackedFrom: Partial<Record<PropType, string>>;
+  // Full unfiltered weekly Betting Edge hit-rate trend (not affected by the
+  // prop/game filter chips below).
+  weeklyTrend: WeeklyBucket[];
 }) {
   const [propFilter, setPropFilter] = useState<Filter>("all");
   const [gameFilter, setGameFilter] = useState<GameKey>("all");
@@ -668,6 +674,11 @@ export default function ResultsBoard({
       </header>
 
       <BettingOverallCard results={filteredBetting} />
+
+      {/* Weekly hit-rate trend — full unfiltered 6-week view, sits between the
+          overall card and the per-prop breakdown. Not affected by the filters. */}
+      <ResultsTrendChart weeklyTrend={weeklyTrend} />
+
       <BettingPerPropCard results={bettingResults} trackedFrom={trackedFrom} />
 
       <BettingFilterBar
