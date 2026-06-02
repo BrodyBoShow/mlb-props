@@ -59,4 +59,10 @@ jobs:
           # When absent, those columns log NULL and one reminder line
           # is printed; the pipeline runs the same either way.
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          # Optional — a residential proxy (http://user:pass@host:port) for the
+          # PrizePicks-direct fantasy fetch. Cloudflare 403s this runner's
+          # datacenter IP; with a proxy set, authentic standard fantasy lines
+          # work in CI. When absent, the fetch falls back to ladder/median
+          # exactly as before.
+          PRIZEPICKS_PROXY_URL: ${{ secrets.PRIZEPICKS_PROXY_URL }}
         run: python engine/main.py

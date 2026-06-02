@@ -20,7 +20,7 @@ to the DB.
 
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pybaseball
 
@@ -668,7 +668,9 @@ def _run_future_previews() -> None:
 def main() -> None:
     t0 = time.time()
     try:
-        print(f"=== pipeline run {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC ===")
+        # tz-aware UTC (the naive utc-now helper is deprecated). strftime has no
+        # %z, so the rendered log string is byte-identical to before.
+        print(f"=== pipeline run {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC ===")
 
         # Mode header: with six crons/day, only the first run of the day
         # builds projections. Subsequent runs detect existing rows and

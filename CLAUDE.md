@@ -2141,6 +2141,41 @@ lineup_lhh_pct now LIVE at predict — resolves PART A dead feature (this sessio
   -> 0.42 cleanly; train() 0 NaN after imputation; python engine/main.py clean
   (exit 0; the live predict log appeared + rebuilt 18 strikeout projections).
 
+datetime cleanup + PrizePicks-direct proxy support (this session):
+- PART A (datetime deprecation): grep found exactly ONE datetime.utcnow() —
+  engine/main.py:671, the run-header print. It's .strftime('%Y-%m-%d %H:%M')
+  with NO %z, so swapping to datetime.now(timezone.utc) renders a byte-
+  identical log string (tz-aware object, but tzinfo never printed). No
+  isoformat/comparison consumers, so zero behavior change. Added `timezone`
+  to the datetime import. Verified: no datetime.utcnow() remains; pipeline
+  header unchanged; no DeprecationWarning.
+- PART B (PrizePicks-direct proxy): _fetch_prizepicks_standard_fantasy gets
+  HTTP 403 from GitHub Actions' datacenter IP (Cloudflare), so production
+  falls back to the imprecise ladder/median path. Fix (stdlib urllib, no new
+  dep):
+  * _PP_HEADERS: realistic browser headers (User-Agent + Accept +
+    Accept-Language + Origin + Referer) — a free header-based-block defeat;
+    likely insufficient against an IP block but harmless.
+  * PRIZEPICKS_PROXY_URL env var (http://user:pass@host:port). When set, ONLY
+    this request routes through a DEDICATED urllib opener
+    (build_opener(ProxyHandler(...))) — never a global proxy, so other urllib
+    traffic is unaffected. When unset, behaves exactly as a direct request
+    (urlopen).
+  * Distinct path logging: "PrizePicks-direct standard (direct)|via proxy:
+    N lines" on success; "PrizePicks-direct unavailable (HTTP {code}) {via}
+    -- ladder/median fallback" on HTTPError; same for other errors. Makes the
+    next cron log show at a glance whether the proxy worked.
+  * Fallback chain UNCHANGED: PP-direct (proxied if var set, else direct) ->
+    ParlayAPI ladder/median -> never crash. PRIZEPICKS_ONLY_PROPS unchanged.
+  * Verified: unset -> direct path works locally (201 standard lines, "(direct)"
+    log); bad proxy -> routes through ProxyHandler (connection-refused proves
+    it) + graceful {} fallback with "via proxy" log; Accept-Language attached;
+    python engine/main.py clean both ways.
+- USER ACTION (Part B): add PRIZEPICKS_PROXY_URL (a RESIDENTIAL proxy) to the
+  GitHub Actions repo secrets AND to refresh.yml's env block. Until then CI
+  runs exactly as today (direct -> 403 -> median fallback). The real CI proof
+  is the next post-lineup cron log showing "via proxy" instead of the 403.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

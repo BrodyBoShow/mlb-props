@@ -11,6 +11,7 @@ Reads PARLAY_API_KEY from the environment (via python-dotenv).
 import json
 import os
 import unicodedata
+import urllib.error
 import urllib.request
 from datetime import date
 from typing import TYPE_CHECKING
@@ -156,6 +157,20 @@ _PP_STAT_TO_PROP = {
 }
 _PP_PROJECTIONS_URL = "https://api.prizepicks.com/projections?league_id=2&per_page=1000"
 
+# Realistic browser headers — a free attempt to defeat a header-based block.
+# Likely insufficient against Cloudflare's IP block on datacenter ranges (that's
+# what PRIZEPICKS_PROXY_URL is for), but cheap and harmless.
+_PP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://app.prizepicks.com",
+    "Referer": "https://app.prizepicks.com/",
+}
+
 
 def _fetch_prizepicks_standard_fantasy(
     name_to_id: dict[str, int],
@@ -170,27 +185,37 @@ def _fetch_prizepicks_standard_fantasy(
     Fully defensive: any failure (network, Cloudflare block on a datacenter IP,
     shape change) prints and returns {}, and fetch_prop_lines falls back to the
     ParlayAPI ladder + the db.py median accumulation. PrizePicks is behind
-    Cloudflare and MAY block GitHub Actions IPs — the fallback is why that's not
-    fatal.
+    Cloudflare and MAY block GitHub Actions IPs.
+
+    Proxy: when PRIZEPICKS_PROXY_URL (http://user:pass@host:port) is set, ONLY
+    this request is routed through it (a dedicated opener, NOT a global proxy —
+    other urllib traffic is unaffected) so authentic standard lines work from a
+    CI datacenter IP. When unset, behaves exactly as a direct request.
     """
     out: dict[tuple[int, str], float] = {}
+
+    # Dedicated opener so the proxy (if any) applies ONLY here, never globally.
+    proxy_url = os.getenv("PRIZEPICKS_PROXY_URL")
+    opener = (
+        urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        )
+        if proxy_url
+        else None
+    )
+    via = "via proxy" if proxy_url else "(direct)"
+
+    def _open(req):
+        return (opener.open(req, timeout=20) if opener
+                else urllib.request.urlopen(req, timeout=20))
+
     try:
         page = 1
         total_pages = 1
         while page <= total_pages and page <= 20:
             url = f"{_PP_PROJECTIONS_URL}&page={page}"
-            req = urllib.request.Request(
-                url,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0 Safari/537.36"
-                    ),
-                    "Accept": "application/json",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            req = urllib.request.Request(url, headers=_PP_HEADERS)
+            with _open(req) as resp:
                 data = json.load(resp)
 
             total_pages = (data.get("meta", {}) or {}).get("total_pages", 1) or 1
@@ -227,13 +252,20 @@ def _fetch_prizepicks_standard_fantasy(
                 out[(player_id, prop_type)] = float(line)
 
             page += 1
+    except urllib.error.HTTPError as exc:
+        print(
+            f"  PrizePicks-direct unavailable (HTTP {exc.code}) {via} -- "
+            f"ladder/median fallback"
+        )
+        return {}
     except Exception as exc:
         print(
-            f"  PrizePicks-direct fantasy fetch failed: {exc} -- "
-            f"falling back to ParlayAPI ladder + median accumulation"
+            f"  PrizePicks-direct unavailable ({exc}) {via} -- "
+            f"ladder/median fallback"
         )
         return {}
 
+    print(f"  PrizePicks-direct standard {via}: {len(out)} lines")
     return out
 
 
