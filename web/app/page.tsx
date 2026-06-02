@@ -465,6 +465,78 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
   }
 
+  // ── HR-card wind (display-only) ─────────────────────────────────────────
+  // Today's game-time wind, persisted to the games table by the engine. Read
+  // in an ISOLATED, failure-tolerant query (NOT joined into the main games
+  // select, which would 400 the whole board if the columns don't exist yet).
+  // On any error (pre-migration) the map stays empty and the HR card falls
+  // back to the static park label. ~15 rows, no pagination needed.
+  const windByGame = new Map<
+    number,
+    { windSpeed: number | null; windDirDeg: number | null; isDome: boolean | null }
+  >();
+  {
+    const { data: windRows, error: windErr } = await supabase
+      .from("games")
+      .select("game_id, wind_speed_mph, wind_dir_deg, is_dome")
+      .eq("game_date", selectedDate);
+    if (windErr) {
+      console.log(
+        `[home-diag] game wind fetch skipped (${String(windErr)}) — ` +
+          `apply db/migrations/add_game_weather.sql to enable the HR wind tag`,
+      );
+    } else {
+      for (const r of (windRows ?? []) as Array<{
+        game_id: number;
+        wind_speed_mph: number | null;
+        wind_dir_deg: number | null;
+        is_dome: boolean | null;
+      }>) {
+        windByGame.set(r.game_id, {
+          windSpeed: r.wind_speed_mph,
+          windDirDeg: r.wind_dir_deg,
+          isDome: r.is_dome,
+        });
+      }
+    }
+  }
+
+  // ── HR-card sweet-spot (display-only) ───────────────────────────────────
+  // Rolling 7-day Statcast batted-ball quality, set ONLY on hitter_home_runs
+  // projection rows by the engine. ISOLATED + failure-tolerant for the same
+  // pre-migration reason as opp_k_rate above. One prop on one date is well
+  // under the 1000-row cap. Empty map → the HR card keeps "N games tracked".
+  const sweetByPlayer = new Map<
+    number,
+    { sweetSpotPct: number | null; avgExitVelo: number | null }
+  >();
+  {
+    const { data: sweetRows, error: sweetErr } = await supabase
+      .from("projections")
+      .select("player_id, sweet_spot_pct, avg_exit_velo")
+      .eq("projection_date", selectedDate)
+      .eq("prop_type", "hitter_home_runs");
+    if (sweetErr) {
+      console.log(
+        `[home-diag] sweet-spot fetch skipped (${String(sweetErr)}) — ` +
+          `apply db/migrations/add_sweet_spot.sql to enable the HR footer`,
+      );
+    } else {
+      for (const r of (sweetRows ?? []) as Array<{
+        player_id: number;
+        sweet_spot_pct: number | null;
+        avg_exit_velo: number | null;
+      }>) {
+        if (r.sweet_spot_pct !== null && r.sweet_spot_pct !== undefined) {
+          sweetByPlayer.set(r.player_id, {
+            sweetSpotPct: r.sweet_spot_pct,
+            avgExitVelo: r.avg_exit_velo,
+          });
+        }
+      }
+    }
+  }
+
   // ── sharp-money agreement (feature 5) ───────────────────────────────────
   // The frontend's main reads only fetch the EDGES baseline line (one book
   // per prop) — not per-book lines. So we add ONE isolated, paginated query
@@ -711,8 +783,10 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   for (const g of byProp["hitter_home_runs"] ?? []) {
     const homeTeam = g.matchup.includes(" @ ") ? g.matchup.split(" @ ")[1] : "";
     const parkFactor = PARK_FACTORS_HITS[homeTeam] ?? 1.0;
+    const wind = windByGame.get(g.game_id);
     for (const h of g.pitchers) {
       if (h.projection <= 0.05) continue; // drop no-hopers
+      const sweet = sweetByPlayer.get(h.player_id);
       hrPlays.push({
         playerId: h.player_id,
         playerName: h.name,
@@ -723,6 +797,14 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         gradedStarts: 0,
         parkFactor,
         hrScore: h.projection * parkFactor,
+        // Wind tag context (display-only). homeTeam → PARK_ORIENTATION lookup.
+        homeTeam,
+        windSpeed: wind?.windSpeed ?? null,
+        windDirDeg: wind?.windDirDeg ?? null,
+        isDome: wind?.isDome ?? null,
+        // Sweet-spot footer context (display-only).
+        sweetSpotPct: sweet?.sweetSpotPct ?? null,
+        avgExitVelo: sweet?.avgExitVelo ?? null,
       });
     }
   }

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FeaturedPlay, FeaturedSection, PropType } from "@/lib/types";
+import { getParkBearing } from "@/lib/constants";
 import SharpBadge from "./SharpBadge";
 
 // Display labels for every prop that can appear across the three sections.
@@ -24,6 +25,73 @@ function parkLabel(factor: number): { text: string; arrow: string; tone: string 
   if (factor >= 1.04) return { text: "Hitter-friendly", arrow: "↑", tone: "text-emerald-400" };
   if (factor <= 0.96) return { text: "Pitcher-friendly", arrow: "↓", tone: "text-sky-400" };
   return { text: "Neutral", arrow: "·", tone: "text-slate-400" };
+}
+
+type WindTagResult = { text: string; arrow: string; tone: string; tooltip?: string };
+
+// Field-relative wind tag for an HR card (display-only). Turns the stored
+// wind into an Out / In / Cross label vs the park's home-plate→CF bearing,
+// degrading cleanly when the data isn't usable:
+//   - dome game            → "Dome · neutral"
+//   - no wind OR no bearing → static park label (current behavior)
+//   - wind < 5 mph         → park label + "· calm"
+//   - else                 → directional wind tag (green out / red in / slate cross)
+//
+// windDirDeg is OWM's METEOROLOGICAL direction (the way the wind blows FROM),
+// so we add 180 to get the blowing-TOWARD bearing before comparing to CF.
+function windTag(play: FeaturedPlay): WindTagResult {
+  const pf = play.parkFactor ?? 1.0;
+  const pl = parkLabel(pf);
+  const staticTag: WindTagResult = { text: `${pl.text} park`, arrow: "", tone: pl.tone };
+
+  if (play.isDome) return { text: "Dome · neutral", arrow: "", tone: "text-slate-400" };
+
+  const bearing = play.homeTeam ? getParkBearing(play.homeTeam) : null;
+  const speed = play.windSpeed;
+  if (speed == null || bearing == null || play.windDirDeg == null) return staticTag;
+  if (speed < 5) return { ...staticTag, text: `${pl.text} park · calm` };
+
+  const windToward = (play.windDirDeg + 180) % 360;       // direction wind blows TOWARD
+  const rel = ((windToward - bearing + 540) % 360) - 180; // normalize to (-180, 180]
+  const abs = Math.abs(rel);
+  const mph = Math.round(speed);
+  const tip =
+    `Wind ${mph} mph from ${Math.round(play.windDirDeg)}° · ` +
+    `CF bearing ${bearing}° · field-relative ${Math.round(rel)}°`;
+
+  // |rel| small → blowing out toward CF (tailwind, helps HR); |rel| near 180 →
+  // blowing in from CF (headwind); in between → crossing. rel>0 leans to the
+  // RF side, rel<0 to the LF side (facing CF, right hand points clockwise).
+  if (abs <= 45) {
+    const side = rel < -15 ? "LF" : rel > 15 ? "RF" : "CF";
+    return { text: `${mph} mph Out to ${side}`, arrow: "↑", tone: "text-emerald-400", tooltip: tip };
+  }
+  if (abs >= 135) {
+    return { text: `${mph} mph In from CF`, arrow: "↓", tone: "text-red-400", tooltip: tip };
+  }
+  const side = rel > 0 ? "RF" : "LF";
+  return { text: `${mph} mph Cross to ${side}`, arrow: "→", tone: "text-slate-400", tooltip: tip };
+}
+
+// 7-day batted-ball quality footer for HR cards (replaces the graded-history
+// line when Statcast data is present). avgExitVelo mph; sweetSpotPct a 0..1
+// fraction rendered as a whole percent.
+function SweetSpotLine({
+  sweetSpotPct,
+  avgExitVelo,
+}: {
+  sweetSpotPct: number;
+  avgExitVelo: number;
+}) {
+  const pct = Math.round(sweetSpotPct * 100);
+  return (
+    <div className="mt-2 flex items-center gap-1.5">
+      <span className="text-[10px] leading-none">🔥</span>
+      <span className="text-[10px] uppercase tracking-wide text-slate-400 tabular-nums">
+        7-day: {avgExitVelo.toFixed(1)} avg EV · {pct}% sweet-spot
+      </span>
+    </div>
+  );
 }
 
 // Honest, tiered confidence framing from the count of graded games backing this
@@ -182,8 +250,13 @@ function FeaturedPlayCard({
           </div>
           <div className="mt-2 text-sm">
             {(() => {
-              const { text, tone } = parkLabel(play.parkFactor ?? 1.0);
-              return <span className={`font-semibold ${tone}`}>{text} park</span>;
+              const w = windTag(play);
+              return (
+                <span className={`font-semibold ${w.tone}`} title={w.tooltip}>
+                  {w.arrow ? `${w.arrow} ` : ""}
+                  {w.text}
+                </span>
+              );
             })()}
           </div>
         </>
@@ -217,8 +290,14 @@ function FeaturedPlayCard({
       {/* Line 6: AI insight (shimmer while loading) */}
       <InsightLine text={insight} loading={loadingInsight} />
 
-      {/* Bottom: graded-history confidence */}
-      <ConfidenceLine count={play.gradedStarts} />
+      {/* Bottom: HR cards show the 7-day batted-ball quality footer when
+          Statcast data is present (>= 5 batted balls); otherwise — and for all
+          edge cards — the graded-history confidence line. */}
+      {isHR && play.sweetSpotPct != null && play.avgExitVelo != null ? (
+        <SweetSpotLine sweetSpotPct={play.sweetSpotPct} avgExitVelo={play.avgExitVelo} />
+      ) : (
+        <ConfidenceLine count={play.gradedStarts} />
+      )}
     </div>
   );
 }

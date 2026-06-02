@@ -23,6 +23,12 @@ create table if not exists games (
     -- component can render matchup + probable-pitcher cards before projections.
     home_starter_id  integer references players(player_id),
     away_starter_id  integer references players(player_id),
+    -- Game-time wind (db/migrations/add_game_weather.sql). DISPLAY-ONLY — powers
+    -- the HR-card wind tag; persisted each cron run by engine/main._run_game_weather.
+    -- NOT a model input. wind_dir_deg is OWM's meteorological FROM direction.
+    wind_speed_mph   numeric,   -- mph; 0 for dome venues, NULL if no weather key
+    wind_dir_deg     numeric,   -- degrees the wind blows FROM (0=N); NULL dome/no-data
+    is_dome          boolean,   -- true → frontend shows "Dome · neutral"
     created_at       timestamptz default now()
 );
 
@@ -159,6 +165,11 @@ create table if not exists projections (
     -- lineup is posted. Logged for calibration validation — NOT the displayed
     -- projection. See engine/matchup_k.py + db/migrations/add_matchup_expected_k.sql.
     matchup_expected_k numeric,
+    -- Rolling 7-day Statcast batted-ball quality, set ONLY on hitter_home_runs
+    -- rows (db/migrations/add_sweet_spot.sql). DISPLAY-ONLY HR-card footer; NOT
+    -- a model input. NULL on every other prop and on thin samples (< 5 BBE).
+    sweet_spot_pct   numeric,            -- fraction (0..1) of BBE with launch angle 8–32°
+    avg_exit_velo    numeric,            -- mean exit velocity (mph) over the 7-day BBE
     updated_at       timestamptz default now(),
     primary key (game_id, player_id, prop_type, projection_date)
 );

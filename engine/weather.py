@@ -34,6 +34,7 @@ def _dome_weather() -> WeatherFields:
         "temperature_f":     72.0,
         "wind_speed_mph":    0.0,
         "wind_dir":          None,
+        "wind_dir_deg":      None,
         "precipitation_pct": 0.0,
         "is_dome":           True,
     }
@@ -46,6 +47,7 @@ def _empty_weather(is_dome: bool = False) -> WeatherFields:
         "temperature_f":     None,
         "wind_speed_mph":    None,
         "wind_dir":          None,
+        "wind_dir_deg":      None,
         "precipitation_pct": None,
         "is_dome":           is_dome,
     }
@@ -131,11 +133,17 @@ def get_game_weather(
     main = chosen.get("main") or {}
     wind = chosen.get("wind") or {}
     temp_k = main.get("temp")
+    # OWM wind.deg is the METEOROLOGICAL direction the wind blows FROM, in
+    # degrees (0=N, 90=E). We store the raw value as wind_dir_deg; the frontend
+    # converts FROM→toward (+180) for the field-relative HR wind tag. wind_dir
+    # (compass abbr) is derived from the same FROM degrees, so the two agree.
+    wind_deg = wind.get("deg")
     return {
         "temperature_f":     _kelvin_to_f(temp_k) if temp_k is not None else None,
         "wind_speed_mph":    round(float(wind.get("speed", 0)) * 2.23694, 1)
                               if wind.get("speed") is not None else None,
-        "wind_dir":          _wind_compass(wind.get("deg")),
+        "wind_dir":          _wind_compass(wind_deg),
+        "wind_dir_deg":      round(float(wind_deg), 0) if wind_deg is not None else None,
         "precipitation_pct": round(float(chosen.get("pop", 0)) * 100, 0),
         "is_dome":           False,
     }

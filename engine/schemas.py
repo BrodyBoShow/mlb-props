@@ -207,6 +207,14 @@ class ProjectionRow(TypedDict, total=False):
     # add_opp_k_rate.sql migration; db.upsert_projections strips it via
     # the PGRST204 retry until the column exists.
     opp_k_rate: Optional[float]
+    # Rolling 7-day Statcast batted-ball quality — display-only context for the
+    # HR-matchups card, set ONLY on hitter_home_runs rows (computed in
+    # main._build_and_upsert_hitters from the bulk Statcast frame). NOT a model
+    # input. Both require the add_sweet_spot.sql migration; db.upsert_projections
+    # strips them via the PGRST204 retry until the columns exist. None when the
+    # hitter has < 5 batted balls in the window or there's no Statcast frame.
+    sweet_spot_pct: Optional[float]   # fraction (0..1) of BBE with launch angle 8–32°
+    avg_exit_velo: Optional[float]    # mean exit velocity (mph) over the window's BBE
 
 
 class ProjectionContextRow(TypedDict, total=False):
@@ -298,7 +306,8 @@ class WeatherFields(TypedDict, total=False):
 
     temperature_f: Optional[float]
     wind_speed_mph: Optional[float]
-    wind_dir: Optional[str]
+    wind_dir: Optional[str]           # compass abbr of the FROM direction
+    wind_dir_deg: Optional[float]     # raw OWM FROM degrees (0=N); for the HR wind tag
     precipitation_pct: Optional[float]
     is_dome: bool                 # always set even on empty-weather path
 

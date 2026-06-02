@@ -36,6 +36,8 @@ import lines
 import matchup_k
 import model as mlb_model
 import stats
+import sweet_spot
+import weather
 from constants import BLEND_BASELINE_WEIGHT, BLEND_MODEL_WEIGHT, LOOKBACK_DAYS, et_today
 
 
@@ -144,6 +146,53 @@ def _setup_games_and_pitchers() -> tuple[list[dict], list[dict]]:
     return games, starters
 
 
+def _parse_start_time(iso: str | None) -> "datetime | None":
+    """ISO timestamp string → naive UTC datetime (or None on parse failure).
+
+    games.start_time is stored as an ISO UTC string; weather.get_game_weather
+    forces tzinfo=UTC on whatever it's handed, so we return a naive-UTC datetime.
+    """
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _run_game_weather(games: list[dict]) -> None:
+    """Fetch today's wind per game and persist it to the games table.
+
+    DISPLAY-ONLY: powers the HR-card wind tag. For each game we ask
+    weather.get_game_weather for the forecast at first pitch (dome venues
+    short-circuit to wind 0 / is_dome True) and write {wind_speed_mph,
+    wind_dir_deg, is_dome} onto the games row via a targeted update. These
+    values NEVER enter the model / projection / edge math.
+
+    Runs every cron tick (full + refresh) so wind stays fresh through the day.
+    The caller wraps this in try/except — weather flakiness must never affect
+    projections, and a missing OPENWEATHER_API_KEY just yields NULL wind (the
+    wind tag then degrades to the static park label).
+    """
+    updates: list[dict] = []
+    for g in games:
+        home = g.get("home_team")
+        if not home:
+            continue
+        wx = weather.get_game_weather(home, _parse_start_time(g.get("start_time")))
+        updates.append({
+            "game_id": g["game_id"],
+            "wind_speed_mph": wx.get("wind_speed_mph"),
+            "wind_dir_deg": wx.get("wind_dir_deg"),
+            "is_dome": wx.get("is_dome"),
+        })
+    n = db.update_game_weather(updates)
+    print(f"  game weather: wrote wind to {n} games")
+
+
 def _opposing_lineup_lhh(starters: list[dict]) -> dict[int, float]:
     """{starter player_id -> opposing lineup LHH fraction} for predict-time.
 
@@ -176,10 +225,15 @@ def _opposing_lineup_lhh(starters: list[dict]) -> dict[int, float]:
 def _run_pitcher_pipeline(
     starters: list[dict], games: list[dict],
     lineup_lhh_by_pid: dict[int, float] | None = None,
-) -> tuple[list[dict], dict[str, int], int]:
+) -> "tuple[list[dict], dict[str, int], int, object]":
     """Build + upsert all pitcher prop projections.
 
-    Returns (all_pitcher_projections, name_to_id_pitchers, n_strikeout_proj).
+    Returns (all_pitcher_projections, name_to_id_pitchers, n_strikeout_proj,
+    bulk_df). bulk_df is the whole-window Statcast frame fetched for the model
+    /baseline — reused by the hitter pipeline for the display-only sweet-spot
+    footer (no extra Statcast call). It is None on the skip path (refresh runs
+    do no Statcast fetch); the sweet-spot step then no-ops and the existing
+    hitter_home_runs rows keep whatever sweet-spot values a prior full run set.
     name_to_id is seeded with pitcher names here; _run_hitter_pipeline
     extends it with confirmed-lineup hitters.
 
@@ -214,7 +268,7 @@ def _run_pitcher_pipeline(
                 f"({len(overlap)}/{len(current_ids)} starters match, "
                 f"{len(excess)} excess stale ids)"
             )
-            return [], name_to_id, 0
+            return [], name_to_id, 0, None
         reason = (
             f"{len(overlap)}/{len(current_ids)} overlap, "
             f"{len(excess)} excess stale ids"
@@ -294,12 +348,14 @@ def _run_pitcher_pipeline(
     all_pitcher_projections = projections + other_prop_rows
 
     # name_to_id was seeded above (before the skip check) so the lines fetch
-    # can resolve pitcher names regardless of which branch we took.
-    return all_pitcher_projections, name_to_id, n_strikeout
+    # can resolve pitcher names regardless of which branch we took. bulk_df is
+    # handed to the hitter pipeline for the display-only sweet-spot footer.
+    return all_pitcher_projections, name_to_id, n_strikeout, bulk_df
 
 
 def _run_hitter_pipeline(
     name_to_id: dict[str, int],
+    bulk_df: object = None,
 ) -> tuple[list[dict], int]:
     """Build + upsert hitter prop projections IF lineups have posted.
 
@@ -307,6 +363,10 @@ def _run_hitter_pipeline(
     in place to add lineup hitters so the lines fetch can resolve them.
     Lineups post ~60-90 min before first pitch; the 8 AM cron typically
     runs before lineups (returns empty list) and the 1 PM cron captures them.
+
+    bulk_df (from the pitcher pipeline) is threaded to _build_and_upsert_hitters
+    so the hitter_home_runs rows carry the display-only sweet-spot footer. None
+    on refresh runs → sweet-spot is simply skipped for that run.
     """
     print("Fetching lineup players...")
     lineup_players = fetch.fetch_lineups()
@@ -365,7 +425,7 @@ def _run_hitter_pipeline(
                     f"but {len(missing)} lineup players across {len(missing_games)} "
                     f"game(s) have no hitter projections — filling those in"
                 )
-                _build_and_upsert_hitters(missing)
+                _build_and_upsert_hitters(missing, bulk_df=bulk_df)
             else:
                 print(
                     f"  {existing_hitter} hitter_hits projections already exist for "
@@ -385,7 +445,9 @@ def _run_hitter_pipeline(
         # tied to the wrong-slate game_ids).
         db.delete_projections_for_date_props(today_str, db._HITTER_PROP_TYPES)
 
-    hitter_projections, hitter_hit_rows = _build_and_upsert_hitters(lineup_players)
+    hitter_projections, hitter_hit_rows = _build_and_upsert_hitters(
+        lineup_players, bulk_df=bulk_df
+    )
 
     # Sanity check: a full slate of confirmed lineups yields 200+ hitter
     # projections (18 batters/game x ~15 games). Far fewer means
@@ -403,6 +465,7 @@ def _run_hitter_pipeline(
 
 def _build_and_upsert_hitters(
     players: list[dict],
+    bulk_df: object = None,
 ) -> tuple[list[dict], list[dict]]:
     """Run all six hitter prop builders over `players` and upsert each.
 
@@ -410,7 +473,28 @@ def _build_and_upsert_hitters(
     of lineup players whose games posted late). Returns
     (all_hitter_projections, hitter_hits_rows) — the latter feeds the
     full-path sanity check.
+
+    bulk_df (whole-window Statcast) drives the DISPLAY-ONLY sweet-spot footer:
+    a rolling 7-day sweet-spot% + avg exit velo per hitter is computed once and
+    attached to the hitter_home_runs rows so the HR card can show batted-ball
+    quality. None/empty bulk_df (refresh runs) → no sweet-spot, the card keeps
+    its "N games tracked" footer. These values never enter the model.
     """
+    # Display-only batted-ball quality for the HR-card footer. Computed ONCE
+    # from the bulk frame; hitters with < 5 batted balls (or no frame) are
+    # omitted → footer degrades. Wrapped so a Statcast-shape surprise can never
+    # break the hitter projections.
+    sweet: dict[int, dict] = {}
+    if bulk_df is not None:
+        try:
+            player_ids = [p["player_id"] for p in players if p.get("player_id")]
+            sweet = sweet_spot.compute_sweet_spot(bulk_df, player_ids, et_today())
+            if sweet:
+                print(f"  sweet-spot: computed for {len(sweet)} hitters (HR footer)")
+        except Exception as exc:
+            print(f"  sweet-spot computation skipped ({exc})")
+            sweet = {}
+
     hitter_projections: list[dict] = []
     hitter_hit_rows: list[dict] = []
     for builder, label in [
@@ -425,6 +509,13 @@ def _build_and_upsert_hitters(
         rows = builder(players)
         if label == "hitter_hits":
             hitter_hit_rows = rows
+        # Attach sweet-spot context to the HR rows only (display-only columns).
+        if label == "hitter_home_runs" and sweet:
+            for r in rows:
+                s = sweet.get(r.get("player_id"))
+                if s:
+                    r["sweet_spot_pct"] = s["sweet_spot_pct"]
+                    r["avg_exit_velo"] = s["avg_exit_velo"]
         hitter_projections.extend(rows)
         n = db.upsert_projections(rows)
         print(f"  upserted {n} {label} projections")
@@ -685,14 +776,27 @@ def main() -> None:
 
         _grade_previous_slate()
         games, starters = _setup_games_and_pitchers()
+
+        # DISPLAY-ONLY: today's wind onto the games table for the HR-card wind
+        # tag. Decorative + external-API-dependent, so any failure is absorbed
+        # and never touches projections.
+        print("Fetching game-time weather (HR wind tag)...")
+        try:
+            _run_game_weather(games)
+        except Exception as exc:
+            print(f"  game weather failed ({exc}) -- skipping (wind tag degrades)")
+
         # Opposing-lineup handedness for the strikeouts model — fetched BEFORE
         # the pitcher pipeline so predict() can use the real lineup_lhh_pct when
         # lineups are posted ({} on morning runs → 0.42 fallback).
         lineup_lhh_by_pid = _opposing_lineup_lhh(starters)
-        pitcher_projections, name_to_id, n_strikeout = _run_pitcher_pipeline(
+        pitcher_projections, name_to_id, n_strikeout, bulk_df = _run_pitcher_pipeline(
             starters, games, lineup_lhh_by_pid=lineup_lhh_by_pid
         )
-        hitter_projections, lineup_count = _run_hitter_pipeline(name_to_id)
+        # bulk_df is threaded into the hitter pipeline for the sweet-spot footer.
+        hitter_projections, lineup_count = _run_hitter_pipeline(
+            name_to_id, bulk_df=bulk_df
+        )
         all_projections = pitcher_projections + hitter_projections
 
         # SHADOW: matchup-expected-K (logged onto strikeouts rows, never the

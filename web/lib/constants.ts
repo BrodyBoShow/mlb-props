@@ -188,6 +188,58 @@ export function getParkProfile(homeTeam: string): ParkProfile {
   return { factor, label: "Neutral", direction: "neutral" };
 }
 
+// ── Park orientation (HR-card wind tag) ──────────────────────────────────────
+// Compass bearing in degrees (0 = N, 90 = E, 180 = S, 270 = W) from HOME PLATE
+// toward CENTER FIELD per venue. Mirrors engine/constants.py PARK_ORIENTATION
+// EXACTLY — when one moves, the other must too.
+//
+// Display-only: used by the FeaturedPlays HR card to turn the stored wind
+// direction into a field-relative Out/In/Cross label. null → the card degrades
+// to the static park-factor label for that venue. Dome venues short-circuit to
+// "Dome · neutral" regardless, so their bearing is moot.
+//
+// Only the two parks with an authoritative published reference are populated
+// (Fenway ~45°, Wrigley ~30°); the rest are null pending a satellite-derived
+// measurement pass. A wrong bearing produces a wrong label, so we never guess.
+export const PARK_ORIENTATION: Record<string, number | null> = {
+  "Arizona Diamondbacks":  null, // dome — bearing moot
+  "Atlanta Braves":        null,
+  "Baltimore Orioles":     null,
+  "Boston Red Sox":        45,   // Fenway — CF toward the NE
+  "Chicago Cubs":          30,   // Wrigley — CF toward the NNE
+  "Chicago White Sox":     null,
+  "Cincinnati Reds":       null,
+  "Cleveland Guardians":   null,
+  "Colorado Rockies":      null,
+  "Detroit Tigers":        null,
+  "Houston Astros":        null, // dome — bearing moot
+  "Kansas City Royals":    null,
+  "Los Angeles Angels":    null,
+  "Los Angeles Dodgers":   null,
+  "Miami Marlins":         null, // dome — bearing moot
+  "Milwaukee Brewers":     null, // dome — bearing moot
+  "Minnesota Twins":       null,
+  "New York Mets":         null,
+  "New York Yankees":      null,
+  "Athletics":             null,
+  "Oakland Athletics":     null,
+  "Philadelphia Phillies": null,
+  "Pittsburgh Pirates":    null,
+  "San Diego Padres":      null,
+  "San Francisco Giants":  null,
+  "Seattle Mariners":      null, // dome — bearing moot
+  "St. Louis Cardinals":   null,
+  "Tampa Bay Rays":        null, // dome — bearing moot
+  "Texas Rangers":         null, // dome — bearing moot
+  "Toronto Blue Jays":     null, // dome — bearing moot
+  "Washington Nationals":  null,
+};
+
+// Home-plate→center-field bearing for a venue, or null if unknown.
+export function getParkBearing(homeTeam: string): number | null {
+  return PARK_ORIENTATION[homeTeam] ?? null;
+}
+
 // Display labels — single source of truth for both pages.
 export const PROP_LABELS: Record<PropType, string> = {
   strikeouts:            "Strikeouts",

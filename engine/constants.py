@@ -134,6 +134,67 @@ IS_DOME: set[str] = {
     "Seattle Mariners",       # T-Mobile Park (retractable; default-closed when raining)
 }
 
+# ─── Park orientation (display-only wind vector) ─────────────────────────────
+#
+# Compass bearing in degrees (0 = North, 90 = East, 180 = South, 270 = West)
+# from HOME PLATE toward CENTER FIELD for each venue. Keyed on the same full
+# team-name string as VENUE_COORDS / games.home_team.
+#
+# Used ONLY by the frontend HR-card wind tag (mirrored in
+# web/lib/constants.ts — keep the two in sync). NOT a model input, NOT a
+# feature, NOT in FEATURE_COLS. Display layer only.
+#
+# IMPORTANT — these are PUBLISHED static values, not guesses. A wrong bearing
+# produces a wrong wind label, which is worse than no label, so every park we
+# can't pin down authoritatively is left None. None → the frontend wind tag
+# degrades to the static park-factor label ("Neutral / Hitter-friendly /
+# Pitcher-friendly park") for that venue. Dome venues (IS_DOME) short-circuit
+# to "Dome · neutral" regardless of bearing, so their value here is moot.
+#
+# Currently populated: Boston (Fenway ~45°) and Chicago Cubs (Wrigley ~30°),
+# the two values with an authoritative published reference. The remaining
+# parks are None pending a satellite-derived measurement pass (measure the
+# home-plate→center-field compass bearing off an aligned overhead image).
+PARK_ORIENTATION: dict[str, float | None] = {
+    "Arizona Diamondbacks":   None,   # dome — bearing moot
+    "Atlanta Braves":         None,
+    "Baltimore Orioles":      None,
+    "Boston Red Sox":         45.0,   # Fenway Park — CF toward the NE
+    "Chicago Cubs":           30.0,   # Wrigley Field — CF toward the NNE
+    "Chicago White Sox":      None,
+    "Cincinnati Reds":        None,
+    "Cleveland Guardians":    None,
+    "Colorado Rockies":       None,
+    "Detroit Tigers":         None,
+    "Houston Astros":         None,   # dome — bearing moot
+    "Kansas City Royals":     None,
+    "Los Angeles Angels":     None,
+    "Los Angeles Dodgers":    None,
+    "Miami Marlins":          None,   # dome — bearing moot
+    "Milwaukee Brewers":      None,   # dome — bearing moot
+    "Minnesota Twins":        None,
+    "New York Mets":          None,
+    "New York Yankees":       None,
+    "Athletics":              None,
+    "Oakland Athletics":      None,
+    "Philadelphia Phillies":  None,
+    "Pittsburgh Pirates":     None,
+    "San Diego Padres":       None,
+    "San Francisco Giants":   None,
+    "Seattle Mariners":       None,   # dome — bearing moot
+    "St. Louis Cardinals":    None,
+    "Tampa Bay Rays":         None,   # dome — bearing moot
+    "Texas Rangers":          None,   # dome — bearing moot
+    "Toronto Blue Jays":      None,   # dome — bearing moot
+    "Washington Nationals":   None,
+}
+
+
+def get_park_bearing(home_team: str) -> float | None:
+    """Home-plate→center-field compass bearing for a venue, or None if unknown."""
+    return PARK_ORIENTATION.get(home_team)
+
+
 # Baseline projection parameters
 LOOKBACK_DAYS = 30       # days of history to pull for each pitcher
 RECENT_STARTS = 5        # starts that receive the heavier weight

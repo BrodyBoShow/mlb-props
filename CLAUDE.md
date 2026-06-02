@@ -2238,6 +2238,95 @@ Featured Plays HITTING EDGES populated — MIN_LINE floor fix (this session):
   Supabase's 1000-row cap and dropped Duran (beyond the first 1000); only .range()
   pagination (fetchAllPages, which the real /results uses) returns the full set.
 
+HR-card dynamic situational display — wind vector + sweet-spot (this session):
+- Upgraded the Featured Plays "HR MATCHUPS" cards from a static park tag to two
+  dynamic, DISPLAY-ONLY situational readouts. NOT model inputs — FEATURE_COLS
+  stays 11; no projection / edge / classify() math changed; the HR projection
+  number on each card is byte-identical (only NEW context fields were added).
+- STEP-0 finding (the task assumed "frontend-only"): the data the cards needed
+  was NOT reachable by the frontend for today's games. Wind is fetched only at
+  GRADE time into player_game_logs (and only as a compass abbr, not degrees),
+  with OPENWEATHER_API_KEY; sweet-spot/EV lived only in model.py's in-memory
+  bulk_df. So delivering either tag required an engine→DB(migration)→frontend
+  pipeline. User chose full pipeline; OPENWEATHER_API_KEY already in CI secrets.
+- PRE-REQ — PARK_ORIENTATION (engine/constants.py + web/lib/constants.ts mirror,
+  keep in sync): home-plate→CF compass bearing (0=N) per venue, display-only.
+  Per the task's "DO NOT guess" rule, ONLY the two parks with an authoritative
+  published reference are populated — Boston/Fenway 45°, Chicago Cubs/Wrigley
+  30° (the task's own anchors). The other 29 entries (incl. the 8 domes, where
+  bearing is moot) are null → the wind tag degrades to the static park label for
+  those venues. Authoritative numeric azimuths for the rest aren't on any
+  fetchable source (Baseball Almanac is quadrant-only + unreliable; Clem's site
+  has a broken TLS cert; archive.org blocked). FOLLOW-UP: fill the nulls from a
+  satellite-derived measurement pass; the pipeline lights up per-park as each
+  bearing lands.
+- SUB-CHANGE A — wind vector tag (replaces the "Neutral/Hitter-friendly park"
+  line on HR cards):
+  * engine/weather.py: get_game_weather now also returns wind_dir_deg (raw OWM
+    meteorological FROM degrees; the existing wind_dir compass is derived from
+    the same value). schemas.WeatherFields gains wind_dir_deg.
+  * engine/main.py: new _run_game_weather(games) — fetches today's wind per game
+    (dome → wind 0 / is_dome True) and writes {wind_speed_mph, wind_dir_deg,
+    is_dome} to the games table via db.update_game_weather (targeted per-game
+    UPDATE, PGRST204 strip-and-skip, mirrors update_matchup_expected_k). Runs
+    EVERY cron tick (full + refresh) so wind stays fresh; wrapped in try/except
+    so weather flakiness never touches projections. _parse_start_time helper
+    converts games.start_time ISO → naive-UTC datetime for the forecast bucket.
+  * db/schema.sql + db/migrations/add_game_weather.sql: games gains
+    wind_speed_mph, wind_dir_deg, is_dome (nullable). ACTION REQUIRED: run it.
+  * web/app/page.tsx getSlate(): ISOLATED, failure-tolerant games-wind query
+    (NOT joined into the main select — a missing column would 400 the board);
+    windByGame map attached to HR plays (windSpeed/windDirDeg/isDome/homeTeam).
+  * web/app/FeaturedPlays.tsx windTag(): OWM gives the FROM direction, so we add
+    180 to get the blowing-TOWARD bearing, then rel = normalize(toward - park
+    bearing) to (-180,180]. |rel|<=45 → OUT (green ↑, sub LF/CF/RF by sign),
+    |rel|>=135 → IN from CF (red ↓), else CROSS (slate →, to LF/RF). Graceful
+    degrade precedence: dome → "Dome · neutral"; no wind OR null bearing OR null
+    deg → static park label; wind < 5 mph → park label + "· calm".
+- SUB-CHANGE B — sweet-spot footer (replaces "N games tracked" on HR cards ONLY):
+  * engine/sweet_spot.py (new): compute_sweet_spot(bulk_df, player_ids, proj_date,
+    window_days=7, min_bbe=5) → {pid: {sweet_spot_pct, avg_exit_velo,
+    batted_balls}} from the SAME bulk Statcast frame the pitcher predict already
+    fetched (no extra API call). Sweet-spot = BBE with launch_angle in [8,32]
+    (Statcast's real definition, NOT 25-35 the barrel window); BBE = rows with
+    both launch_angle + launch_speed measured. Hitters with < 5 BBE (or no
+    frame) are omitted → footer degrades.
+  * engine/main.py: _run_pitcher_pipeline now returns bulk_df (4-tuple; None on
+    the refresh skip path); threaded into _run_hitter_pipeline →
+    _build_and_upsert_hitters, which attaches sweet_spot_pct/avg_exit_velo to
+    the hitter_home_runs rows before upsert. None bulk_df (refresh runs) → no
+    sweet-spot that run; existing rows keep prior full-run values.
+  * db.upsert_projections: sweet_spot_pct + avg_exit_velo added to
+    _PROJECTION_OPTIONAL_COLS (PGRST204 strip-and-retry pre-migration).
+    schemas.ProjectionRow + db/schema.sql + db/migrations/add_sweet_spot.sql
+    (projections gains the two nullable cols). ACTION REQUIRED: run it.
+  * web/app/page.tsx: ISOLATED sweet-spot query (hitter_home_runs rows) →
+    sweetByPlayer map → HR plays. FeaturedPlays.tsx SweetSpotLine renders
+    "🔥 7-day: 95.1 avg EV · 38% sweet-spot" (text-[10px] uppercase slate-400);
+    only when sweetSpotPct + avgExitVelo present, else ConfidenceLine.
+  * web/lib/types.ts FeaturedPlay gains homeTeam?/windSpeed?/windDirDeg?/isDome?/
+    sweetSpotPct?/avgExitVelo? (all optional, all display-only).
+- VERIFIED:
+  * Wind math (deterministic): task's worked example (blowing toward 270° = OWM
+    FROM 90°, CF bearing 45°) → rel -135° → IN, matches the spec; tailwind→OUT,
+    headwind→IN, perpendicular→CROSS all correct. End-to-end with a mocked OWM
+    forecast: wind FROM 225° / 8 m/s at Fenway (bearing 45) →
+    get_game_weather wind_dir_deg=225.0, wind_speed_mph=17.9 → windTag
+    "↑ 18 mph Out to CF" (toward 45 == bearing 45 → rel 0, straight tailwind).
+  * Sweet-spot (synthetic frame): 6 BBE, 3 in [8,32] → 0.5, avgEV correct;
+    old-window + foul (null launch) rows excluded; a < 5-BBE hitter dropped;
+    empty/None frame → {} (graceful).
+  * Pre-migration full pipeline run: EXIT 0, weather step logs "missing weather
+    columns -- skipping wind write" + "wrote wind to 0 games" (graceful degrade),
+    projections untouched. Engine import clean; FEATURE_COLS still 11.
+  * Frontend: tsc --noEmit clean; npm run build passes (/ still ƒ, 9.55 kB).
+  * Dome → "Dome · neutral"; null-bearing open-air park (e.g. Yankees) → static
+    park label, both confirmed.
+- ACTION REQUIRED (one-time, Supabase SQL editor):
+  run db/migrations/add_game_weather.sql AND db/migrations/add_sweet_spot.sql.
+  Until then the pipeline runs cleanly (PGRST204 strip/skip) and both tags
+  degrade to the current static labels.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

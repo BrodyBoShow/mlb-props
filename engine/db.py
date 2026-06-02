@@ -449,7 +449,10 @@ def get_game_logs(since_date: str | None = None) -> list[dict] | None:
 # Projection columns that may not exist on a pre-migration schema. Stripped
 # and retried on PGRST204 so the pipeline runs cleanly before the migration
 # is applied (mirrors the upsert_game_logs / upsert_games pattern).
-_PROJECTION_OPTIONAL_COLS = ("opp_k_rate",)
+#   - opp_k_rate          : add_opp_k_rate.sql (strikeouts rows)
+#   - sweet_spot_pct      : add_sweet_spot.sql (hitter_home_runs rows, display)
+#   - avg_exit_velo       : add_sweet_spot.sql (hitter_home_runs rows, display)
+_PROJECTION_OPTIONAL_COLS = ("opp_k_rate", "sweet_spot_pct", "avg_exit_velo")
 
 
 def upsert_projections(rows: "list[ProjectionRow] | list[dict]") -> int:
@@ -483,9 +486,9 @@ def upsert_projections(rows: "list[ProjectionRow] | list[dict]") -> int:
                 stripped, on_conflict="game_id,player_id,prop_type,projection_date"
             ).execute()
             print(
-                "  WARNING: projections missing opp_k_rate column -- upserted "
-                "without it. Run db/migrations/add_opp_k_rate.sql to enable "
-                "the opposing-lineup context line."
+                "  WARNING: projections missing an optional column "
+                f"({', '.join(_PROJECTION_OPTIONAL_COLS)}) -- upserted without "
+                "it. Run db/migrations/add_opp_k_rate.sql + add_sweet_spot.sql."
             )
             return len(rows)
         raise
@@ -526,6 +529,50 @@ def update_matchup_expected_k(updates: list[dict]) -> int:
                     "  WARNING: projections missing matchup_expected_k column -- "
                     "skipping shadow write. Run "
                     "db/migrations/add_matchup_expected_k.sql to enable it."
+                )
+                return 0
+            raise
+    return written
+
+
+_GAME_WEATHER_COLS = ("wind_speed_mph", "wind_dir_deg", "is_dome")
+
+
+def update_game_weather(rows: list[dict]) -> int:
+    """Set today's wind on existing games rows (display-only HR wind tag).
+
+    Each row: {game_id, wind_speed_mph, wind_dir_deg, is_dome}. A targeted
+    UPDATE (not an upsert) so it only touches the weather columns and never
+    disturbs the rest of the games row (home/away/start_time/starters).
+    Returns the count written.
+
+    Defensive: the columns only exist after db/migrations/add_game_weather.sql
+    is applied; if missing PostgREST returns PGRST204 — we warn once and skip
+    (the pipeline keeps running pre-migration). Per-row round-trips, but a
+    slate is only ~15 games.
+    """
+    if not rows:
+        return 0
+    client = _client()
+    written = 0
+    for r in rows:
+        payload = {k: r.get(k) for k in _GAME_WEATHER_COLS}
+        try:
+            (
+                client.table("games")
+                .update(payload)
+                .eq("game_id", r["game_id"])
+                .execute()
+            )
+            written += 1
+        except Exception as exc:
+            msg = str(exc)
+            mentions = any(c in msg for c in _GAME_WEATHER_COLS)
+            if mentions and ("PGRST204" in msg or "Could not find" in msg):
+                print(
+                    "  WARNING: games table missing weather columns -- skipping "
+                    "wind write. Run db/migrations/add_game_weather.sql to "
+                    "enable the HR-card wind tag."
                 )
                 return 0
             raise

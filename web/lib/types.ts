@@ -193,6 +193,20 @@ export type FeaturedPlay = {
   // ranking score (not displayed, used only for the sort).
   parkFactor?: number;
   hrScore?: number;
+  // HR-matchup wind tag (display-only). homeTeam drives the PARK_ORIENTATION
+  // lookup; windDirDeg is OWM's meteorological FROM direction (0=N); windSpeed
+  // is mph; isDome short-circuits to "Dome · neutral". All undefined until the
+  // engine persists wind to the games table (pre-migration → static park label).
+  homeTeam?: string;
+  windSpeed?: number | null;
+  windDirDeg?: number | null;
+  isDome?: boolean | null;
+  // HR-matchup sweet-spot footer (display-only). Rolling 7-day Statcast: a
+  // fraction (0..1) of batted balls in the 8–32° sweet-spot window and mean
+  // exit velo (mph). Both undefined when the hitter has < 5 batted balls or
+  // the engine hasn't populated them yet → card keeps "N games tracked".
+  sweetSpotPct?: number | null;
+  avgExitVelo?: number | null;
   // Opponent lineup season K rate (0–1) when available — pitching-edge AI
   // context only (it lives on strikeouts projection rows).
   oppKRate?: number;
