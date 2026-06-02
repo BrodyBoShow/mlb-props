@@ -198,41 +198,47 @@ export function getParkProfile(homeTeam: string): ParkProfile {
 // to the static park-factor label for that venue. Dome venues short-circuit to
 // "Dome · neutral" regardless, so their bearing is moot.
 //
-// Only the two parks with an authoritative published reference are populated
-// (Fenway ~45°, Wrigley ~30°); the rest are null pending a satellite-derived
-// measurement pass. A wrong bearing produces a wrong label, so we never guess.
+// SOURCE: MLB Stats API venue feed `direction` field = compass azimuth (0=N,
+// clockwise) from home plate toward center field. Validated against the anchors:
+// Fenway → 45° (exact) and Wrigley → 37° (NNE). 22 parks populated. Left null:
+// the 7 fixed/closed-roof domes (Arizona/Houston/Miami/Milwaukee/Tampa Bay/Texas/
+// Toronto); Detroit (feed 151° falls in the impossible 150–315 arc → flagged);
+// and "Athletics" (Sacramento/Sutter Health Park, not in the feed — "Oakland
+// Athletics" carries the legacy Coliseum value). Seattle (retractable) IS
+// populated (valid roof-open). A wrong bearing produces a wrong label, so we
+// never guess — unknowns stay null and degrade to the static park label.
 export const PARK_ORIENTATION: Record<string, number | null> = {
   "Arizona Diamondbacks":  null, // dome — bearing moot
-  "Atlanta Braves":        null,
-  "Baltimore Orioles":     null,
-  "Boston Red Sox":        45,   // Fenway — CF toward the NE
-  "Chicago Cubs":          30,   // Wrigley — CF toward the NNE
-  "Chicago White Sox":     null,
-  "Cincinnati Reds":       null,
-  "Cleveland Guardians":   null,
-  "Colorado Rockies":      null,
-  "Detroit Tigers":        null,
+  "Atlanta Braves":        149,  // Truist Park
+  "Baltimore Orioles":     31,   // Camden Yards
+  "Boston Red Sox":        45,   // Fenway — CF toward the NE (anchor: exact)
+  "Chicago Cubs":          37,   // Wrigley — CF toward the NNE (anchor)
+  "Chicago White Sox":     127,  // Rate Field
+  "Cincinnati Reds":       123,  // Great American (faces the Ohio River)
+  "Cleveland Guardians":   359,  // Progressive — CF nearly due N
+  "Colorado Rockies":      5,    // Coors Field
+  "Detroit Tigers":        null, // Comerica feed=151° → forbidden arc; flagged
   "Houston Astros":        null, // dome — bearing moot
-  "Kansas City Royals":    null,
-  "Los Angeles Angels":    null,
-  "Los Angeles Dodgers":   null,
+  "Kansas City Royals":    47,   // Kauffman Stadium
+  "Los Angeles Angels":    44,   // Angel Stadium
+  "Los Angeles Dodgers":   25,   // Dodger Stadium
   "Miami Marlins":         null, // dome — bearing moot
   "Milwaukee Brewers":     null, // dome — bearing moot
-  "Minnesota Twins":       null,
-  "New York Mets":         null,
-  "New York Yankees":      null,
-  "Athletics":             null,
-  "Oakland Athletics":     null,
-  "Philadelphia Phillies": null,
-  "Pittsburgh Pirates":    null,
-  "San Diego Padres":      null,
-  "San Francisco Giants":  null,
-  "Seattle Mariners":      null, // dome — bearing moot
-  "St. Louis Cardinals":   null,
+  "Minnesota Twins":       90,   // Target Field — CF due E
+  "New York Mets":         14,   // Citi Field
+  "New York Yankees":      75,   // Yankee Stadium — CF toward the ENE
+  "Athletics":             null, // Sacramento (Sutter Health Park) — not in feed
+  "Oakland Athletics":     56,   // Oakland Coliseum (legacy key)
+  "Philadelphia Phillies": 9,    // Citizens Bank Park
+  "Pittsburgh Pirates":    116,  // PNC Park (CF toward downtown skyline)
+  "San Diego Padres":      0,    // Petco Park — CF due N
+  "San Francisco Giants":  85,   // Oracle Park — CF toward the E (bay)
+  "Seattle Mariners":      49,   // T-Mobile Park (retractable; valid roof-open)
+  "St. Louis Cardinals":   62,   // Busch Stadium
   "Tampa Bay Rays":        null, // dome — bearing moot
-  "Texas Rangers":         null, // dome — bearing moot
+  "Texas Rangers":         null, // dome (Globe Life Field, roof) — bearing moot
   "Toronto Blue Jays":     null, // dome — bearing moot
-  "Washington Nationals":  null,
+  "Washington Nationals":  29,   // Nationals Park
 };
 
 // Home-plate→center-field bearing for a venue, or null if unknown.

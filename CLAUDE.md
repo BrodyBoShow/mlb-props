@@ -2327,6 +2327,41 @@ HR-card dynamic situational display — wind vector + sweet-spot (this session):
   Until then the pipeline runs cleanly (PGRST204 strip/skip) and both tags
   degrade to the current static labels.
 
+PARK_ORIENTATION filled — 22 parks from the MLB venue feed (this session):
+- Data-population follow-up to the HR-card wind tag. Filled the open-air park
+  home-plate→CF bearings in PARK_ORIENTATION (engine/constants.py AND
+  web/lib/constants.ts, kept identical). No logic/schema/model change — only the
+  constant. FEATURE_COLS untouched; windTag/sweet_spot/pipeline untouched.
+- SOURCE (better than the task's literal "eyeball CF coords off satellite"
+  method): the MLB Stats API venue feed has a `direction` field = the compass
+  azimuth (0=N, clockwise) from home plate toward CF. Pulled it from a public
+  mirror of the feed (benelsen gist of the MLB venues CSV). Used `direction`
+  directly rather than computing from CF coords — it IS the derived bearing.
+- ANCHOR BACK-CHECK (the gate): Fenway `direction`=45 → EXACT match to the known
+  45° anchor (proves `direction` is the home→CF azimuth). Wrigley=37 (NNE) — the
+  task's "~30°" hint was approximate; 37 is the authoritative value, same
+  quadrant. Method validated, so used the feed for all parks. (Wrigley updated
+  30→37 to match the authoritative source.)
+- FORBIDDEN-ARC CHECK (no MLB park faces 150°–315°): every populated value lands
+  in [0,149] ⊂ the legal arc. ONLY Detroit (Comerica feed=151°, 1° into the
+  forbidden arc) was flagged → left null for manual review rather than writing a
+  suspect SSE value. The higher legal values (PNC 116, GABP 123, Rate 127,
+  Truist 149) are real SE/SSE riverfront/skyline orientations, not errors.
+- POPULATED (22): ATL 149, BAL 31, BOS 45*, CHC 37*, CWS 127, CIN 123, CLE 359,
+  COL 5, KC 47, LAA 44, LAD 25, MIN 90, NYM 14, NYY 75, OAK(Oakland Athletics)
+  56, PHI 9, PIT 116, SD 0, SF 85, SEA 49, STL 62, WSH 29. (* = anchor.)
+  Seattle (retractable) populated per the task (valid roof-open).
+- LEFT NULL (9): 7 fixed/closed-roof domes intentionally skipped (Arizona,
+  Houston, Miami, Milwaukee, Tampa Bay, Texas, Toronto — wind never reaches the
+  field, frontend shows "Dome · neutral"); Detroit (forbidden-arc, flagged); and
+  "Athletics" = Sacramento/Sutter Health Park (2025+ relocation, not in the
+  venue feed yet — "Oakland Athletics" legacy key carries the Coliseum 56).
+  FOLLOW-UPS for the user: confirm/measure Comerica + Sutter Health Park.
+- VERIFIED: the two files' PARK_ORIENTATION maps are byte-identical (31 keys,
+  same values — scripted compare); python -c "import engine.constants" clean
+  (22 populated); npx tsc --noEmit clean; npm run build passes. No other file
+  touched.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

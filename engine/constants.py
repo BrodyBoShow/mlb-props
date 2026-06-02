@@ -151,42 +151,53 @@ IS_DOME: set[str] = {
 # Pitcher-friendly park") for that venue. Dome venues (IS_DOME) short-circuit
 # to "Dome · neutral" regardless of bearing, so their value here is moot.
 #
-# Currently populated: Boston (Fenway ~45°) and Chicago Cubs (Wrigley ~30°),
-# the two values with an authoritative published reference. The remaining
-# parks are None pending a satellite-derived measurement pass (measure the
-# home-plate→center-field compass bearing off an aligned overhead image).
+# SOURCE: the MLB Stats API venue feed exposes a `direction` field = the compass
+# azimuth (0=N, clockwise) from home plate toward center field. Validated against
+# the two reference anchors: Fenway resolves to 45° (EXACT match to the known
+# value) and Wrigley to 37° (NNE) — confirming `direction` is the home→CF bearing.
+# 22 parks populated from that feed below.
+# Left None (not populated):
+#   - 7 fixed/closed-roof domes (skip — wind never reaches the field):
+#     Arizona, Houston, Miami, Milwaukee, Tampa Bay, Texas, Toronto.
+#   - Detroit (Comerica): the feed reports 151°, which falls in the physically-
+#     impossible 150°–315° arc (no MLB park faces SSE–NW) — flagged, left None
+#     pending manual review rather than writing a suspect value.
+#   - "Athletics" (Sacramento / Sutter Health Park, the 2025+ relocation): not
+#     present in the venue feed yet → None. "Oakland Athletics" (legacy key) is
+#     populated from the Oakland Coliseum azimuth.
+# Seattle (T-Mobile, retractable) IS populated — usable whenever the roof is open.
 PARK_ORIENTATION: dict[str, float | None] = {
-    "Arizona Diamondbacks":   None,   # dome — bearing moot
-    "Atlanta Braves":         None,
-    "Baltimore Orioles":      None,
-    "Boston Red Sox":         45.0,   # Fenway Park — CF toward the NE
-    "Chicago Cubs":           30.0,   # Wrigley Field — CF toward the NNE
-    "Chicago White Sox":      None,
-    "Cincinnati Reds":        None,
-    "Cleveland Guardians":    None,
-    "Colorado Rockies":       None,
-    "Detroit Tigers":         None,
-    "Houston Astros":         None,   # dome — bearing moot
-    "Kansas City Royals":     None,
-    "Los Angeles Angels":     None,
-    "Los Angeles Dodgers":    None,
-    "Miami Marlins":          None,   # dome — bearing moot
-    "Milwaukee Brewers":      None,   # dome — bearing moot
-    "Minnesota Twins":        None,
-    "New York Mets":          None,
-    "New York Yankees":       None,
-    "Athletics":              None,
-    "Oakland Athletics":      None,
-    "Philadelphia Phillies":  None,
-    "Pittsburgh Pirates":     None,
-    "San Diego Padres":       None,
-    "San Francisco Giants":   None,
-    "Seattle Mariners":       None,   # dome — bearing moot
-    "St. Louis Cardinals":    None,
-    "Tampa Bay Rays":         None,   # dome — bearing moot
-    "Texas Rangers":          None,   # dome — bearing moot
-    "Toronto Blue Jays":      None,   # dome — bearing moot
-    "Washington Nationals":   None,
+    "Arizona Diamondbacks":   None,    # dome — bearing moot
+    "Atlanta Braves":         149.0,   # Truist Park
+    "Baltimore Orioles":      31.0,    # Oriole Park at Camden Yards
+    "Boston Red Sox":         45.0,    # Fenway Park — CF toward the NE (anchor: exact)
+    "Chicago Cubs":           37.0,    # Wrigley Field — CF toward the NNE (anchor)
+    "Chicago White Sox":      127.0,   # Rate Field
+    "Cincinnati Reds":        123.0,   # Great American Ball Park (faces the Ohio River)
+    "Cleveland Guardians":    359.0,   # Progressive Field — CF nearly due N
+    "Colorado Rockies":       5.0,     # Coors Field
+    "Detroit Tigers":         None,    # Comerica feed=151° → forbidden arc; flagged for review
+    "Houston Astros":         None,    # dome — bearing moot
+    "Kansas City Royals":     47.0,    # Kauffman Stadium
+    "Los Angeles Angels":     44.0,    # Angel Stadium
+    "Los Angeles Dodgers":    25.0,    # Dodger Stadium
+    "Miami Marlins":          None,    # dome — bearing moot
+    "Milwaukee Brewers":      None,    # dome — bearing moot
+    "Minnesota Twins":        90.0,    # Target Field — CF due E
+    "New York Mets":          14.0,    # Citi Field
+    "New York Yankees":       75.0,    # Yankee Stadium — CF toward the ENE
+    "Athletics":              None,    # Sacramento (Sutter Health Park) — not in venue feed
+    "Oakland Athletics":      56.0,    # Oakland Coliseum (legacy key)
+    "Philadelphia Phillies":  9.0,     # Citizens Bank Park
+    "Pittsburgh Pirates":     116.0,   # PNC Park (CF toward the downtown skyline)
+    "San Diego Padres":       0.0,     # Petco Park — CF due N
+    "San Francisco Giants":   85.0,    # Oracle Park — CF toward the E (bay)
+    "Seattle Mariners":       49.0,    # T-Mobile Park (retractable; valid roof-open)
+    "St. Louis Cardinals":    62.0,    # Busch Stadium
+    "Tampa Bay Rays":         None,    # dome — bearing moot
+    "Texas Rangers":          None,    # dome (Globe Life Field, roof) — bearing moot
+    "Toronto Blue Jays":      None,    # dome — bearing moot
+    "Washington Nationals":   29.0,    # Nationals Park
 }
 
 
