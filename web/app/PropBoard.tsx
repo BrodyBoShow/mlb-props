@@ -50,6 +50,11 @@ const PROPS: { key: PropType; label: string; unit: string }[] = [
 
 // EDGE_THRESHOLD and HITTER_PROPS now live in @/lib/constants — imported above.
 
+// Minimum proj-vs-line gap before we call a model lean on a DFS (PrizePicks)
+// line. Mirrors NO_LEAN_THRESHOLD in /results so the board's lean direction
+// and the results-page grading agree on what counts as "~Even".
+const LINE_LEAN_THRESHOLD = 0.1;
+
 // Map each SIMPLE prop type to the StatLine field it reads. Fantasy-score
 // props are computed across multiple StatLine fields, not mapped 1:1 here —
 // handled in liveActualFor below.
@@ -193,32 +198,56 @@ function ProjectionBadge({
 // Pure display. Receives the pre-computed edge + line and picks colors/labels.
 
 function EdgeDetail({ pitcher }: { pitcher: Pitcher }) {
-  // No line for this pitcher → render nothing (the common case).
-  if (pitcher.edge === undefined || pitcher.line === undefined) {
+  // No line for this player → render nothing (the common case).
+  if (pitcher.line === undefined) {
     return null;
   }
 
-  const edge = pitcher.edge;
-  const signed = `${edge >= 0 ? "+" : "−"}${Math.abs(edge).toFixed(2)}`;
+  // Two-sided book line WITH a de-vigged edge (every prop tab except the two
+  // fantasy-score props): show "Line X · ▲ Edge ±Y" as before.
+  if (pitcher.edge !== undefined) {
+    const edge = pitcher.edge;
+    const signed = `${edge >= 0 ? "+" : "−"}${Math.abs(edge).toFixed(2)}`;
 
-  let edgeNode;
-  if (edge > EDGE_THRESHOLD) {
-    edgeNode = (
-      <span className="text-emerald-400">▲ Edge {signed}</span>
+    let edgeNode;
+    if (edge > EDGE_THRESHOLD) {
+      edgeNode = <span className="text-emerald-400">▲ Edge {signed}</span>;
+    } else if (edge < -EDGE_THRESHOLD) {
+      edgeNode = <span className="text-red-400">▼ Edge {signed}</span>;
+    } else {
+      edgeNode = <span className="text-slate-500">~Even</span>;
+    }
+
+    return (
+      <div className="mt-1 text-xs tabular-nums">
+        <span className="text-slate-500">Line {pitcher.line}</span>
+        <span className="mx-1.5 text-slate-600">·</span>
+        {edgeNode}
+      </div>
     );
-  } else if (edge < -EDGE_THRESHOLD) {
-    edgeNode = (
-      <span className="text-red-400">▼ Edge {signed}</span>
-    );
+  }
+
+  // Line present but NO edge — the PrizePicks fantasy-score case. DFS lines
+  // carry no two-sided vig to de-vig, so there's no edge number; instead we
+  // surface the model's LEAN vs the line (the exact proj-vs-line comparison
+  // the /results page scores: over if proj > line, under if proj < line).
+  // This is the same correctness rule used to grade these props on /results,
+  // shown live on the board.
+  const diff = pitcher.projection - pitcher.line;
+  let leanNode;
+  if (diff > LINE_LEAN_THRESHOLD) {
+    leanNode = <span className="text-emerald-400">▲ Over</span>;
+  } else if (diff < -LINE_LEAN_THRESHOLD) {
+    leanNode = <span className="text-red-400">▼ Under</span>;
   } else {
-    edgeNode = <span className="text-slate-500">~Even</span>;
+    leanNode = <span className="text-slate-500">~Even</span>;
   }
 
   return (
     <div className="mt-1 text-xs tabular-nums">
       <span className="text-slate-500">Line {pitcher.line}</span>
       <span className="mx-1.5 text-slate-600">·</span>
-      {edgeNode}
+      {leanNode}
     </div>
   );
 }

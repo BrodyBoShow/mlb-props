@@ -1718,6 +1718,52 @@ XGBoost feature set (engine/model.py train()):
   NaN counts after imputation, so the next zero-row failure is immediately
   attributable to a specific column.
 
+PrizePicks line on the Fantasy Score board tabs (this session):
+- Report (STEP 0, live DB): the edges table has ZERO rows for
+  hitter_fantasy_score / pitcher_fantasy_score — on EVERY date, not just
+  today. Root cause: edge.py::_fair_over_prob only seeds a de-vig baseline
+  from pinnacle / draftkings / fanduel and explicitly excludes DFS books,
+  so a PrizePicks-only prop always hits skipped_no_baseline and never
+  produces an edge row. Lines DO exist (125 today, all prizepicks,
+  +100/-100). So the fantasy board tabs showed the "FP · proj" badge but
+  no line/edge line beneath the name (every other tab reads its line off
+  the edges join). User chose line-only (no fabricated edge; engine
+  untouched).
+- Frontend-only fix:
+  * web/app/page.tsx getSlate(): new ISOLATED, failure-tolerant query for
+    bookmaker='prizepicks' lines on the two fantasy props for the slate
+    date -> ppLineByKey `${player_id}|${prop_type}` -> line. ~125 rows, no
+    pagination. On any error the map stays empty and the tabs just show no
+    line (never a broken board). The byProp row build now sets
+    `line: e?.line ?? ppLineByKey.get(key)` so fantasy rows (which have no
+    edge) fall back to the PP line; non-fantasy rows are unaffected (the PP
+    map only holds fantasy props).
+  * web/app/PropBoard.tsx EdgeDetail: now renders when a line is present
+    even if there's NO edge. Two-sided book (edge present) keeps the exact
+    "Line X · ▲ Edge ±Y" rendering. Line-only (PrizePicks fantasy) shows
+    "Line X · ▲ Over / ▼ Under / ~Even" — the model's LEAN vs the line,
+    i.e. the SAME proj-vs-line comparison /results uses to grade these
+    props (over if proj>line, under if proj<line). New local constant
+    LINE_LEAN_THRESHOLD = 0.1 mirrors /results NO_LEAN_THRESHOLD so the
+    board's ~Even cutoff and the grading agree. No de-vigged edge number
+    is shown for DFS lines (none exists). No BOOKS/sharp badge on fantasy
+    tabs (prizepicks excluded from REAL_BOOKS — already correct).
+- Results page was ALREADY correct + live: classify() implements exactly
+  the user's rule (over lean = proj>line, correct iff actual>line; under
+  lean = proj<line, correct iff actual<line; |proj-line|<0.1 = skip).
+  Verified vs raw DB on 12 graded HFS rows — every mark correct (e.g.
+  Jordan Walker proj 8.5>line 5.5 over, actual 5.0<5.5 -> wrong; Masyn
+  Winn under, actual<line -> correct). Both fantasy props already render
+  in the Betting Edge section (Pitcher Fantasy 2/2, Hitter Fantasy 7/14
+  on the current window). Coverage is thin only because PrizePicks line
+  ingestion started 2026-05-31; it fills in automatically going forward.
+- Verified: tsc --noEmit clean; npm run build passes. Board cross-check
+  vs raw DB (2026-06-01): Cavalli proj 31.2 line 21.5 -> Over; Jax 17.8
+  line 20.5 -> Under; Wood 10.6 line 12.5 -> Under; Abrams 10.0 line 9.5
+  -> Over; Young 6.6 line 4.5 -> Over. Players with no PP line (Madden,
+  Avila, Ruiz, Lopez) show nothing extra, consistent with other tabs.
+  FEATURE_COLS untouched (frontend-only).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

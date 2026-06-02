@@ -427,6 +427,42 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
   }
 
+  // ── PrizePicks fantasy-score lines (line-only display) ──────────────────
+  // The two fantasy_score props are PrizePicks-only (PRIZEPICKS_ONLY_PROPS
+  // enforced at ingest) and the edges table never carries them — edge.py
+  // excludes DFS books from seeding a de-vig baseline, so a PP-only prop never
+  // produces an edge row. The other prop tabs read their line off the edges
+  // join; the fantasy tabs have no edge, so we fetch the PP line directly here
+  // and surface it (with the model's lean vs that line) the same way every
+  // other tab shows "Line X · lean". ISOLATED + failure-tolerant: on any error
+  // the map stays empty and the fantasy tabs just don't show a line — never a
+  // broken board. Volume is tiny (~125 rows for a full slate), well under the
+  // 1000-row cap, so no pagination needed.
+  const ppLineByKey = new Map<string, number>();
+  {
+    const { data: ppRows, error: ppErr } = await supabase
+      .from("lines")
+      .select("player_id, prop_type, line")
+      .eq("game_date", selectedDate)
+      .eq("bookmaker", "prizepicks")
+      .in("prop_type", ["pitcher_fantasy_score", "hitter_fantasy_score"]);
+    if (ppErr) {
+      console.log(
+        `[home-diag] prizepicks fantasy lines fetch skipped (${String(ppErr)})`,
+      );
+    } else {
+      for (const r of (ppRows ?? []) as Array<{
+        player_id: number;
+        prop_type: string;
+        line: number | null;
+      }>) {
+        if (r.line !== null && r.line !== undefined) {
+          ppLineByKey.set(`${r.player_id}|${r.prop_type}`, Number(r.line));
+        }
+      }
+    }
+  }
+
   // ── sharp-money agreement (feature 5) ───────────────────────────────────
   // The frontend's main reads only fetch the EDGES baseline line (one book
   // per prop) — not per-book lines. So we add ONE isolated, paginated query
@@ -559,7 +595,9 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           // NULL until enough graded starts accumulate; undefined = render nothing.
           confidence: r.confidence ?? undefined,
           // Optional edge fields — undefined when this player has no line.
-          line: e?.line,
+          // Fantasy props carry no edge row (PrizePicks-only), so fall back to
+          // the directly-fetched PP line so the fantasy tabs still show "Line X".
+          line: e?.line ?? ppLineByKey.get(`${r.player_id}|${r.prop_type}`),
           edge: e?.edge ?? undefined,
           fairOverProb: e?.fair_over_prob ?? undefined,
           modelOverProb: e?.model_over_prob ?? undefined,
