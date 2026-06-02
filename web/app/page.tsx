@@ -652,12 +652,17 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
       for (const r of rows) {
         if (r.prop_type !== propType) continue;
         if (!byGame.has(r.game_id)) {
+          const w = windByGame.get(r.game_id);
           byGame.set(r.game_id, {
             game_id: r.game_id,
             matchup: r.games
               ? `${r.games.away_team} @ ${r.games.home_team}`
               : `Game ${r.game_id}`,
             startTime: r.games?.start_time ?? null,
+            // Today's wind (display-only) for the game-header + total-bases tags.
+            windSpeed: w?.windSpeed ?? null,
+            windDirDeg: w?.windDirDeg ?? null,
+            isDome: w?.isDome ?? null,
             pitchers: [],
           });
         }

@@ -5,6 +5,8 @@ import DateNav from "./DateNav";
 import FeaturedPlays from "./FeaturedPlays";
 import ParkTag from "./ParkTag";
 import SharpBadge from "./SharpBadge";
+import { getParkProfile } from "@/lib/constants";
+import { windClause } from "@/lib/windTag";
 import { useLiveGameStatus } from "./useLiveGameStatus";
 import { useLiveBoxScores } from "./useLiveBoxScores";
 import type {
@@ -377,6 +379,34 @@ function OppContextLine({ kRate }: { kRate: number | null | undefined }) {
   );
 }
 
+// Wind tag line for total-bases cards (hitter_total_bases ONLY). Same arrow +
+// mph + direction + colors as the HR cards (out=green, in=red, cross=slate),
+// rendered card-sized. Returns null when there's no usable wind (calm / unknown
+// bearing / no data) — the game header already carries the static park label, so
+// we show ONLY the wind condition here, not a park fallback.
+function WindCardLine({
+  homeTeam,
+  windSpeed,
+  windDirDeg,
+  isDome,
+}: {
+  homeTeam: string;
+  windSpeed?: number | null;
+  windDirDeg?: number | null;
+  isDome?: boolean | null;
+}) {
+  const wc = windClause({ homeTeam, windSpeed, windDirDeg, isDome });
+  if (!wc) return null;
+  return (
+    <div className="mt-1 text-[11px] font-medium leading-tight" title={wc.tooltip}>
+      <span className={wc.tone}>
+        {wc.arrow ? `${wc.arrow} ` : ""}
+        {wc.text}
+      </span>
+    </div>
+  );
+}
+
 // ── game header sub-component ────────────────────────────────────────────────
 // Shows the matchup title + a status line beneath: date + live/scheduled/final.
 // `status` is undefined when the live fetch hasn't populated yet (or failed) —
@@ -457,10 +487,16 @@ function GameHeader({
   matchup,
   date,
   status,
+  windSpeed,
+  windDirDeg,
+  isDome,
 }: {
   matchup: string;
   date: string;
   status: GameStatus | undefined;
+  windSpeed?: number | null;
+  windDirDeg?: number | null;
+  isDome?: boolean | null;
 }) {
   // matchup is "Away @ Home" — the home team is what determines the park.
   // No MLB team name contains " @ " so the split is safe; fall back to ""
@@ -469,11 +505,30 @@ function GameHeader({
     ? matchup.split(" @ ")[1]
     : "";
 
+  // Today's wind clause ALONGSIDE the static park tag (display-only). null when
+  // there's no usable wind / calm / unknown bearing → only the park tag shows.
+  // Same arrow + mph + direction + colors as the HR cards. The "·" separator
+  // renders only when BOTH a (non-neutral) park tag and a wind clause appear.
+  const wc = windClause({ homeTeam, windSpeed, windDirDeg, isDome });
+  const parkShown = !!homeTeam && getParkProfile(homeTeam).direction !== "neutral";
+
   return (
     <div className="border-b border-slate-800 bg-slate-900 px-5 py-3">
       <div className="flex items-start justify-between gap-2">
         <h2 className="font-semibold text-slate-200">{matchup}</h2>
-        <ParkTag homeTeam={homeTeam} />
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-1.5 gap-y-1">
+          <ParkTag homeTeam={homeTeam} />
+          {parkShown && wc && <span className="text-[10px] text-slate-600">·</span>}
+          {wc && (
+            <span
+              title={wc.tooltip}
+              className={`text-[11px] font-medium tabular-nums ${wc.tone}`}
+            >
+              {wc.arrow ? `${wc.arrow} ` : ""}
+              {wc.text}
+            </span>
+          )}
+        </div>
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
         <span>{formatShortDate(date)}</span>
@@ -571,6 +626,9 @@ export default function PropBoard({
                 matchup={g.matchup}
                 date={date}
                 status={liveStatus.get(g.game_id)}
+                windSpeed={g.windSpeed}
+                windDirDeg={g.windDirDeg}
+                isDome={g.isDome}
               />
               <ul className="divide-y divide-slate-800">
                 {g.pitchers.map((p, i) => {
@@ -609,6 +667,18 @@ export default function PropBoard({
                         <RecentFormDots form={p.recentForm} />
                         {active === "strikeouts" && (
                           <OppContextLine kRate={p.oppContext?.kRate} />
+                        )}
+                        {active === "hitter_total_bases" && (
+                          <WindCardLine
+                            homeTeam={
+                              g.matchup.includes(" @ ")
+                                ? g.matchup.split(" @ ")[1]
+                                : ""
+                            }
+                            windSpeed={g.windSpeed}
+                            windDirDeg={g.windDirDeg}
+                            isDome={g.isDome}
+                          />
                         )}
                       </div>
                       <ProjectionBadge

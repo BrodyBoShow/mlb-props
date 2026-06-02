@@ -84,6 +84,12 @@ export type GameGroup = {
   // First-pitch ISO timestamp from the games table. The slate is sorted by
   // this server-side in page.tsx; null entries (TBD) sort to the end.
   startTime: string | null;
+  // Today's game-time wind (display-only), attached for the game-header wind
+  // clause + the total-bases card wind tag. Mirrors the HR-play wind fields.
+  // undefined/null when the engine hasn't persisted wind for this game.
+  windSpeed?: number | null;
+  windDirDeg?: number | null;
+  isDome?: boolean | null;
   pitchers: Pitcher[];
 };
 

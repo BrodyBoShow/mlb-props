@@ -2546,6 +2546,49 @@ Sweet-spot decoupled from pitcher bulk_df — HR composite power term now LIVE:
   the min-sample gate (PART B, 31 excluded). New top-3: Acuña (power 0.839 ×
   platoon 0.880), Soto (0.929 × 1.120), Duran (1.056 × 1.120 × tailwind 1.070).
 
+Wind tag extended to game headers + total-bases cards (this session):
+- DISPLAY-ONLY frontend change. The wind tag (live on HR cards) now also renders
+  on (A) the per-game board's game-header park tag and (B) total-bases prop cards.
+  Wind affects all batted balls, so it's legitimately additive on these power-
+  adjacent surfaces. No engine/model/FEATURE_COLS/schema/migration change; reuses
+  the existing wind math (wind.ts) — nothing reimplemented.
+- REFACTOR (no behavior change to HR cards): extracted the wind-tag display logic
+  from FeaturedPlays.tsx into a shared web/lib/windTag.ts with TWO entry points
+  off one core (directionalClause, which reuses wind.ts windRelativeAngle/
+  windBucket):
+  * windTag(input) — the FULL HR-card line: directional wind, else the static
+    park label ("Neutral park" / "· calm"). FeaturedPlays now imports this
+    (byte-identical output — pf still = PARK_FACTORS_HITS[homeTeam]); parkLabel
+    moved here too (its "Park ↑ 1.12" line imports it).
+  * windClause(input) — directional wind ONLY (or "Dome · neutral"); null when no
+    usable wind / calm / unknown bearing. For surfaces that ALREADY show the
+    static park label elsewhere, so we don't duplicate it.
+  Same arrow + mph + direction text + colors (out=green, in=red, cross=slate) on
+  every surface.
+- DATA WIRING: web/lib/types.ts GameGroup gains windSpeed?/windDirDeg?/isDome?
+  (mirrors the HR-play wind fields). page.tsx getSlate attaches them to each
+  GameGroup from the EXISTING windByGame map (no new query). PropBoard reads them.
+- (A) GAME HEADER (PropBoard.GameHeader): renders windClause ALONGSIDE the
+  existing ParkTag (not replacing). A "·" separator shows only when BOTH a
+  non-neutral ParkTag and a wind clause render. Subordinate styling (text-[11px],
+  HR-card colors). Verified live (2026-06-02): Cincinnati "HITTER PARK ↑ · → 9
+  mph Cross to RF", Philadelphia "HITTER PARK ↑ · ↓ 7 mph In from CF", Cubs "↓ 8
+  mph In from CF", LA Angels "↑ 9 mph Out to LF"; dome (Arizona/Houston/Tampa) →
+  "Dome · neutral"; Boston (calm/no wind) → park label only (degrade). The static
+  park label is always preserved alongside.
+- (B) TOTAL-BASES CARDS ONLY (active === "hitter_total_bases"): new WindCardLine
+  renders windClause per card (same colors/arrow/format as HR cards, card-sized,
+  no park fallback since the header carries the park label). Returns null on no
+  usable wind. NOTE the header wind clause shows on every tab (it's the per-game
+  header); the per-CARD wind tag is gated to total_bases only.
+- EXPLICITLY EXCLUDED from the per-card wind tag (wind is noise there): strikeouts,
+  hits_allowed, walks, earned_runs, outs_recorded, hitter_hits, hitter_rbis,
+  hitter_runs, pitcher_fantasy_score, hitter_fantasy_score, and ALL pitcher props.
+  Only HR cards (existing) + total_bases cards + the game header carry wind.
+- DON'T-TOUCH honored: windTag math, HR composite/ranking, sweet-spot footer, the
+  min-sample guard, prop selection, edges, engine, FEATURE_COLS (11), schema — all
+  unchanged. VERIFIED: tsc --noEmit clean; npm run build passes.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

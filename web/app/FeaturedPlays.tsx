@@ -2,8 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FeaturedPlay, FeaturedSection, PropType } from "@/lib/types";
-import { getParkBearing } from "@/lib/constants";
-import { windBucket, windRelativeAngle } from "@/lib/wind";
+import { parkLabel, windTag } from "@/lib/windTag";
 import SharpBadge from "./SharpBadge";
 
 // Display labels for every prop that can appear across the three sections.
@@ -18,59 +17,6 @@ const PROP_LABEL: Partial<Record<PropType, string>> = {
 
 function fmt(n: number, digits = 1): string {
   return n.toFixed(digits);
-}
-
-// Park label + arrow derived from the hit park factor (same thresholds as the
-// ParkTag on the prop board: >=1.04 hitter-friendly, <=0.96 pitcher-friendly).
-function parkLabel(factor: number): { text: string; arrow: string; tone: string } {
-  if (factor >= 1.04) return { text: "Hitter-friendly", arrow: "↑", tone: "text-emerald-400" };
-  if (factor <= 0.96) return { text: "Pitcher-friendly", arrow: "↓", tone: "text-sky-400" };
-  return { text: "Neutral", arrow: "·", tone: "text-slate-400" };
-}
-
-type WindTagResult = { text: string; arrow: string; tone: string; tooltip?: string };
-
-// Field-relative wind tag for an HR card (display-only). Turns the stored
-// wind into an Out / In / Cross label vs the park's home-plate→CF bearing,
-// degrading cleanly when the data isn't usable:
-//   - dome game            → "Dome · neutral"
-//   - no wind OR no bearing → static park label (current behavior)
-//   - wind < 5 mph         → park label + "· calm"
-//   - else                 → directional wind tag (green out / red in / slate cross)
-//
-// windDirDeg is OWM's METEOROLOGICAL direction (the way the wind blows FROM),
-// so we add 180 to get the blowing-TOWARD bearing before comparing to CF.
-function windTag(play: FeaturedPlay): WindTagResult {
-  const pf = play.parkFactor ?? 1.0;
-  const pl = parkLabel(pf);
-  const staticTag: WindTagResult = { text: `${pl.text} park`, arrow: "", tone: pl.tone };
-
-  if (play.isDome) return { text: "Dome · neutral", arrow: "", tone: "text-slate-400" };
-
-  const bearing = play.homeTeam ? getParkBearing(play.homeTeam) : null;
-  const speed = play.windSpeed;
-  if (speed == null || bearing == null || play.windDirDeg == null) return staticTag;
-  if (speed < 5) return { ...staticTag, text: `${pl.text} park · calm` };
-
-  // Reuse the SHARED wind math (web/lib/wind.ts) — same relative-angle helper the
-  // HR composite ranks on, so display and ranking never diverge.
-  const rel = windRelativeAngle(play.windDirDeg, bearing);
-  const bucket = windBucket(rel);
-  const mph = Math.round(speed);
-  const tip =
-    `Wind ${mph} mph from ${Math.round(play.windDirDeg)}° · ` +
-    `CF bearing ${bearing}° · field-relative ${Math.round(rel)}°`;
-
-  // rel>0 leans to the RF side, rel<0 to the LF side (facing CF, right is CW).
-  if (bucket === "out") {
-    const side = rel < -15 ? "LF" : rel > 15 ? "RF" : "CF";
-    return { text: `${mph} mph Out to ${side}`, arrow: "↑", tone: "text-emerald-400", tooltip: tip };
-  }
-  if (bucket === "in") {
-    return { text: `${mph} mph In from CF`, arrow: "↓", tone: "text-red-400", tooltip: tip };
-  }
-  const side = rel > 0 ? "RF" : "LF";
-  return { text: `${mph} mph Cross to ${side}`, arrow: "→", tone: "text-slate-400", tooltip: tip };
 }
 
 // 7-day batted-ball quality footer for HR cards (replaces the graded-history
@@ -250,7 +196,12 @@ function FeaturedPlayCard({
           </div>
           <div className="mt-2 text-sm">
             {(() => {
-              const w = windTag(play);
+              const w = windTag({
+                homeTeam: play.homeTeam,
+                windSpeed: play.windSpeed,
+                windDirDeg: play.windDirDeg,
+                isDome: play.isDome,
+              });
               return (
                 <span className={`font-semibold ${w.tone}`} title={w.tooltip}>
                   {w.arrow ? `${w.arrow} ` : ""}
