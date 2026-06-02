@@ -69,6 +69,24 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
 
 // TRACKER_PROPS + ALL_PROP_TYPES now live in @/lib/constants — imported above.
 
+// ── Featured Plays qualification (mirrors web/app/page.tsx buildEdgePlays) ────
+// The "Featured Plays hit rate" section tracks ONLY plays that match the home
+// board's Featured Plays criteria: the high-edge pitching + hitting props, with
+// a real de-vigged edge past the threshold and a meaningful lean off the line.
+// HR matchups are intentionally absent — they're park-ranked context, not edge
+// calls. Keep these values in sync with FEATURED_* in web/app/page.tsx.
+//   NOTE: MIN_LINE (from @/lib/constants) has no entry for hitter_hits /
+//   hitter_total_bases, so we apply the floor only where it's defined (pitcher
+//   props). The |edge| ≥ 0.12 and |proj − line| ≥ 0.3 gates carry the hitter
+//   props. The de-vigged edge lives only in the `edges` table, so this section
+//   needs an extra edges fetch (the main betting join is line-based).
+const FEATURED_RESULT_PROPS: ReadonlySet<PropType> = new Set([
+  "strikeouts", "hits_allowed", "outs_recorded",
+  "hitter_hits", "hitter_total_bases",
+]);
+const FEATURED_MIN_EDGE = 0.12;
+const FEATURED_MIN_LEAN = 0.3;
+
 // ── raw row shapes ───────────────────────────────────────────────────────────
 
 type ProjectionRow = {
@@ -87,6 +105,15 @@ type LineRow = {
   bookmaker: string;
   line: number;
   game_date: string;
+};
+
+// One edges-table row — only the de-vigged `edge` value is needed for the
+// Featured Plays |edge| gate (the line/classify come from the lines join).
+type EdgeRow = {
+  player_id: number;
+  prop_type: string;
+  game_date: string;
+  edge: number | null;
 };
 
 // player_game_logs rows hold every actual column. We index dynamically by
@@ -113,6 +140,7 @@ function classify(projection: number, line: number, actual: number): Verdict {
 
 async function getResults(): Promise<{
   bettingResults: EvaluatedResult[];
+  featuredResults: EvaluatedResult[];
   trackerResults: TrackerResult[];
   dateRange: { start: string; end: string } | null;
   trackedFrom: Partial<Record<PropType, string>>;
@@ -143,7 +171,7 @@ async function getResults(): Promise<{
   const latestLineDate = latestLine?.[0]?.game_date as string | undefined;
   // Empty state: nothing graded AND no lines either.
   if (!latestLogDate && !latestLineDate) {
-    return { bettingResults: [], trackerResults: [], dateRange: null, trackedFrom: {}, weeklyTrend: [] };
+    return { bettingResults: [], featuredResults: [], trackerResults: [], dateRange: null, trackedFrom: {}, weeklyTrend: [] };
   }
   const endDate =
     latestLogDate && latestLineDate
@@ -177,7 +205,7 @@ async function getResults(): Promise<{
   // N_books × N_days rows, well over 1000 for any non-trivial history.
   type TrackedFromRow = { prop_type: string; game_date: string };
 
-  const [projData, lineData, logData, trackedFromRows] = await Promise.all([
+  const [projData, lineData, logData, trackedFromRows, edgeData] = await Promise.all([
     fetchAllPages<ProjectionRow>(
       (from, to) =>
         supabase
@@ -238,11 +266,30 @@ async function getResults(): Promise<{
           }>,
       "tracked-from",
     ),
+
+    // Edges for the same 7-day window, scoped to the Featured props. Powers the
+    // |edge| ≥ 0.12 gate for the Featured Plays hit-rate section (the de-vigged
+    // edge lives ONLY here). Paginated like every other multi-row query.
+    fetchAllPages<EdgeRow>(
+      (from, to) =>
+        supabase
+          .from("edges")
+          .select("player_id, prop_type, game_date, edge")
+          .gte("game_date", startDate)
+          .lte("game_date", endDate)
+          .in("prop_type", [...FEATURED_RESULT_PROPS] as string[])
+          .range(from, to) as unknown as PromiseLike<{
+            data: EdgeRow[] | null;
+            error: unknown;
+          }>,
+      "featured-edges",
+    ),
   ]);
 
   console.log(
     `[results-diag] fetched (paginated): ` +
-      `projections=${projData.length} lines=${lineData.length} logs=${logData.length}`,
+      `projections=${projData.length} lines=${lineData.length} logs=${logData.length} ` +
+      `edges=${edgeData.length}`,
   );
 
   const projections = projData;
@@ -418,6 +465,73 @@ async function getResults(): Promise<{
   bettingResults.sort(sortNewestFirst);
   trackerResults.sort(sortNewestFirst);
 
+  // ── Featured Plays hit rate ──────────────────────────────────────────────
+  // Same lines/classify join as bettingResults, but gated to the home board's
+  // Featured Plays criteria: the 5 high-edge pitching + hitting props, a real
+  // de-vigged |edge| ≥ 0.12, and a meaningful |proj − line| ≥ 0.3 lean. MIN_LINE
+  // is applied only where defined (pitcher props); the edge + lean gates carry
+  // the hitter props. No new join — reuses linesByKey / logsByKey + the edges
+  // fetched above. HR matchups never appear (not in FEATURED_RESULT_PROPS).
+  const edgeByKey = new Map<string, number>();
+  for (const e of edgeData) {
+    if (e.edge !== null && e.edge !== undefined) {
+      edgeByKey.set(`${e.player_id}|${e.prop_type}|${e.game_date}`, e.edge);
+    }
+  }
+
+  const featuredResults: EvaluatedResult[] = [];
+  for (const p of projections) {
+    const propType = p.prop_type as PropType;
+    if (!FEATURED_RESULT_PROPS.has(propType)) continue;
+    const actualCol = ACTUAL_COLUMN[propType];
+    if (!actualCol) continue;
+
+    const line = linesByKey.get(
+      `${p.player_id}|${p.prop_type}|${p.projection_date}`,
+    );
+    if (!line) continue;
+    // Require a MIN_LINE floor, exactly like the board's buildEdgePlays AND
+    // bettingResults. MIN_LINE has no entry for hitter_hits/hitter_total_bases,
+    // so — like the board's HITTING EDGES section — they never qualify here.
+    // They stay in FEATURED_RESULT_PROPS so the breakdown lists them (showing
+    // 0/0) rather than silently hiding a prop the board claims to feature.
+    const minLine = MIN_LINE[propType];
+    if (minLine === undefined || line.line < minLine) continue;
+
+    const edge = edgeByKey.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
+    if (edge === undefined || Math.abs(edge) < FEATURED_MIN_EDGE) continue;
+    if (Math.abs(p.projection - line.line) < FEATURED_MIN_LEAN) continue;
+
+    const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
+    if (!log) continue;
+    const actualRaw = log[actualCol];
+    if (actualRaw === null || actualRaw === undefined) continue;
+    const actual = Number(actualRaw);
+    if (!Number.isFinite(actual)) continue;
+
+    featuredResults.push({
+      gameId: p.game_id,
+      matchup: p.games
+        ? `${p.games.away_team} @ ${p.games.home_team}`
+        : `Game ${p.game_id}`,
+      playerId: p.player_id,
+      playerName: p.players?.full_name ?? "Unknown player",
+      propType,
+      gameDate: p.projection_date,
+      projection: p.projection,
+      line: line.line,
+      bookmaker: line.bookmaker,
+      actual,
+      lean: p.projection > line.line ? "over" : p.projection < line.line ? "under" : "none",
+      verdict: classify(p.projection, line.line, actual),
+    });
+  }
+  featuredResults.sort(sortNewestFirst);
+  console.log(
+    `[results-diag] featured plays: ${featuredResults.length} graded ` +
+      `(of ${bettingResults.length} betting)`,
+  );
+
   // ── Weekly Betting Edge trend (Feature 6) ────────────────────────────────
   // A SECOND, wider 42-day window anchored on the same endDate. Same tables,
   // same book-preference reduction, same MIN_LINE floor, same classify()
@@ -533,6 +647,7 @@ async function getResults(): Promise<{
 
   return {
     bettingResults,
+    featuredResults,
     trackerResults,
     dateRange: { start: startDate, end: endDate },
     trackedFrom,
@@ -550,8 +665,14 @@ function formatDate(iso: string): string {
 }
 
 export default async function ResultsPage() {
-  const { bettingResults, trackerResults, dateRange, trackedFrom, weeklyTrend } =
-    await getResults();
+  const {
+    bettingResults,
+    featuredResults,
+    trackerResults,
+    dateRange,
+    trackedFrom,
+    weeklyTrend,
+  } = await getResults();
   const hasAny = bettingResults.length + trackerResults.length > 0;
 
   return (
@@ -576,6 +697,7 @@ export default async function ResultsPage() {
       {hasAny ? (
         <ResultsBoard
           bettingResults={bettingResults}
+          featuredResults={featuredResults}
           trackerResults={trackerResults}
           trackedFrom={trackedFrom}
           weeklyTrend={weeklyTrend}

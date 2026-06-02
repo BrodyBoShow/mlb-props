@@ -1970,6 +1970,39 @@ Weekly Betting Edge trend chart on /results (Feature 6, this session):
   placeholder renders (confirmed on dev server); the bar chart activates
   automatically once a 2nd week accumulates. 7-day main results unchanged.
 
+Featured Plays hit-rate row on /results (this session):
+- A single "Featured Plays" row added to the Betting Edge "By prop type" card
+  (BettingPerPropCard) — SAME row UI as Strikeouts/Hits Allowed/etc. (label +
+  muted subtitle "high-edge subset" + correct/evaluable + rate%). NOT a
+  separate section (an earlier attempt at a full section was scrapped per the
+  user — they wanted just the one row in the existing card).
+- The row aggregates featuredResults: the high-conviction subset matching the
+  home board's Featured Plays criteria (buildEdgePlays in web/app/page.tsx):
+  prop ∈ {strikeouts, hits_allowed, outs_recorded, hitter_hits,
+  hitter_total_bases}, |edge| >= FEATURED_MIN_EDGE (0.12), |proj-line| >=
+  FEATURED_MIN_LEAN (0.3), REQUIRES MIN_LINE (same as bettingResults +
+  buildEdgePlays), same BOOK_PREFERENCE + classify(). HR matchups never count.
+- KEY FINDING (the reason for requiring MIN_LINE): MIN_LINE has no entry for
+  hitter_hits/hitter_total_bases, so — exactly like the board's HITTING EDGES
+  section, which is structurally always empty — those props never qualify here
+  either. So featuredResults is pitcher-only in practice, a STRICT SUBSET of
+  bettingResults (verified: 22 featured of 67 betting; an earlier "apply
+  MIN_LINE only where defined" variant ballooned to 328 rows / 93% un-featured
+  hitter plays, which would have been misleading — rejected).
+- web/app/results/page.tsx getResults(): added ONE edges fetch (paginated, 7-day
+  window, scoped to the featured props) — the de-vigged |edge| lives ONLY in the
+  edges table and the main betting join is line-based, so the |edge| gate
+  genuinely needs it (the spec's "no new query" was not achievable). Builds
+  featuredResults by reusing the existing linesByKey/logsByKey + edgeByKey;
+  returns it alongside bettingResults. [results-diag] logs the featured count.
+- web/app/results/ResultsBoard.tsx: BettingPerPropCard takes featured:
+  EvaluatedResult[] and renders the aggregate row first in the list. The chips
+  do NOT filter it (always the full featured set).
+- Verified vs live DB (2026-05-26..06-01): Featured Plays row = 12/22 = 55%
+  (strikeouts 7/7, hits_allowed 4/3, outs 1/0); strict subset of 67 betting.
+  classify(), bettingResults, Model Tracker, the weekly-trend chart, engine,
+  FEATURE_COLS all unchanged. tsc clean; build passes.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

@@ -111,9 +111,13 @@ function BettingOverallCard({ results }: { results: EvaluatedResult[] }) {
 
 function BettingPerPropCard({
   results,
+  featured,
   trackedFrom,
 }: {
   results: EvaluatedResult[];
+  // High-edge Featured Plays subset (the plays shown on the home board) —
+  // surfaced as one aggregate row in the same list.
+  featured: EvaluatedResult[];
   trackedFrom: Partial<Record<PropType, string>>;
 }) {
   // Show every betting prop, even when 0 rows in the window. A missing prop
@@ -128,6 +132,13 @@ function BettingPerPropCard({
     return { propType: pt, correct, wrong, skip, evaluable: correct + wrong };
   });
 
+  // Featured Plays aggregate — the high-conviction subset (|edge| >= 0.12).
+  const fCorrect = featured.filter((r) => r.verdict === "correct").length;
+  const fWrong = featured.filter((r) => r.verdict === "wrong").length;
+  const fSkip = featured.filter((r) => r.verdict === "skip").length;
+  const fEval = fCorrect + fWrong;
+  const fEmpty = fEval + fSkip === 0;
+
   return (
     <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/50">
       <div className="border-b border-slate-800 px-5 py-3">
@@ -136,6 +147,35 @@ function BettingPerPropCard({
         </h3>
       </div>
       <ul className="divide-y divide-slate-800">
+        {/* Featured Plays — high-edge subset shown on the board. Same row UI. */}
+        <li className="flex items-center justify-between px-5 py-3 text-sm">
+          <span className="flex flex-col items-start gap-0.5">
+            <span className={fEmpty ? "text-slate-500" : "text-slate-200"}>
+              Featured Plays
+            </span>
+            <span className="text-[10px] uppercase tracking-wide text-slate-500">
+              high-edge subset
+            </span>
+          </span>
+          <div className="flex items-center gap-3 tabular-nums">
+            {fEmpty ? (
+              <>
+                <span className="text-xs text-slate-600">0/0</span>
+                <span className="w-12 text-right font-semibold text-slate-600">—</span>
+              </>
+            ) : (
+              <>
+                <span className="text-xs text-slate-500">
+                  {fCorrect}/{fEval}
+                  {fSkip > 0 && <span className="ml-1 text-slate-600">({fSkip} skip)</span>}
+                </span>
+                <span className={`w-12 text-right font-semibold ${rateColor(fCorrect, fEval)}`}>
+                  {pct(fCorrect, fEval)}
+                </span>
+              </>
+            )}
+          </div>
+        </li>
         {rows.map((r) => {
           const empty = r.evaluable + r.skip === 0;
           const tracked = trackedFrom[r.propType];
@@ -622,11 +662,15 @@ function TrackerByProp({ results }: { results: TrackerResult[] }) {
 
 export default function ResultsBoard({
   bettingResults,
+  featuredResults,
   trackerResults,
   trackedFrom,
   weeklyTrend,
 }: {
   bettingResults: EvaluatedResult[];
+  // High-conviction subset matching the home board's Featured Plays criteria.
+  // Always the full unfiltered set (the filter chips below don't touch it).
+  featuredResults: EvaluatedResult[];
   trackerResults: TrackerResult[];
   // Per-prop earliest-line-ingested date — display only, no filtering effect.
   trackedFrom: Partial<Record<PropType, string>>;
@@ -679,7 +723,11 @@ export default function ResultsBoard({
           overall card and the per-prop breakdown. Not affected by the filters. */}
       <ResultsTrendChart weeklyTrend={weeklyTrend} />
 
-      <BettingPerPropCard results={bettingResults} trackedFrom={trackedFrom} />
+      <BettingPerPropCard
+        results={bettingResults}
+        featured={featuredResults}
+        trackedFrom={trackedFrom}
+      />
 
       <BettingFilterBar
         active={propFilter}
