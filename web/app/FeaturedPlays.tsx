@@ -74,33 +74,23 @@ function InsightLine({
   const [overflows, setOverflows] = useState(false);
   const pRef = useRef<HTMLParagraphElement>(null);
 
-  // Detect whether the insight overflows two lines. NOTE: a naive
-  // scrollHeight-vs-clientHeight check is unreliable with `-webkit-line-clamp`
-  // (`line-clamp-2`) — Chrome reports scrollHeight as the CLAMPED height, so
-  // the difference is always 0 and the toggle never appears. Instead we read
-  // the element's true unclamped height by briefly forcing `display:block` +
-  // no clamp (synchronously, restored before paint), and compare it to a
-  // two-line cap derived from the computed line-height. ResizeObserver
-  // re-measures on width changes (responsive grid / window resize).
+  // Detect whether the clamped (2-line) insight is being truncated, so only
+  // overflowing reads get the "↓ more" toggle. With `line-clamp-2` the element
+  // is `overflow:hidden`, so scrollHeight reports the full content height while
+  // clientHeight is the clamped height — a positive difference means it's cut
+  // off. Skip re-measuring while expanded (clamp removed → heights equal, which
+  // would falsely reset the flag). ResizeObserver re-checks on width changes.
   useEffect(() => {
     const el = pRef.current;
     if (!el) return;
     const measure = () => {
-      const lh = parseFloat(getComputedStyle(el).lineHeight);
-      const twoLines = (Number.isFinite(lh) ? lh : 15) * 2 + 1;
-      const s = el.style;
-      s.setProperty("display", "block");
-      s.setProperty("-webkit-line-clamp", "unset");
-      const full = el.scrollHeight;
-      s.removeProperty("display");
-      s.removeProperty("-webkit-line-clamp");
-      setOverflows(full > twoLines);
+      if (!expanded) setOverflows(el.scrollHeight - el.clientHeight > 1);
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [text]);
+  }, [text, expanded]);
 
   if (loading) {
     return <div className="mt-2 h-3 w-full animate-pulse rounded bg-slate-800" />;
