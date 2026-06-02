@@ -14,10 +14,12 @@ import { useRouter } from "next/navigation";
 // run has landed, that timestamp advances and the relative counter resets to
 // "just now"; when nothing changed, the displayed time is unchanged.
 //
-// 2.5 min interval — slower than the 60s live-overlay polls (those handle
-// in-game stats); this is for picking up new cron writes. Paused while the
-// tab is hidden, with one catch-up refresh on regaining focus.
-const REFRESH_MS = 150_000;
+// 7 min interval — this only picks up new cron WRITES (which land a handful of
+// times a day), so a tight cadence wasted Supabase reads for no freshness gain.
+// The 60s live-overlay polls handle in-game stats independently, so live scores
+// still tick every minute regardless of this. Paused while the tab is hidden,
+// with one catch-up refresh on regaining focus.
+const REFRESH_MS = 420_000;
 
 export default function AutoRefresh() {
   const router = useRouter();
