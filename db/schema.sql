@@ -172,6 +172,12 @@ create table if not exists lines (
     under_price integer,
     game_date   date not null,
     fetched_at  timestamptz default now(),
+    -- observed_lines: comma-joined distinct PrizePicks rungs seen for this
+    -- (player, prop, day) across the day's cron runs. PrizePicks fantasy-score
+    -- props ship a goblin/standard/demon alt-line ladder and ParlayAPI returns
+    -- a RANDOM rung per call, so we accumulate the distinct rungs here and store
+    -- the MEDIAN (the standard line) in `line`. NULL for every non-fantasy prop.
+    observed_lines text,
     unique (player_id, prop_type, bookmaker, game_date)
 );
 

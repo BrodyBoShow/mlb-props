@@ -250,6 +250,10 @@ class LineRow(TypedDict, total=False):
     over_price: Optional[int]    # American odds; None when book posts one side
     under_price: Optional[int]
     game_date: str               # 'YYYY-MM-DD'
+    # Set by db._resolve_fantasy_ladder for PrizePicks fantasy props only:
+    # comma-joined distinct alt-line rungs seen across the day; `line` is then
+    # stored as their median (the standard line). NULL/absent for other props.
+    observed_lines: Optional[str]
 
 
 class EdgeRow(TypedDict, total=False):

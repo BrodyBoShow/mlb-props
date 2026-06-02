@@ -491,16 +491,140 @@ def upsert_projections(rows: "list[ProjectionRow] | list[dict]") -> int:
         raise
 
 
+# PrizePicks-only fantasy props whose lines arrive as a goblin/standard/demon
+# alt-line ladder. ParlayAPI returns a RANDOM rung per call, so a single fetch
+# can't tell which value is the real (standard) line. We accumulate the distinct
+# rungs seen across the day's cron runs and store the MEDIAN — the standard line,
+# which is model-independent (no projection coupling). Kept in sync with
+# lines.PRIZEPICKS_ONLY_PROPS; defined locally so db.py needs no lines import.
+_FANTASY_LADDER_PROPS = {"pitcher_fantasy_score", "hitter_fantasy_score"}
+
+
+def _resolve_fantasy_ladder(rows: list[dict]) -> bool:
+    """Collapse PrizePicks fantasy alt-line rungs to the standard (median) line.
+
+    For each fantasy row (prizepicks book only), merge its just-observed line
+    into the day's accumulated distinct rungs (read from observed_lines on the
+    existing row, seeded with the existing `line` for pre-column legacy rows),
+    then set `line` = median rung rounded to the 0.5 grid and write the updated
+    rung set back into observed_lines. Mutates `rows` in place.
+
+    Median is model-INDEPENDENT and converges to the true standard as the day's
+    runs enumerate all three rungs (goblin < standard < demon). Mid-day, with a
+    partial ladder, it's an estimate — still far better than a random rung.
+
+    Returns True if observed_lines was populated (so the caller knows to expect
+    the column). Returns False and leaves rows untouched if the column doesn't
+    exist yet (pre-migration) or the read fails — graceful degrade to the old
+    single-sample behavior.
+    """
+    import statistics
+
+    fantasy = [
+        r for r in rows
+        if r.get("prop_type") in _FANTASY_LADDER_PROPS
+        and r.get("bookmaker") == "prizepicks"
+        and r.get("line") is not None
+    ]
+    if not fantasy:
+        return False
+
+    # Read existing rows for the affected dates in one query per date.
+    client = _client()
+    existing: dict[tuple, dict] = {}
+    for game_date in {r["game_date"] for r in fantasy}:
+        try:
+            resp = (
+                client.table("lines")
+                .select("player_id, prop_type, line, observed_lines")
+                .eq("game_date", game_date)
+                .eq("bookmaker", "prizepicks")
+                .in_("prop_type", list(_FANTASY_LADDER_PROPS))
+                .range(0, 4999)
+                .execute()
+            )
+        except Exception as exc:
+            # Most likely the observed_lines column doesn't exist yet — degrade
+            # to single-sample behavior so the pipeline keeps working before the
+            # add_observed_lines.sql migration is applied.
+            print(
+                f"  fantasy-ladder read skipped ({exc}) — apply "
+                f"db/migrations/add_observed_lines.sql to enable standard-line "
+                f"recovery"
+            )
+            return False
+        for row in resp.data or []:
+            existing[(row["player_id"], row["prop_type"], game_date)] = row
+
+    for r in fantasy:
+        key = (r["player_id"], r["prop_type"], r["game_date"])
+        rungs: set[float] = set()
+        prev = existing.get(key)
+        if prev:
+            obs = prev.get("observed_lines")
+            if obs:
+                for tok in str(obs).split(","):
+                    tok = tok.strip()
+                    if tok:
+                        try:
+                            rungs.add(float(tok))
+                        except ValueError:
+                            pass
+            elif prev.get("line") is not None:
+                # Legacy row written before this column existed — seed the set
+                # with whatever (possibly-alt) rung it currently holds so we
+                # self-heal from the polluted state instead of discarding it.
+                try:
+                    rungs.add(float(prev["line"]))
+                except (TypeError, ValueError):
+                    pass
+        rungs.add(float(r["line"]))
+
+        ordered = sorted(rungs)
+        standard = round(statistics.median(ordered) * 2) / 2
+        r["line"] = standard
+        r["observed_lines"] = ",".join(str(x) for x in ordered)
+
+    return True
+
+
 def upsert_lines(rows: "list[LineRow] | list[dict]") -> int:
     """Upsert betting line rows on (player_id, prop_type, bookmaker, game_date).
 
     Idempotent — re-running the job refreshes each book's line in place.
+
+    PrizePicks fantasy-score props get special handling: their alt-line ladder
+    is collapsed to the median (standard) rung via _resolve_fantasy_ladder,
+    accumulating distinct rungs across the day in observed_lines. If that column
+    isn't present yet (pre-migration), the upsert strips observed_lines and
+    retries, so the pipeline keeps working either way.
     """
     if not rows:
         return 0
-    _client().table("lines").upsert(
-        rows, on_conflict="player_id,prop_type,bookmaker,game_date"
-    ).execute()
+
+    _resolve_fantasy_ladder(list(rows))
+
+    client = _client()
+    try:
+        client.table("lines").upsert(
+            rows, on_conflict="player_id,prop_type,bookmaker,game_date"
+        ).execute()
+    except Exception as exc:
+        msg = str(exc)
+        if "observed_lines" in msg and ("PGRST204" in msg or "Could not find" in msg):
+            print(
+                "  WARNING: lines table missing observed_lines column -- "
+                "upserted without it. Run db/migrations/add_observed_lines.sql"
+            )
+            stripped = [
+                {k: v for k, v in r.items() if k != "observed_lines"}
+                for r in rows
+            ]
+            client.table("lines").upsert(
+                stripped, on_conflict="player_id,prop_type,bookmaker,game_date"
+            ).execute()
+        else:
+            raise
     return len(rows)
 
 

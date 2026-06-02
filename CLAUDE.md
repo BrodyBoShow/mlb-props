@@ -1764,6 +1764,66 @@ PrizePicks line on the Fantasy Score board tabs (this session):
   Avila, Ruiz, Lopez) show nothing extra, consistent with other tabs.
   FEATURE_COLS untouched (frontend-only).
 
+PrizePicks fantasy "alt line" bug — store the STANDARD rung (this session):
+- Report: user flagged that PFS/HFS sometimes showed a wrong line (e.g.
+  Shohei Ohtani HFS "Line 4.5" when his real line is ~8.5; Marte/Carroll
+  similarly off). The board faithfully shows lines.line, and the `lines`
+  unique key (player,prop,book,date) allows only ONE prizepicks row per
+  prop/day — so the wrong value was being INGESTED, not mis-displayed.
+- Root cause (probed ParlayAPI live): PrizePicks fantasy-score props ship a
+  goblin/standard/demon ALT-LINE LADDER and ParlayAPI returns a RANDOM rung
+  on each call (confirmed: 3 separate calls seconds apart returned Ohtani
+  4.5 / 8.5 / 8.5; 18 spaced calls enumerated {4.5, 8.5, 13.5}). All rungs
+  report the SAME flat payout (over 100 / under -100; effective -137/-137,
+  impl 57.8%), and `dfs_normalized: true` — so NO field distinguishes the
+  standard from an alt. The old lines.py dedup "keep first row" therefore
+  kept whichever rung the API happened to surface that run, and the 6-7
+  daily crons overwrote it with a new random rung each time.
+- The standard line is the MEDIAN rung (verified: Ohtani 8.5, Trout 6.5,
+  Marte 6.0, Soto 7.0, Carroll 6.5 — all = median of their 3-rung ladder).
+  Rejected alternatives: (a) mode is useless — the dominant rung is random
+  between two; (b) "rung closest to our projection" INVERTS the lean when
+  our model disagrees with PP (Marte proj 9.1, standard 6.0, demon 10.5 ->
+  closest-to-proj picks the demon 10.5 and flips over->under). Median is
+  model-INDEPENDENT and correct.
+- HARD CONSTRAINT: ParlayAPI free tier = 1000 credits/MONTH and EVERY
+  props() call costs 3 credits (measured). The pipeline already spends
+  ~21/day (7 crons x 3). So per-run multi-sampling to enumerate the ladder
+  (~18 calls = 54 credits/run) is financially impossible. The fix had to be
+  FREE — reuse the ONE call each cron already makes and accumulate across
+  the day's runs.
+- Fix (engine + DB, free):
+  * db/schema.sql + db/migrations/add_observed_lines.sql: new
+    `observed_lines text` column on `lines` (comma-joined distinct rungs
+    seen today; NULL for non-fantasy props). MUST be run once in the
+    Supabase SQL editor for the fix to activate.
+  * engine/db.py: _resolve_fantasy_ladder(rows) — for prizepicks fantasy
+    rows, reads the existing row's observed_lines (seeding from the existing
+    `line` for legacy/pre-column rows so it SELF-HEALS from the polluted
+    state), merges this run's just-observed rung into the distinct set, sets
+    line = median(set) rounded to the 0.5 grid, and writes the set back to
+    observed_lines. Model-independent; converges to the true standard as the
+    day's runs enumerate all 3 rungs (simulated: all 6 sample players land
+    on the correct standard within ~5 runs). Mid-day partial-ladder values
+    are estimates, still far better than a random rung.
+  * upsert_lines now calls _resolve_fantasy_ladder first, then upserts with
+    a PGRST204 fallback that strips observed_lines + retries (so the
+    pipeline runs cleanly BEFORE the migration is applied — verified: the
+    read errors with code 42703, _resolve returns False, upsert proceeds
+    single-sample as before).
+  * engine/schemas.py: LineRow gains observed_lines: Optional[str].
+- Frontend: NO change — the board already reads lines.line, which is now the
+  standard. Results grading also reads .line, so future fantasy grades use
+  the standard (already-graded past rows keep whatever rung was caught at
+  grade time; not backfilled).
+- Verified: median math + daily convergence simulated correct; merge wiring
+  unit-tested with a mock client (accumulation, legacy-seed self-heal,
+  non-fantasy untouched); pre-migration fallback confirmed against live DB;
+  all engine modules import clean. FEATURE_COLS untouched.
+- ACTION REQUIRED: run db/migrations/add_observed_lines.sql in Supabase.
+  Until then the pipeline keeps working but fantasy lines stay single-sample
+  (the old random-rung behavior).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 
