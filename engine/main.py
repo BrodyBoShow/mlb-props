@@ -887,6 +887,14 @@ def main() -> None:
         )
         all_projections = pitcher_projections + hitter_projections
 
+        # SELF-HEAL: drop any projection misfiled onto the wrong date (defense in
+        # depth behind the et_today() builder fix). Runs every cron so the daily
+        # slate stays clean automatically — no manual cleanup SQL ever needed.
+        try:
+            db.cleanup_misdated_projections()
+        except Exception as exc:
+            print(f"  self-heal failed ({exc}) -- skipping")
+
         # SHADOW: matchup-expected-K (logged onto strikeouts rows, never the
         # live projection). Decorative + experimental, so any failure is
         # absorbed and never touches the real pipeline.

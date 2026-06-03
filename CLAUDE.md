@@ -3162,8 +3162,30 @@ Stale banner now judged from the VIEWER's local date, not Eastern (this session)
 - VERIFIED: tsc --noEmit clean; npm run build passes (/ 12.9 kB). For the Arizona
   9:34 PM case, June 2 == browserToday -> banner suppressed.
 
+Self-healing misdated-projection guard — no manual cleanup ever (this session):
+- CONTEXT: after the et_today() builder fix, the manual SQL cleanup of the
+  already-misfiled June 3 rows was a one-time chore (I ran it via the client:
+  1800 misdated rows under projection_date 2026-06-03, all referencing June 2
+  game_ids, deleted -> 0; the correct future-preview June 3 games + starters,
+  e.g. SD@PHI 823456 Buehler/Sánchez, were verified intact). The future-preview
+  was never broken — the misdated projections were just overshadowing it.
+- USER wants it to "update automatically every day" with no manual SQL.
+- IMPLEMENTED: db.cleanup_misdated_projections() — pure-Python SELF-HEAL (NO
+  migration). Each run it deletes any projection whose projection_date != its
+  game's Eastern (start_time) date. Scoped to projection_date >= et_today()-1
+  (only current/future rows can be misdated). Paginates projections, maps
+  game_id -> ET date from games.start_time, deletes the mismatches grouped by
+  the wrong date. Fully defensive (try/except, never raises). main.py calls it
+  right after the pitcher+hitter pipelines (before lines/edges), wrapped again.
+- Belt-and-suspenders: the et_today() fix PREVENTS misdating; this self-heal
+  CATCHES anything that ever slips through, on the very next cron — so the daily
+  slate stays clean automatically, zero manual SQL. Normally deletes 0.
+- VERIFIED: py_compile clean (db, main); standalone run removed 0 (June 3
+  already clean, nothing else misdated) — confirms it doesn't touch correct rows
+  and runs without error. Engine-only; takes effect next cron run.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
-WARNING lines (incl. the daily matchup-K + CLV scorecards).
+WARNING lines (incl. the daily matchup-K + CLV scorecards + self-heal count).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

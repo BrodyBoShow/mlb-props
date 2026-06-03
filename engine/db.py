@@ -413,6 +413,100 @@ def delete_projections_for_date_props(
         return 0
 
 
+def cleanup_misdated_projections() -> int:
+    """SELF-HEAL: delete any projection whose projection_date does NOT match its
+    game's Eastern (slate) date.
+
+    The slate date is an ET concept — a projection for game G must carry G's ET
+    date. If an evening timezone hiccup ever misfiles a build onto tomorrow's
+    date (the date.today()-is-UTC bug), this removes it on the very next run, so
+    the daily slate stays clean AUTOMATICALLY with no manual SQL. With the
+    et_today() builder fix in place this normally deletes 0 — it's a standing
+    guard, run every cron.
+
+    Scoped to projection_date >= et_today()-1 (only current/future rows can be
+    misdated; past slates were built when UTC==ET). Fully defensive — any error
+    is caught and logged, never raised into the pipeline. Returns rows deleted.
+    """
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from constants import et_today
+
+    try:
+        client = _client()
+        floor = (et_today() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # 1) at-risk projection rows: (game_id, projection_date), paginated.
+        proj: list[dict] = []
+        frm = 0
+        while True:
+            batch = (
+                client.table("projections")
+                .select("game_id, projection_date")
+                .gte("projection_date", floor)
+                .range(frm, frm + 999)
+                .execute()
+                .data
+                or []
+            )
+            proj += batch
+            if len(batch) < 1000:
+                break
+            frm += 1000
+        if not proj:
+            return 0
+
+        # 2) the games they reference -> ET slate date.
+        gids = list({p["game_id"] for p in proj})
+        et_date: dict[int, str] = {}
+        for i in range(0, len(gids), 200):
+            rows = (
+                client.table("games")
+                .select("game_id, start_time")
+                .in_("game_id", gids[i : i + 200])
+                .execute()
+                .data
+                or []
+            )
+            for g in rows:
+                st = g.get("start_time")
+                if st:
+                    d = datetime.fromisoformat(st.replace("Z", "+00:00")).astimezone(
+                        ZoneInfo("America/New_York")
+                    )
+                    et_date[g["game_id"]] = d.date().isoformat()
+
+        # 3) misdated = projection_date != the game's ET date (skip start_time-less).
+        misdated: dict[str, set] = {}
+        for p in proj:
+            correct = et_date.get(p["game_id"])
+            if correct and p["projection_date"] != correct:
+                misdated.setdefault(p["projection_date"], set()).add(p["game_id"])
+        if not misdated:
+            return 0
+
+        # 4) delete the misfiled rows, grouped by the WRONG date they sit under.
+        deleted = 0
+        for d, gset in misdated.items():
+            gl = list(gset)
+            for i in range(0, len(gl), 100):
+                client.table("projections").delete().eq("projection_date", d).in_(
+                    "game_id", gl[i : i + 100]
+                ).execute()
+            deleted += sum(
+                1 for p in proj if p["projection_date"] == d and p["game_id"] in gset
+            )
+        print(
+            f"  self-heal: removed {deleted} misdated projection rows across "
+            f"{len(misdated)} wrong-date group(s)"
+        )
+        return deleted
+    except Exception as exc:
+        print(f"  misdated-projection self-heal skipped ({exc})")
+        return 0
+
+
 def get_game_log_count_for_date(date_str: str) -> int:
     """Count player_game_logs rows for `date_str`.
 
