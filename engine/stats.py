@@ -267,7 +267,13 @@ def get_pitcher_starts(
         except Exception:
             continue
 
-        if not (start_date <= game_date <= end_date):
+        # STRICT-PRIOR boundary: < end_date (not <=). A projection or grade
+        # anchored to end_date must NEVER include the start ON end_date — the
+        # game being projected/graded itself — so a mid-game rebuild can never
+        # pull an in-progress start into its own projection. (The form helpers
+        # already re-filter < game_date; this makes the baseline builders safe
+        # too. See the projection-freeze hardening.)
+        if not (start_date <= game_date < end_date):
             continue
 
         st = sp.get("stat", {})
@@ -364,7 +370,12 @@ def get_hitter_games(
         except Exception:
             continue
 
-        if not (start_date <= game_date <= end_date):
+        # STRICT-PRIOR boundary: < end_date (not <=). A projection anchored to
+        # end_date must NEVER include the game ON end_date (today's in-progress
+        # game), so a mid-game rebuild can't corrupt the frozen pre-game
+        # projection. Form helpers already re-filter < game_date; this closes
+        # the baseline-builder gap too.
+        if not (start_date <= game_date < end_date):
             continue
 
         st = sp.get("stat", {})

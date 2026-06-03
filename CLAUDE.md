@@ -2933,6 +2933,38 @@ Board result grading now mirrors /results (projection-lean vs line) (same sessio
   proj 1.0". tsc clean; build passes. Frontend-only; engine + FEATURE_COLS (11)
   untouched.
 
+Projections verified frozen pre-game + strict-prior hardening (this session):
+- USER concern: are projections updating mid-game? The board grade must track the
+  PRE-GAME projection (the lean you could have bet); a mid-game rewrite could flip
+  a win to a loss.
+- DIAGNOSED (read-only live-DB probe, since removed): projections ARE frozen
+  pre-game. For NYM@SEA (first pitch 01:40 UTC) all 18 hitter_hits projections
+  were written 22:55 UTC (~3h before), single build, no drift. Slate-wide: 268/270
+  written before first pitch; 0 drift on any starter. The 2 post-first-pitch rows
+  were mid-game FILL-INs for pinch-hitters/subs (new players entering), never
+  starters. MECHANISM: once today's projections exist, every later cron (incl.
+  ones during games) hits the skip path — it does NOT rebuild already-projected
+  players, only fills in newly-posted lineups. So a starter's projection is built
+  once and frozen.
+- LATENT HOLE found + CLOSED: the baseline builders fetch game logs via
+  stats.get_hitter_games / get_pitcher_starts, which filtered
+  `start_date <= game_date <= end_date`. With end_date = proj_date (today), that
+  `<=` INCLUDES today's game. VERIFIED today's in-progress game IS exposed by the
+  MLB gameLog (Julio Rodríguez: today present in raw gameLog = True), so a rare
+  mid-game stale-rebuild could have pulled the in-progress line into a starter's
+  own projection. FIX (engine/stats.py): both fetchers now use STRICT-PRIOR
+  `start_date <= game_date < end_date` — a projection/grade anchored to end_date
+  can NEVER include the game ON end_date. Verified post-fix: get_hitter_games for
+  Julio returns through 2026-06-01 only (0 today-dated games).
+- ZERO impact on normal pre-game values: when a game hasn't started it isn't in
+  the log, so `<` and `<=` are identical; the fix only changes the (now-excluded)
+  in-progress/rebuild case. Form helpers (get_hitter_form / get_pitcher_form /
+  get_pitcher_rest_metrics) ALREADY re-filter `< game_date`, so they're unaffected;
+  grade-time opp-SP stats want strict-prior too (the SP's form ENTERING the game),
+  so `<` is correct there as well. py_compile clean. Engine-only; FEATURE_COLS (11)
+  untouched. (Statcast strikeout path is lower-risk — Savant data lags, so an
+  in-progress start isn't available mid-game; not changed.)
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 
