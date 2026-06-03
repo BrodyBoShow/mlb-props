@@ -3259,6 +3259,35 @@ fix) (this session):
   live-overlay, or engine touched; FEATURE_COLS still 11. tsc clean; npm run
   build passes (/ 13 kB).
 
+Pre-game hitter coverage — two evening crons close the 2-8 PM ET gap (this
+session):
+- USER want: see the HITTERS section pre-game (to analyze hitters), like the
+  live game shows it. STEP-0 diagnosis (read-only, live DB) proved this is a
+  DATA/TIMING issue, NOT a frontend gap: on the 2026-06-03 slate, 6 of 15 games
+  had hitter_hits projections, and those 6 were EXACTLY the games whose lineups
+  were currently posted (fetch_lineups() returned the same 6 game_ids); the
+  check "games with a POSTED lineup but NO hitter projections" = [] — i.e. the
+  board already renders hitters for every game that HAS a posted+built lineup.
+  The 9 without hitters had no lineup posted yet (first pitches 6:40-9:40 PM ET).
+  Hitter projections are per-batter in the posted batting order, so they CANNOT
+  exist until MLB posts the lineup ~60-90 min before first pitch.
+- ROOT CAUSE of the missing pre-game coverage: the cron schedule had a 6-hour
+  hole between the 2 PM ET (18 UTC) and 8 PM ET (0 UTC) runs. Evening lineups
+  post in that window (~4:30-7 PM ET) but nothing built them until 8 PM ET —
+  often AFTER first pitch — so pre-game evening games showed only pitchers.
+- FIX (.github/workflows/refresh.yml ONLY): added two crons — 0 21 * * *
+  (5 PM ET) and 0 23 * * * (7 PM ET) — so the _run_hitter_pipeline fill-in
+  builds newly-posted evening lineups within ~1h of posting. Now 9 runs/day.
+  Capped at TWO extra runs to respect the ParlayAPI credit budget (1000/month,
+  3 credits/props() call): 7 runs ~= 630/mo -> 9 runs ~= 810/mo (safe margin;
+  adding more would risk blowing the budget and breaking LINES ingestion).
+  No engine change needed — the refresh-path hitter fill-in already builds
+  late-posting lineups (documented in the hitter-coverage notes above).
+- Expectation set: hitters appear ~60-90 min before first pitch (when MLB posts
+  the lineup), NOT hours before — an MLB constraint, not ours. The two new runs
+  just make them show up promptly once the lineup is up, instead of waiting for
+  the 8 PM ET run. YAML validated (9 crons parse).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV scorecards + self-heal count).
 

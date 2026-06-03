@@ -2,17 +2,29 @@ name: Refresh Projections
 
 on:
   schedule:
-    # Seven runs/day. First run of the day does a full projection pass;
+    # Nine runs/day. First run of the day does a full projection pass;
     # subsequent runs detect that projections already exist for today
     # and skip the expensive baseline + XGBoost work, just refreshing
     # lines + edges + calibration (and filling in late-posting lineups).
     # See engine/main.py for the gates.
+    #
+    # The 5 PM + 7 PM ET runs close the old 2 PM -> 8 PM ET gap: evening-game
+    # batting lineups post ~60-90 min before first pitch (so ~4:30-7 PM ET for
+    # 6-8 PM starts) and were NOT built until the 8 PM run — often after first
+    # pitch — so pre-game hitter analysis was missing for those games. These two
+    # runs build them via the _run_hitter_pipeline fill-in within ~1h of the
+    # lineup posting. Kept to TWO extra runs to respect the ParlayAPI credit
+    # budget (1000/month, 3 credits/run): 9 runs/day ~= 810/month.
     - cron: "0 1 * * *"    # 9:00 PM ET — pitcher lines night before
     - cron: "0 5 * * *"    # 1:00 AM ET — overnight line updates
     - cron: "0 11 * * *"   # 7:00 AM ET — morning pitcher refresh
     - cron: "0 14 * * *"   # 10:00 AM ET — late pitcher + early hitter lines
     - cron: "0 17 * * *"   # 1:00 PM ET — main hitter lineup window
     - cron: "0 18 * * *"   # 2:00 PM ET — early game final capture
+    - cron: "0 21 * * *"   # 5:00 PM ET — early-evening lineup window (build
+                           #              hitters as evening lineups post)
+    - cron: "0 23 * * *"   # 7:00 PM ET — evening lineup window (pre-game hitter
+                           #              coverage before first pitch)
     - cron: "0 0 * * *"    # 8:00 PM ET — West Coast lineup window (fills in
                            #              late-posting hitter games via the
                            #              _run_hitter_pipeline fill-in)
