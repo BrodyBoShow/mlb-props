@@ -3032,8 +3032,51 @@ Build-readiness audit (this session, for monetization):
   calibration (isotonic/Platt), context models for the non-K props, flip
   matchup-K when the scorecard goes green.
 
+CLV (closing-line-value) tracking — the proof-of-edge engine (this session):
+- WHY: for a monetizable product the one thing that matters is a provable edge.
+  CLV (does the market move TOWARD the model's side between open and close) is the
+  gold-standard LEADING indicator — measurable in WEEKS, before W/L accumulates.
+- DATA GAP found: the `lines` table upserts on
+  (player_id, prop_type, bookmaker, game_date), so it only ever holds the LATEST
+  (closing-ish) line — NO history. CLV is therefore NOT computable retroactively;
+  we have to start capturing the OPENING line going forward (like the matchup-K
+  shadow, this is a "start collecting the proof" build).
+- BUILT (all defensive, ZERO impact on the fragile lines pipeline):
+  * db/migrations/add_line_opens.sql + db/schema.sql: new `line_opens` table
+    (player, prop, book, day -> opening_line + prices + opening_fetched_at),
+    unique on the same 4-key. ACTION REQUIRED: run it in Supabase to start CLV.
+  * engine/db.py record_line_opens(rows): keep-FIRST capture via
+    upsert(..., ignore_duplicates=True) = INSERT ON CONFLICT DO NOTHING, so only
+    the day's EARLIEST line per key is stored; later crons are no-ops. Verified
+    ignore_duplicates IS supported by supabase-py 2.30.1. Catches a missing table
+    (pre-migration) and skips — never touches upsert_lines.
+  * engine/main.py: calls record_line_opens(line_rows) right after upsert_lines
+    (own try/except). Separate table + ignore-duplicates, so it can't affect the
+    live lines.
+  * engine/clv_scorecard.py: daily LOG-ONLY, READ-ONLY scorecard (mirrors the
+    matchup-K one). Joins line_opens (open) + lines (close) + projections (frozen
+    proj) per (player, prop, day), picks the sharpest book present in BOTH
+    (Pinnacle first), and computes lean = proj vs OPENING line, clv_points =
+    (close - open) * (+1 over / -1 under). Reports, over the lines that MOVED, the
+    share that moved toward the model + avg signed CLV, broken out for Pinnacle
+    (the credible signal). Hooked into main() on the full run (after the matchup-K
+    scorecard), try/except wrapped.
+- VERIFIED: py_compile clean (db / main / clv_scorecard); the scorecard degrades
+  gracefully pre-migration ("line_opens read skipped (PGRST205) -- apply
+  add_line_opens.sql" -> "no opening lines captured yet"); ignore_duplicates
+  confirmed in the installed supabase-py. Engine-only; FEATURE_COLS (11) + live
+  projections/edges untouched.
+- HOW IT FILLS IN: after the migration, every cron records opening lines
+  (keep-first); the closing line is the live lines.line; CLV needs the line to
+  MOVE (open != close), so the daily log shows real numbers within days-to-weeks.
+  Positive CLV on Pinnacle = the market is moving toward the model = the receipt
+  you need to charge for picks.
+- ACTION REQUIRED (user): run db/migrations/add_line_opens.sql in the Supabase
+  SQL editor. Until then the pipeline runs cleanly and the CLV log says "no
+  opening lines captured yet".
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
-WARNING lines (incl. the daily matchup-K scorecard / FLIP-READY verdict).
+WARNING lines (incl. the daily matchup-K + CLV scorecards).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

@@ -794,6 +794,51 @@ def upsert_lines(rows: "list[LineRow] | list[dict]") -> int:
     return len(rows)
 
 
+def record_line_opens(rows: "list[LineRow] | list[dict]") -> int:
+    """Capture the OPENING line per (player_id, prop_type, bookmaker, game_date)
+    into the line_opens table — keep-FIRST, so only the earliest observation of
+    the day is stored. Closing-line value (CLV) is then measured as how the live
+    `lines.line` (closing-ish) moved relative to this opening line vs the model's
+    lean.
+
+    Uses upsert with ignore_duplicates=True (INSERT ... ON CONFLICT DO NOTHING),
+    so every later cron's line is ignored and the opening value is preserved.
+    FULLY DEFENSIVE: if the table doesn't exist yet (pre-migration) the call is
+    caught and skipped — it NEVER affects the lines pipeline. Returns the number
+    of opening-line candidates sent (existing keys are no-ops DB-side).
+    """
+    if not rows:
+        return 0
+    opens = [
+        {
+            "player_id":           r["player_id"],
+            "prop_type":           r["prop_type"],
+            "bookmaker":           r["bookmaker"],
+            "game_date":           r["game_date"],
+            "opening_line":        r["line"],
+            "opening_over_price":  r.get("over_price"),
+            "opening_under_price": r.get("under_price"),
+        }
+        for r in rows
+        if r.get("line") is not None
+    ]
+    if not opens:
+        return 0
+    try:
+        _client().table("line_opens").upsert(
+            opens,
+            on_conflict="player_id,prop_type,bookmaker,game_date",
+            ignore_duplicates=True,
+        ).execute()
+        return len(opens)
+    except Exception as exc:
+        print(
+            f"  line-opens capture skipped ({exc}) -- apply "
+            f"db/migrations/add_line_opens.sql to enable CLV tracking"
+        )
+        return 0
+
+
 def get_lines_for_date(date_str: str) -> list[dict]:
     """Return all betting line rows for a given game_date. [] on error/missing.
 

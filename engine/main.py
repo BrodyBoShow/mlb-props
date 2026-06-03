@@ -738,6 +738,16 @@ def _run_lines_and_edges(
         n_lines = db.upsert_lines(line_rows)
         print(f"  upserted {n_lines} lines across {len(lines.BOOKMAKERS)} bookmakers")
 
+        # CLV capture: record the OPENING line (keep-first, separate table) so
+        # closing-line value can be measured later. Fully defensive — a separate
+        # table + ignore-duplicates upsert, so it never affects the lines above.
+        try:
+            n_opens = db.record_line_opens(line_rows)
+            if n_opens:
+                print(f"  recorded opening-line candidates for {n_opens} rows (keep-first)")
+        except Exception as exc:
+            print(f"  line-opens capture failed ({exc}) -- skipping (CLV degrades)")
+
         print("Computing edges...")
         all_lines = db.get_lines_for_date(today_str)
         edge_rows = edge.compute_edges(all_projections, all_lines)
@@ -897,6 +907,15 @@ def main() -> None:
                 matchup_k_scorecard.log_scorecard()
             except Exception as exc:
                 print(f"  matchup-K scorecard failed ({exc}) -- skipping")
+
+            # CLV (closing-line value): does the market move toward the model's
+            # side? Log-only, read-only — the leading proof-of-edge metric.
+            print("Scoring closing-line value (log-only)...")
+            try:
+                import clv_scorecard
+                clv_scorecard.log_scorecard()
+            except Exception as exc:
+                print(f"  CLV scorecard failed ({exc}) -- skipping")
 
         _run_lines_and_edges(name_to_id, all_projections)
         _run_calibration(all_projections)

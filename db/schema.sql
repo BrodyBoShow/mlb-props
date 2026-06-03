@@ -200,6 +200,24 @@ create table if not exists lines (
     unique (player_id, prop_type, bookmaker, game_date)
 );
 
+-- line_opens: the OPENING line per (player, prop, book, day), keep-FIRST. The
+-- `lines` table upserts and so only holds the latest (closing-ish) line; this
+-- table preserves the earliest one so closing-line value (CLV) can be measured.
+-- engine/db.record_line_opens inserts with ON CONFLICT DO NOTHING. See
+-- db/migrations/add_line_opens.sql.
+create table if not exists line_opens (
+    id                   serial primary key,
+    player_id            integer not null,
+    prop_type            text not null,
+    bookmaker            text not null,
+    game_date            date not null,
+    opening_line         numeric not null,
+    opening_over_price   integer,
+    opening_under_price  integer,
+    opening_fetched_at   timestamptz default now(),
+    unique (player_id, prop_type, bookmaker, game_date)
+);
+
 -- edges: model-vs-market comparison per pitcher + prop + day (step 12).
 -- The baseline line is de-vigged (Pinnacle preferred, else a consensus of
 -- traditional books) into a fair over probability; `edge` is the model's over
