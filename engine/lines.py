@@ -386,39 +386,48 @@ def fetch_prop_lines(
     # row falls back to the ladder/median path — no regression.
     pp_standard = _fetch_prizepicks_standard_fantasy(name_to_id, normalized_to_id)
     pp_applied = 0
-    if pp_standard:
-        # Map player_id -> display name from the rows we already have, so the
-        # authoritative rows carry a sensible player_name label.
-        id_to_name = {r["player_id"]: r["player_name"] for r in rows}
-        kept: list[dict] = []
-        for r in rows:
-            if r["prop_type"] in PRIZEPICKS_ONLY_PROPS:
-                key = (r["player_id"], r["prop_type"])
-                if key in pp_standard:
-                    continue   # drop the ParlayAPI alt rung; replaced below
-            kept.append(r)
-        for (player_id, prop_type), line in pp_standard.items():
-            kept.append({
-                "player_id":      player_id,
-                "player_name":    id_to_name.get(player_id, ""),
-                "prop_type":      prop_type,
-                "bookmaker":      "prizepicks",
-                "line":           line,
-                "over_price":     100,
-                "under_price":    -100,
-                "game_date":      game_date_str,
-                # Single value marks this row authoritative -> db.py stores it
-                # verbatim and resets the day's median accumulation to it.
-                "observed_lines": str(line),
-            })
-            pp_applied += 1
-        rows = kept
+    pp_dropped_stale = 0
+    # Fantasy-score lines are sourced ONLY from the authoritative PrizePicks-direct
+    # standard. Any fantasy row PP-direct DOESN'T cover (because it failed — e.g. a
+    # 403 from a non-proxied IP — or doesn't list that player) is DROPPED rather
+    # than ingested: the ParlayAPI ladder rung is a random goblin/standard/demon
+    # value that would otherwise pollute the last-good standard line via db's
+    # median merge (the Ohtani 8.5 -> "8.5,14.5" -> 11.5 bug). Dropping it leaves
+    # the existing DB line untouched — the last-good snapshot — until PP-direct
+    # provides a fresh authoritative value. ALWAYS runs (even when pp_standard is
+    # empty) so a failed PP-direct never corrupts the board.
+    id_to_name = {r["player_id"]: r["player_name"] for r in rows}
+    kept: list[dict] = []
+    for r in rows:
+        if r["prop_type"] in PRIZEPICKS_ONLY_PROPS:
+            if (r["player_id"], r["prop_type"]) not in pp_standard:
+                pp_dropped_stale += 1
+                continue   # uncovered: drop (preserve last-good DB line)
+            continue       # covered: drop the ParlayAPI rung; replaced authoritatively below
+        kept.append(r)
+    for (player_id, prop_type), line in pp_standard.items():
+        kept.append({
+            "player_id":      player_id,
+            "player_name":    id_to_name.get(player_id, ""),
+            "prop_type":      prop_type,
+            "bookmaker":      "prizepicks",
+            "line":           line,
+            "over_price":     100,
+            "under_price":    -100,
+            "game_date":      game_date_str,
+            # Single value marks this row authoritative -> db.py stores it
+            # verbatim (no median merge).
+            "observed_lines": str(line),
+        })
+        pp_applied += 1
+    rows = kept
 
     norm_note = f" [{normalized_matches} via normalized match]" if normalized_matches else ""
     pp_note = f" [{pp_only_dropped} non-PrizePicks fantasy lines dropped]" if pp_only_dropped else ""
     ppd_note = (
         f" [{pp_applied} fantasy lines from PrizePicks-direct standard]"
-        if pp_applied else " [PrizePicks-direct unavailable -- fantasy via ladder/median]"
+        if pp_applied
+        else f" [PrizePicks-direct unavailable -- {pp_dropped_stale} fantasy rows dropped, last-good lines kept]"
     )
     summary = ", ".join(f"{p}: {n}" for p, n in per_prop.items())
     print(f"  fetched {len(rows)} lines ({summary}){norm_note}{pp_note}{ppd_note}")
