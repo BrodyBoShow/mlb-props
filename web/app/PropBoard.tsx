@@ -241,6 +241,11 @@ function ProjectionBadge({
   );
 }
 
+// American odds → implied probability (with vig). −120 → 0.545, +110 → 0.476.
+function americanToImplied(price: number): number {
+  return price < 0 ? -price / (-price + 100) : 100 / (price + 100);
+}
+
 // ── edge / result sub-component ─────────────────────────────────────────────
 // Pure display. Pre-game it shows the line + de-vigged edge (forward-looking).
 // Once the game has started (an `actual` is passed) it switches to the RESULT:
@@ -314,11 +319,31 @@ function EdgeDetail({
     }
 
     return (
-      <div className="mt-1 text-xs tabular-nums">
-        <span className="text-slate-500">Line {pitcher.line}</span>
-        <span className="mx-1.5 text-slate-600">·</span>
-        {edgeNode}
-      </div>
+      <>
+        <div className="mt-1 text-xs tabular-nums">
+          <span className="text-slate-500">Line {pitcher.line}</span>
+          <span className="mx-1.5 text-slate-600">·</span>
+          {edgeNode}
+        </div>
+        {/* De-vig: the market's no-vig fair % for the over vs the book's raw
+            implied % (with vig). The gap is the juice; the edge above is the
+            model vs Fair. Surfaces the de-vig the engine already computes. */}
+        {pitcher.fairOverProb !== undefined && (
+          <div
+            className="mt-0.5 text-[10px] tabular-nums text-slate-500"
+            title="Fair = de-vigged (no-vig) market probability of the over. Book = the over price's raw implied probability (includes the vig)."
+          >
+            Fair{" "}
+            <span className="text-slate-300">{Math.round(pitcher.fairOverProb * 100)}%</span>
+            {pitcher.overPrice !== undefined && (
+              <>
+                <span className="mx-1 text-slate-600">·</span>
+                Book {Math.round(americanToImplied(pitcher.overPrice) * 100)}%
+              </>
+            )}
+          </div>
+        )}
+      </>
     );
   }
 
