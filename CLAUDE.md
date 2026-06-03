@@ -3512,6 +3512,41 @@ Inline detail-on-demand — the All-props UX fix (this session):
   /wind. No engine/model/FEATURE_COLS (11) change. tsc clean; npm run build passes
   (/ 13.9 kB). Committed 0b6cafb.
 
+Season backfill — calibration Stage 1 (this session):
+- GOAL: trends + confidence currently only cover games graded since the engine
+  started (~May 30); user wants the REAL full season. Confirmed fetchable: MLB
+  Stats API gameLog returns each player back to opening day (Judge 59 games to
+  2026-03-25). The split also carries game.gamePk + isHome.
+- HARD CONSTRAINT (user): must NOT mess up the foundation (model learning + edge/
+  prob calibration); "if anything, this should be data to FEED the model" — i.e.
+  flagged + ready for a deliberate Stage-2, never silent.
+- BUILT (foundation-safe):
+  * db/migrations/add_backfilled_flag.sql + schema.sql: backfilled boolean on
+    player_game_logs.
+  * model.train(): EXCLUDES backfilled rows (guard: `if "backfilled" in
+    df.columns` -> no-op pre-migration; drops backfilled=true post) so XGBoost is
+    byte-identical. Edges/CLV/calibration-scorecard read `edges` (backfill has
+    none) -> untouched. ONLY trends + confidence (read all rows) gain the season.
+  * stats.get_pitcher_starts / get_hitter_games: now also return game_id (gamePk)
+    + home_away off the gameLog split (additive; existing callers ignore).
+  * db.insert_backfill_game_logs(): INSERT-ONLY (ON CONFLICT DO NOTHING on
+    player_id,game_id) -> never overwrites a graded row; REFUSES to insert if the
+    backfilled column is missing (won't pollute training).
+  * engine/backfill_logs.py: one-time idempotent script; pulls each projected
+    pitcher/hitter's season log, builds flagged rows (5 pitcher + 6 hitter main
+    actuals + both fantasy scores), batched insert. build_rows(dry_run_player=)
+    for inspection.
+- VERIFIED: dry-run rows correct (Judge 59, Skenes 12; FP math exact — Skenes
+  16 outs+10K-1ER=43, no QS at 16<18); py_compile clean; committed e101759.
+- ACTION REQUIRED (user, one-time): run db/migrations/add_backfilled_flag.sql in
+  Supabase, THEN python engine/backfill_logs.py. Until the migration is applied
+  the script aborts safely (refuses to insert un-flagged rows). After the
+  backfill: verify model.train() row count is IDENTICAL (foundation untouched).
+- STAGE 2 (separate, gated): the grader-replay to populate historical FEATURES
+  (whiff/CSW/opp-K/platoon, strict-prior) -> then MEASURE whether training on the
+  full season improves prediction (holdout/scorecard) BEFORE flipping train() to
+  include backfilled rows. Edges/CLV stay forward-only (no historical odds exist).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count).
