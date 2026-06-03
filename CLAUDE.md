@@ -2699,6 +2699,36 @@ Hitter/pitcher fantasy-score projected Over for ~every player — fixed (this se
   Goes live for the displayed projections + /results grading on the next
   lineups-posted hitter build (cron) — or a manual rebuild.
 
+Fantasy lines corrupted by the ParlayAPI ladder when PP-direct fails — fixed:
+- SYMPTOM (user): some fantasy_score LINES went wrong after a LOCAL python
+  engine/main.py run (e.g. Ohtani standard 8.5 shown as 11.5). NOT caused by the
+  median-projection change (that only touched projections, not lines).
+- ROOT CAUSE: that run logged "PrizePicks-direct unavailable (HTTP 403) via proxy
+  -- ladder/median fallback" — PrizePicks-direct 403s from a non-proxied/blocked
+  IP (works in GitHub Actions via the residential proxy, but not from the user's
+  local machine). With PP-direct down, fantasy rows fell back to the ParlayAPI
+  goblin/standard/demon ladder, and db._resolve_fantasy_ladder MEDIAN-MERGED a
+  random demon rung into the last-good authoritative standard: Ohtani
+  observed_lines "8.5" -> "8.5,14.5" -> median 11.5. Confirmed live (Tucker
+  "5.5,10.5"->8.0, etc.).
+- FIX (engine/lines.py): fantasy-score lines are now sourced ONLY from the
+  authoritative PrizePicks-direct standard. Any fantasy row PP-direct doesn't
+  cover (failed entirely OR doesn't list that player) is DROPPED rather than
+  ingested, so the existing DB line is preserved (last-good snapshot) instead of
+  being polluted. The PP-direct filter ALWAYS runs now (previously gated on
+  `if pp_standard:`, so a total 403 skipped it and let every fantasy row pollute).
+  Every upserted fantasy row now carries an authoritative single-value
+  observed_lines, so the median merge never runs on a fantasy row again.
+  Trade-off: when PP-direct partially covers, ParlayAPI-only players lose a rough/
+  unreliable line in favor of correctness; existing polluted lines self-heal on
+  the next PP-direct-covered run (authoritative overwrite).
+- OPERATIONAL NOTE: running python engine/main.py LOCALLY re-pollutes fantasy
+  lines (PP-direct 403 locally) PRE-fix; POST-fix a local run just drops fantasy
+  rows and keeps last-good. The hitter PROJECTION rebuild (_build_and_upsert_
+  hitters) does NOT fetch lines, so it's line-safe. The median-projection fix
+  currently applies only to the 2 fill-in hitters from that run; the other ~268
+  self-heal on the next fresh-slate full build (or a line-safe projection rebuild).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 
