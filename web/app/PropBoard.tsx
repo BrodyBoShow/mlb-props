@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import DateNav from "./DateNav";
 import FeaturedPlays from "./FeaturedPlays";
 import ParkTag from "./ParkTag";
@@ -34,25 +34,32 @@ export type { ByProp, GameGroup, Pitcher, PropType } from "@/lib/types";
 
 // ── prop metadata ─────────────────────────────────────────────────────────────
 
-// Labels carry a Pitcher/Hitter prefix so the filter tabs are unambiguous —
-// the two "Fantasy Score" props in particular (pitcher vs hitter) are otherwise
-// indistinguishable in the tab strip.
-const PROPS: { key: PropType; label: string; unit: string }[] = [
+// `label` is the long filter-chip text (carries a Pitcher/Hitter prefix so the
+// two "Fantasy Score" props are distinguishable). `short` is the compact chip
+// label used in the all-props game-first matrix.
+const PROPS: { key: PropType; label: string; unit: string; short: string }[] = [
   // pitcher props
-  { key: "strikeouts",            label: "Pitcher Strikeouts",    unit: "K"    },
-  { key: "hits_allowed",          label: "Pitcher Hits Allowed",  unit: "HA"   },
-  { key: "walks",                 label: "Pitcher Walks",         unit: "BB"   },
-  { key: "earned_runs",           label: "Pitcher Earned Runs",   unit: "ER"   },
-  { key: "outs_recorded",         label: "Pitcher Outs Recorded", unit: "outs" },
-  { key: "pitcher_fantasy_score", label: "Pitcher Fantasy Score", unit: "FP"   },
+  { key: "strikeouts",            label: "Pitcher Strikeouts",    unit: "K",    short: "K"    },
+  { key: "hits_allowed",          label: "Pitcher Hits Allowed",  unit: "HA",   short: "HA"   },
+  { key: "walks",                 label: "Pitcher Walks",         unit: "BB",   short: "BB"   },
+  { key: "earned_runs",           label: "Pitcher Earned Runs",   unit: "ER",   short: "ER"   },
+  { key: "outs_recorded",         label: "Pitcher Outs Recorded", unit: "outs", short: "Outs" },
+  { key: "pitcher_fantasy_score", label: "Pitcher Fantasy Score", unit: "FP",   short: "FP"   },
   // hitter props
-  { key: "hitter_hits",           label: "Hitter Hits",           unit: "H"    },
-  { key: "hitter_total_bases",    label: "Hitter Total Bases",    unit: "TB"   },
-  { key: "hitter_rbis",           label: "Hitter RBIs",           unit: "RBI"  },
-  { key: "hitter_runs",           label: "Hitter Runs",           unit: "R"    },
-  { key: "hitter_home_runs",      label: "Hitter Home Runs",      unit: "HR"   },
-  { key: "hitter_fantasy_score",  label: "Hitter Fantasy Score",  unit: "FP"   },
+  { key: "hitter_hits",           label: "Hitter Hits",           unit: "H",    short: "H"    },
+  { key: "hitter_total_bases",    label: "Hitter Total Bases",    unit: "TB",   short: "TB"   },
+  { key: "hitter_rbis",           label: "Hitter RBIs",           unit: "RBI",  short: "RBI"  },
+  { key: "hitter_runs",           label: "Hitter Runs",           unit: "R",    short: "R"    },
+  { key: "hitter_home_runs",      label: "Hitter Home Runs",      unit: "HR",   short: "HR"   },
+  { key: "hitter_fantasy_score",  label: "Hitter Fantasy Score",  unit: "FP",   short: "FP"   },
 ];
+
+const PROP_META = Object.fromEntries(PROPS.map((p) => [p.key, p])) as Record<
+  PropType,
+  { key: PropType; label: string; unit: string; short: string }
+>;
+const PITCHER_PROP_KEYS: PropType[] = PROPS.filter((p) => !HITTER_PROPS.has(p.key)).map((p) => p.key);
+const HITTER_PROP_KEYS: PropType[] = PROPS.filter((p) => HITTER_PROPS.has(p.key)).map((p) => p.key);
 
 // EDGE_THRESHOLD and HITTER_PROPS now live in @/lib/constants — imported above.
 
@@ -60,6 +67,12 @@ const PROPS: { key: PropType; label: string; unit: string }[] = [
 // line. Mirrors NO_LEAN_THRESHOLD in /results so the board's lean direction
 // and the results-page grading agree on what counts as "~Even".
 const LINE_LEAN_THRESHOLD = 0.1;
+
+// Compact numeric formatter: integers stay integer (live actuals, "16"), else
+// one decimal ("6.4").
+function fmt(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
 
 // Map each SIMPLE prop type to the StatLine field it reads. Fantasy-score
 // props are computed across multiple StatLine fields, not mapped 1:1 here —
@@ -349,9 +362,8 @@ function RecentFormDots({ form }: { form: FormDot[] | undefined }) {
 // K% number carries a tone accent: league avg team K rate ~22%, so a high-K
 // lineup (>=24%) is FAVORABLE for a strikeout over (emerald), a contact-heavy
 // lineup (<=20%) is a TOUGHER matchup (amber — not red; it's not "bad", just
-// harder). Rendered on the Strikeouts tab only (where opp K rate is most
-// meaningful and the only prop that carries the value). Renders nothing when
-// kRate is missing — never "Facing a null% lineup".
+// harder). Rendered on the Strikeouts focus only. Renders nothing when kRate
+// is missing — never "Facing a null% lineup".
 function OppContextLine({ kRate }: { kRate: number | null | undefined }) {
   if (kRate === null || kRate === undefined) return null;
 
@@ -380,11 +392,10 @@ function OppContextLine({ kRate }: { kRate: number | null | undefined }) {
   );
 }
 
-// Wind tag line for total-bases cards (hitter_total_bases ONLY). Same arrow +
-// mph + direction + colors as the HR cards (out=green, in=red, cross=slate),
-// rendered card-sized. Returns null when there's no usable wind (calm / unknown
-// bearing / no data) — the game header already carries the static park label, so
-// we show ONLY the wind condition here, not a park fallback.
+// Wind tag line for total-bases cards (hitter_total_bases focus ONLY). Same
+// arrow + mph + direction + colors as the HR cards (out=green, in=red,
+// cross=slate). Returns null when there's no usable wind (calm / unknown
+// bearing / no data) — the game header already carries the static park label.
 function WindCardLine({
   homeTeam,
   windSpeed,
@@ -408,11 +419,7 @@ function WindCardLine({
   );
 }
 
-// ── game header sub-component ────────────────────────────────────────────────
-// Shows the matchup title + a status line beneath: date + live/scheduled/final.
-// `status` is undefined when the live fetch hasn't populated yet (or failed) —
-// in that case we just show the matchup + short date and nothing else, which
-// is the graceful-degrade path.
+// ── game header bits ─────────────────────────────────────────────────────────
 
 function formatShortDate(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
@@ -484,69 +491,186 @@ function StatusLine({ status }: { status: GameStatus | undefined }) {
   return <span>{status.detailedState || "—"}</span>;
 }
 
-// ── per-game edge summary (presentation-only) ────────────────────────────────
-// Scans a game's players for the active prop and returns its single strongest
-// QUALIFYING play + how many qualify. This lets a COLLAPSED game surface its
-// best edge inline and lets the slate be ordered best-edge-first. Pure display
-// math over the already-computed edge/line fields — no edge-model logic here.
+// ── game-first data model ────────────────────────────────────────────────────
+// The DB feeds prop -> game -> [player rows]. To browse GAME-first we invert it
+// into game -> {pitchers, hitters} where each player carries ALL their props.
+// Pure client-side restructure of the existing byProp payload — page.tsx and
+// the queries are untouched; the frontend still does ZERO projection math.
+
+type PlayerRow = {
+  player_id: number;
+  name: string;
+  kind: "pitcher" | "hitter";
+  props: Partial<Record<PropType, Pitcher>>;
+};
+
+type GameView = {
+  game_id: number;
+  matchup: string;
+  startTime: string | null;
+  windSpeed?: number | null;
+  windDirDeg?: number | null;
+  isDome?: boolean | null;
+  pitchers: PlayerRow[];
+  hitters: PlayerRow[];
+};
+
+// Classify one player+prop row's edge/lean — the single source the chips, the
+// collapsed summary, the "has edge" filter, and the hitter ordering all share.
+// Same thresholds EdgeDetail uses, so the matrix and the focused card agree.
+type RowEval = {
+  magnitude: number;
+  qualifies: boolean;
+  direction: "over" | "under" | "even";
+  edge?: number;
+};
+function evalRow(row: Pitcher): RowEval {
+  if (row.line === undefined) return { magnitude: 0, qualifies: false, direction: "even" };
+  if (row.edge !== undefined) {
+    const mag = Math.abs(row.edge);
+    return {
+      magnitude: mag,
+      qualifies: mag > EDGE_THRESHOLD,
+      direction: row.edge > EDGE_THRESHOLD ? "over" : row.edge < -EDGE_THRESHOLD ? "under" : "even",
+      edge: row.edge,
+    };
+  }
+  const diff = row.projection - row.line;
+  const mag = Math.abs(diff);
+  return {
+    magnitude: mag,
+    qualifies: mag > LINE_LEAN_THRESHOLD,
+    direction: diff > LINE_LEAN_THRESHOLD ? "over" : diff < -LINE_LEAN_THRESHOLD ? "under" : "even",
+  };
+}
+
+function playerHasEdge(pl: PlayerRow): boolean {
+  return PROPS.some((p) => {
+    const r = pl.props[p.key];
+    return !!r && evalRow(r).qualifies;
+  });
+}
+
+function playerBestMag(pl: PlayerRow): number {
+  let m = 0;
+  for (const p of PROPS) {
+    const r = pl.props[p.key];
+    if (r) {
+      const e = evalRow(r);
+      if (e.qualifies && e.magnitude > m) m = e.magnitude;
+    }
+  }
+  return m;
+}
+
+function buildGameViews(byProp: ByProp): GameView[] {
+  const games = new Map<number, { meta: GameGroup; players: Map<number, PlayerRow> }>();
+
+  for (const { key: prop } of PROPS) {
+    const kind: "pitcher" | "hitter" = HITTER_PROPS.has(prop) ? "hitter" : "pitcher";
+    for (const g of byProp[prop] ?? []) {
+      let entry = games.get(g.game_id);
+      if (!entry) {
+        entry = { meta: g, players: new Map() };
+        games.set(g.game_id, entry);
+      }
+      for (const p of g.pitchers) {
+        let pr = entry.players.get(p.player_id);
+        if (!pr) {
+          pr = { player_id: p.player_id, name: p.name, kind, props: {} };
+          entry.players.set(p.player_id, pr);
+        }
+        pr.props[prop] = p;
+      }
+    }
+  }
+
+  const out: GameView[] = [];
+  for (const { meta, players } of games.values()) {
+    const pitchers: PlayerRow[] = [];
+    const hitters: PlayerRow[] = [];
+    for (const pr of players.values()) {
+      (pr.kind === "pitcher" ? pitchers : hitters).push(pr);
+    }
+    // Strongest edge first within each section (so the edge plays lead).
+    const byMag = (a: PlayerRow, b: PlayerRow) => playerBestMag(b) - playerBestMag(a);
+    pitchers.sort(byMag);
+    hitters.sort(byMag);
+    out.push({
+      game_id: meta.game_id,
+      matchup: meta.matchup,
+      startTime: meta.startTime,
+      windSpeed: meta.windSpeed,
+      windDirDeg: meta.windDirDeg,
+      isDome: meta.isDome,
+      pitchers,
+      hitters,
+    });
+  }
+  return out;
+}
+
+// ── per-game summary (collapsed row) ─────────────────────────────────────────
 
 type BestPlay = {
   name: string;
+  propShort: string;
   line: number;
-  edge?: number; // undefined for DFS (PrizePicks fantasy) lean-only props
+  edge?: number; // undefined for DFS lean-only props
   direction: "over" | "under" | "even";
 };
 
 type GameSummary = {
   bestPlay: BestPlay | null; // strongest qualifying play (null = none qualify)
-  qualifyingCount: number; // players clearing the edge/lean threshold
-  hasAnyLine: boolean; // any player carries a line at all
-  topMagnitude: number; // strongest |edge|/|lean| — drives the sort
+  qualifyingCount: number;
+  hasAnyLine: boolean;
 };
 
-function summarizeGame(g: GameGroup): GameSummary {
+// Summarize a game for its collapsed row. In "all" mode this scans every prop
+// of every player; focused on a prop, it scans only that prop.
+function summarizeGameView(gv: GameView, focus: PropType | "all"): GameSummary {
   let bestPlay: BestPlay | null = null;
-  let bestQualMag = -1;
-  let topMagnitude = 0;
+  let bestMag = -1;
   let qualifyingCount = 0;
   let hasAnyLine = false;
 
-  for (const p of g.pitchers) {
-    if (p.line === undefined) continue;
+  const consider = (prop: PropType, row: Pitcher) => {
+    if (row.line === undefined) return;
     hasAnyLine = true;
-
-    let magnitude: number;
-    let direction: "over" | "under" | "even";
-    let qualifies: boolean;
-    let edge: number | undefined;
-
-    if (p.edge !== undefined) {
-      // Two-sided book: de-vigged edge drives it all (same thresholds as EdgeDetail).
-      edge = p.edge;
-      magnitude = Math.abs(p.edge);
-      direction =
-        p.edge > EDGE_THRESHOLD ? "over" : p.edge < -EDGE_THRESHOLD ? "under" : "even";
-      qualifies = magnitude > EDGE_THRESHOLD;
-    } else {
-      // DFS fantasy line: lean = proj − line (the exact rule /results grades on).
-      const diff = p.projection - p.line;
-      magnitude = Math.abs(diff);
-      direction =
-        diff > LINE_LEAN_THRESHOLD ? "over" : diff < -LINE_LEAN_THRESHOLD ? "under" : "even";
-      qualifies = magnitude > LINE_LEAN_THRESHOLD;
-    }
-
-    if (magnitude > topMagnitude) topMagnitude = magnitude;
-    if (qualifies) {
+    const e = evalRow(row);
+    if (e.qualifies) {
       qualifyingCount += 1;
-      if (magnitude > bestQualMag) {
-        bestQualMag = magnitude;
-        bestPlay = { name: p.name, line: p.line, edge, direction };
+      if (e.magnitude > bestMag) {
+        bestMag = e.magnitude;
+        bestPlay = {
+          name: row.name,
+          propShort: PROP_META[prop].short,
+          line: row.line,
+          edge: e.edge,
+          direction: e.direction,
+        };
       }
+    }
+  };
+
+  if (focus === "all") {
+    for (const pl of gv.pitchers) for (const p of PITCHER_PROP_KEYS) {
+      const r = pl.props[p];
+      if (r) consider(p, r);
+    }
+    for (const pl of gv.hitters) for (const p of HITTER_PROP_KEYS) {
+      const r = pl.props[p];
+      if (r) consider(p, r);
+    }
+  } else {
+    const players = HITTER_PROPS.has(focus) ? gv.hitters : gv.pitchers;
+    for (const pl of players) {
+      const r = pl.props[focus];
+      if (r) consider(focus, r);
     }
   }
 
-  return { bestPlay, qualifyingCount, hasAnyLine, topMagnitude };
+  return { bestPlay, qualifyingCount, hasAnyLine };
 }
 
 // Default open/closed: a game with a qualifying edge starts EXPANDED (its plays
@@ -571,9 +695,9 @@ function Chevron({ expanded }: { expanded: boolean }) {
 }
 
 // One-line summary shown when a game is collapsed: its single best play inline
-// (name · line · edge/lean) + a "+N more" count. Falls back to a muted
+// (name · prop line · edge/lean) + a "+N more" count. Falls back to a muted
 // "No edge" / "No lines yet" so a collapsed game is never blank.
-function CollapsedSummary({ summary, unit }: { summary: GameSummary; unit: string }) {
+function CollapsedSummary({ summary }: { summary: GameSummary }) {
   const { bestPlay, qualifyingCount, hasAnyLine } = summary;
 
   if (!bestPlay) {
@@ -603,7 +727,7 @@ function CollapsedSummary({ summary, unit }: { summary: GameSummary; unit: strin
     <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-5 text-xs tabular-nums">
       <span className="font-medium text-slate-200">{bestPlay.name}</span>
       <span className="text-slate-500">
-        {bestPlay.line} {unit}
+        {bestPlay.propShort} {fmt(bestPlay.line)}
       </span>
       <span className={`font-semibold ${tone}`}>
         {arrow} {value}
@@ -615,51 +739,237 @@ function CollapsedSummary({ summary, unit }: { summary: GameSummary; unit: strin
   );
 }
 
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <div className="bg-slate-900/40 px-5 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+      {children}
+    </div>
+  );
+}
+
+// ── all-props matrix: one compact chip per (player, prop) ─────────────────────
+// label + projection (or live actual), tinted/badged when the model has an
+// edge. Tapping a chip FOCUSES that prop (switches the filter), which reveals
+// the rich per-prop context (confidence, recent form, sharp agreement, etc.).
+function PropChip({
+  prop,
+  row,
+  live,
+  liveColor,
+  onFocus,
+}: {
+  prop: PropType;
+  row: Pitcher;
+  live: number | undefined;
+  liveColor: string | undefined;
+  onFocus: (p: PropType) => void;
+}) {
+  const meta = PROP_META[prop];
+  const e = evalRow(row);
+
+  let badge: JSX.Element | null = null;
+  let tint = "border-slate-700/70 bg-slate-800/40";
+  if (row.line !== undefined) {
+    if (e.edge !== undefined && e.qualifies) {
+      const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
+      if (e.direction === "over") {
+        badge = <span className="text-emerald-400">▲{signed}</span>;
+        tint = "border-emerald-500/40 bg-emerald-500/10";
+      } else if (e.direction === "under") {
+        badge = <span className="text-red-400">▼{signed}</span>;
+        tint = "border-red-500/40 bg-red-500/10";
+      }
+    } else if (e.edge === undefined && e.qualifies) {
+      // DFS (PrizePicks fantasy) lean — direction only, no de-vigged number.
+      if (e.direction === "over") {
+        badge = <span className="text-emerald-400">▲</span>;
+        tint = "border-emerald-500/30 bg-emerald-500/[0.07]";
+      } else if (e.direction === "under") {
+        badge = <span className="text-red-400">▼</span>;
+        tint = "border-red-500/30 bg-red-500/[0.07]";
+      }
+    }
+  }
+
+  const valueText = live !== undefined ? fmt(live) : fmt(row.projection);
+  const valueColor = liveColor ?? "text-slate-200";
+  const title =
+    `${meta.label}` +
+    `${row.line !== undefined ? ` · line ${row.line}` : " · no line"}` +
+    `${live !== undefined ? ` · live ${fmt(live)}` : ""}` +
+    ` — tap to focus`;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onFocus(prop)}
+      title={title}
+      className={`flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] tabular-nums transition hover:brightness-125 ${tint}`}
+    >
+      <span className="text-slate-500">{meta.short}</span>
+      <span className={`font-semibold ${valueColor}`}>{valueText}</span>
+      {badge}
+    </button>
+  );
+}
+
+function PlayerChipsRow({
+  player,
+  propKeys,
+  gameStats,
+  status,
+  onFocus,
+}: {
+  player: PlayerRow;
+  propKeys: PropType[];
+  gameStats: Map<number, StatLine> | undefined;
+  status: GameStatus | undefined;
+  onFocus: (p: PropType) => void;
+}) {
+  const showActual = status?.state === "live" || status?.state === "final";
+  const isFinal = status?.state === "final";
+  const stat = gameStats?.get(player.player_id);
+  const isHitterKind = player.kind === "hitter";
+
+  const chips = propKeys
+    .map((prop) => ({ prop, row: player.props[prop] }))
+    .filter((c): c is { prop: PropType; row: Pitcher } => !!c.row);
+
+  if (chips.length === 0) return null;
+
+  return (
+    <li className="px-5 py-2.5">
+      <div className="text-sm text-slate-100">{player.name}</div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {chips.map(({ prop, row }) => {
+          const live = showActual ? liveActualFor(prop, stat, !!isFinal) : undefined;
+          const liveColor =
+            live !== undefined ? paceColor(live, row.projection, isHitterKind, status) : undefined;
+          return (
+            <PropChip
+              key={prop}
+              prop={prop}
+              row={row}
+              live={live}
+              liveColor={liveColor}
+              onFocus={onFocus}
+            />
+          );
+        })}
+      </div>
+    </li>
+  );
+}
+
+// ── focused single-prop card (the rich per-prop view, preserved) ─────────────
+// Identical to the old per-prop card: EdgeDetail line, confidence bar, recent
+// form, opp-K context, wind tag, sharp badge, and the live/projection chip.
+function FocusedPlayerCard({
+  row,
+  prop,
+  isHitter,
+  unit,
+  gameStats,
+  status,
+  homeTeam,
+  windSpeed,
+  windDirDeg,
+  isDome,
+}: {
+  row: Pitcher;
+  prop: PropType;
+  isHitter: boolean;
+  unit: string;
+  gameStats: Map<number, StatLine> | undefined;
+  status: GameStatus | undefined;
+  homeTeam: string;
+  windSpeed?: number | null;
+  windDirDeg?: number | null;
+  isDome?: boolean | null;
+}) {
+  const showActual = status?.state === "live" || status?.state === "final";
+  const liveActual = showActual
+    ? liveActualFor(prop, gameStats?.get(row.player_id), status?.state === "final")
+    : undefined;
+
+  return (
+    <li className="flex items-start justify-between px-5 py-3">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-slate-100">{row.name}</span>
+          {!isHitter && <SharpBadge sharp={row.sharpAgreement} />}
+        </div>
+        <EdgeDetail pitcher={row} />
+        <ConfidenceBar confidence={row.confidence} />
+        <RecentFormDots form={row.recentForm} />
+        {prop === "strikeouts" && <OppContextLine kRate={row.oppContext?.kRate} />}
+        {prop === "hitter_total_bases" && (
+          <WindCardLine
+            homeTeam={homeTeam}
+            windSpeed={windSpeed}
+            windDirDeg={windDirDeg}
+            isDome={isDome}
+          />
+        )}
+      </div>
+      <ProjectionBadge
+        pitcher={row}
+        unit={unit}
+        liveActual={liveActual}
+        isHitter={isHitter}
+        status={status}
+      />
+    </li>
+  );
+}
+
 // ── one collapsible game card ────────────────────────────────────────────────
-// Clickable header (chevron + matchup + park/wind tag + status) over EITHER the
-// collapsed summary line OR the full player list. The expanded player list is
-// the exact card layout as before — only the wrapping/collapse is new.
 function GameCard({
-  group: g,
+  gv,
   summary,
   status,
   expanded,
   onToggle,
-  active,
-  unit,
-  isHitter,
+  focus,
   gameStats,
   date,
+  onFocus,
 }: {
-  group: GameGroup;
+  gv: GameView;
   summary: GameSummary;
   status: GameStatus | undefined;
   expanded: boolean;
   onToggle: () => void;
-  active: PropType;
-  unit: string;
-  isHitter: boolean;
+  focus: PropType | "all";
   gameStats: Map<number, StatLine> | undefined;
   date: string;
+  onFocus: (p: PropType) => void;
 }) {
-  // matchup is "Away @ Home" — the home team determines the park. No MLB team
-  // name contains " @ " so the split is safe; "" for a Game-N placeholder.
-  const homeTeam = g.matchup.includes(" @ ") ? g.matchup.split(" @ ")[1] : "";
+  const [showAllHitters, setShowAllHitters] = useState(false);
+
+  const homeTeam = gv.matchup.includes(" @ ") ? gv.matchup.split(" @ ")[1] : "";
   const wc = windClause({
     homeTeam,
-    windSpeed: g.windSpeed,
-    windDirDeg: g.windDirDeg,
-    isDome: g.isDome,
+    windSpeed: gv.windSpeed,
+    windDirDeg: gv.windDirDeg,
+    isDome: gv.isDome,
   });
   const parkShown = !!homeTeam && getParkProfile(homeTeam).direction !== "neutral";
 
-  // Show the live/final actual chip in the same cases as before.
-  const showActual = status?.state === "live" || status?.state === "final";
+  const edgeHitters = gv.hitters.filter(playerHasEdge);
+  const hittersToShow = showAllHitters ? gv.hitters : edgeHitters;
+  const moreHitters = gv.hitters.length - edgeHitters.length;
+
+  const isHitterFocus = focus !== "all" && HITTER_PROPS.has(focus);
+  const focusedPlayers =
+    focus === "all"
+      ? []
+      : (isHitterFocus ? gv.hitters : gv.pitchers).filter((pl) => pl.props[focus]);
+  const focusUnit = focus !== "all" ? PROP_META[focus].unit : "";
 
   return (
     <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50">
-      {/* clickable header — role=button keeps the <h2> heading semantics
-          (a <button> can't legally wrap an <h2>). */}
+      {/* clickable header — role=button keeps the <h2> heading semantics. */}
       <div
         role="button"
         tabIndex={0}
@@ -680,7 +990,7 @@ function GameCard({
           <div className="flex min-w-0 items-start gap-2">
             <Chevron expanded={expanded} />
             <div className="min-w-0">
-              <h2 className="font-semibold text-slate-200">{g.matchup}</h2>
+              <h2 className="font-semibold text-slate-200">{gv.matchup}</h2>
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
                 <span>{formatShortDate(date)}</span>
                 {status && <span className="text-slate-600">·</span>}
@@ -702,57 +1012,83 @@ function GameCard({
             )}
           </div>
         </div>
-        {!expanded && <CollapsedSummary summary={summary} unit={unit} />}
+        {!expanded && <CollapsedSummary summary={summary} />}
       </div>
 
-      {expanded && (
-        <ul className="divide-y divide-slate-800">
-          {g.pitchers.map((p, i) => {
-            const liveActual = showActual
-              ? liveActualFor(
-                  active,
-                  gameStats?.get(p.player_id),
-                  status?.state === "final",
-                )
-              : undefined;
-            return (
-              <li
-                key={`${g.game_id}-${i}`}
-                className="flex items-start justify-between px-5 py-3"
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-slate-100">{p.name}</span>
-                    {/* Sharp badge on pitcher prop tabs only. */}
-                    {!isHitter && <SharpBadge sharp={p.sharpAgreement} />}
-                  </div>
-                  <EdgeDetail pitcher={p} />
-                  <ConfidenceBar confidence={p.confidence} />
-                  <RecentFormDots form={p.recentForm} />
-                  {active === "strikeouts" && (
-                    <OppContextLine kRate={p.oppContext?.kRate} />
-                  )}
-                  {active === "hitter_total_bases" && (
-                    <WindCardLine
-                      homeTeam={homeTeam}
-                      windSpeed={g.windSpeed}
-                      windDirDeg={g.windDirDeg}
-                      isDome={g.isDome}
+      {expanded &&
+        (focus === "all" ? (
+          <div>
+            {gv.pitchers.length > 0 && (
+              <>
+                <SectionLabel>Pitchers</SectionLabel>
+                <ul className="divide-y divide-slate-800/60">
+                  {gv.pitchers.map((pl) => (
+                    <PlayerChipsRow
+                      key={pl.player_id}
+                      player={pl}
+                      propKeys={PITCHER_PROP_KEYS}
+                      gameStats={gameStats}
+                      status={status}
+                      onFocus={onFocus}
                     />
-                  )}
-                </div>
-                <ProjectionBadge
-                  pitcher={p}
-                  unit={unit}
-                  liveActual={liveActual}
-                  isHitter={isHitter}
-                  status={status}
-                />
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                  ))}
+                </ul>
+              </>
+            )}
+            {gv.hitters.length > 0 && (
+              <>
+                <SectionLabel>
+                  {showAllHitters || moreHitters === 0 ? "Hitters" : "Hitters with edges"}
+                </SectionLabel>
+                {hittersToShow.length > 0 && (
+                  <ul className="divide-y divide-slate-800/60">
+                    {hittersToShow.map((pl) => (
+                      <PlayerChipsRow
+                        key={pl.player_id}
+                        player={pl}
+                        propKeys={HITTER_PROP_KEYS}
+                        gameStats={gameStats}
+                        status={status}
+                        onFocus={onFocus}
+                      />
+                    ))}
+                  </ul>
+                )}
+                {moreHitters > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllHitters((v) => !v)}
+                    className="w-full px-5 py-2 text-left text-xs font-medium text-slate-400 transition-colors hover:bg-slate-900 hover:text-slate-200"
+                  >
+                    {showAllHitters
+                      ? "Show fewer hitters"
+                      : edgeHitters.length === 0
+                        ? `Show all ${gv.hitters.length} hitters`
+                        : `Show ${moreHitters} more hitter${moreHitters === 1 ? "" : "s"}`}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        ) : (
+          <ul className="divide-y divide-slate-800">
+            {focusedPlayers.map((pl) => (
+              <FocusedPlayerCard
+                key={pl.player_id}
+                row={pl.props[focus]!}
+                prop={focus}
+                isHitter={isHitterFocus}
+                unit={focusUnit}
+                gameStats={gameStats}
+                status={status}
+                homeTeam={homeTeam}
+                windSpeed={gv.windSpeed}
+                windDirDeg={gv.windDirDeg}
+                isDome={gv.isDome}
+              />
+            ))}
+          </ul>
+        ))}
     </section>
   );
 }
@@ -772,19 +1108,18 @@ export default function PropBoard({
   byProp: ByProp;
   featuredSections?: FeaturedSection[];
 }) {
-  const [active, setActive] = useState<PropType>("strikeouts");
+  // The board is GAME-first now. `focus` is the optional prop lens: "all" shows
+  // every player's full line of chips; a specific prop shows the rich per-prop
+  // card. Defaulting to "all" means you never have to pick a prop to start.
+  const [focus, setFocus] = useState<PropType | "all">("all");
 
-  const activeMeta = PROPS.find((p) => p.key === active)!;
-  const groups = byProp[active] ?? [];
+  // Manual expand/collapse overrides, keyed by `${focus}:${gameId}` so a choice
+  // under one lens never leaks onto another.
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const overrideKey = (gid: number) => `${focus}:${gid}`;
 
-  // Poll the MLB Stats API for live game status. The hook returns an empty
-  // Map until the first response lands and on any failure — render falls back
-  // to the static matchup + date header in those cases.
+  // Poll the MLB Stats API for live game status + box scores (unchanged).
   const liveStatus = useLiveGameStatus(date);
-
-  // Split today's games into live (poll every 60s) vs final (fetch once each)
-  // gamePks. The hook stabilizes both via stringified keys so the effects
-  // only fire when the SET of game ids changes, not on every render.
   const liveGamePks: number[] = [];
   const finalGamePks: number[] = [];
   for (const [gid, s] of liveStatus) {
@@ -793,45 +1128,49 @@ export default function PropBoard({
   }
   const liveStats = useLiveBoxScores(liveGamePks, finalGamePks);
 
-  const isHitter = HITTER_PROPS.has(active);
+  // Invert prop->game->players into game->{pitchers,hitters}; chronological.
+  const games = useMemo(() => buildGameViews(byProp), [byProp]);
+  const ordered = useMemo(
+    () =>
+      [...games].sort((a, b) => {
+        const ta = a.startTime ? Date.parse(a.startTime) : Number.POSITIVE_INFINITY;
+        const tb = b.startTime ? Date.parse(b.startTime) : Number.POSITIVE_INFINITY;
+        return ta - tb;
+      }),
+    [games],
+  );
 
-  // Manual expand/collapse overrides, keyed by `${tab}:${gameId}` so a choice on
-  // one prop tab never leaks onto another (game ids are shared across tabs).
-  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
-  const overrideKey = (gid: number) => `${active}:${gid}`;
+  // In focused mode, only show games that actually have a player for that prop.
+  const visible =
+    focus === "all"
+      ? ordered
+      : ordered.filter((gv) =>
+          (HITTER_PROPS.has(focus) ? gv.hitters : gv.pitchers).some((pl) => pl.props[focus]),
+        );
 
-  // Decorate each game with its edge summary + live status, then order
-  // best-edge-first within bettable → live → final bands. Presentation only —
-  // the edge/line values come pre-computed from the engine.
-  const decorated = groups
-    .map((g) => ({
-      g,
-      summary: summarizeGame(g),
-      status: liveStatus.get(g.game_id),
-    }))
-    .sort((a, b) => {
-      // Chronological by first pitch (the user's preferred order). Games with no
-      // start time (TBD) sink to the end; live games keep their slot in time.
-      const ta = a.g.startTime ? Date.parse(a.g.startTime) : Number.POSITIVE_INFINITY;
-      const tb = b.g.startTime ? Date.parse(b.g.startTime) : Number.POSITIVE_INFINITY;
-      return ta - tb;
-    });
+  const decorated = visible.map((gv) => ({
+    gv,
+    summary: summarizeGameView(gv, focus),
+    status: liveStatus.get(gv.game_id),
+  }));
 
-  const isExpanded = (
-    gid: number,
-    summary: GameSummary,
-    status: GameStatus | undefined,
-  ) => overrides[overrideKey(gid)] ?? defaultExpanded(summary, status);
-
+  const isExpanded = (gid: number, summary: GameSummary, status: GameStatus | undefined) =>
+    overrides[overrideKey(gid)] ?? defaultExpanded(summary, status);
   const allExpanded =
-    decorated.length > 0 &&
-    decorated.every((d) => isExpanded(d.g.game_id, d.summary, d.status));
-
+    decorated.length > 0 && decorated.every((d) => isExpanded(d.gv.game_id, d.summary, d.status));
   const toggleAll = () => {
     const next = { ...overrides };
-    for (const d of decorated) next[overrideKey(d.g.game_id)] = !allExpanded;
+    for (const d of decorated) next[overrideKey(d.gv.game_id)] = !allExpanded;
     setOverrides(next);
   };
+
+  const chipCls = (activeChip: boolean) =>
+    [
+      "shrink-0 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+      activeChip
+        ? "bg-emerald-500 text-slate-950"
+        : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100",
+    ].join(" ");
 
   return (
     <>
@@ -841,35 +1180,42 @@ export default function PropBoard({
       {/* featured plays — three ranked sections with AI insights */}
       <FeaturedPlays sections={featuredSections} />
 
-      {/* prop selector tabs */}
+      {/* prop FILTER — "All props" (game-first matrix) or focus a single prop */}
       <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+        <button onClick={() => setFocus("all")} className={chipCls(focus === "all")}>
+          All props
+        </button>
         {PROPS.map((p) => (
-          <button
-            key={p.key}
-            onClick={() => setActive(p.key)}
-            className={[
-              "shrink-0 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
-              active === p.key
-                ? "bg-emerald-500 text-slate-950"
-                : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100",
-            ].join(" ")}
-          >
+          <button key={p.key} onClick={() => setFocus(p.key)} className={chipCls(focus === p.key)}>
             {p.label}
           </button>
         ))}
       </div>
 
-      {/* edge legend */}
+      {/* legend */}
       <p className="mb-6 text-xs leading-relaxed text-slate-500">
-        Edge = model probability vs. book implied probability.{" "}
-        <span className="text-emerald-400">Positive</span> = model favors the
-        over. Most players have no line until closer to game time.
+        {focus === "all" ? (
+          <>
+            Every player&apos;s full line, grouped by game. Chips highlight model edges (
+            <span className="text-emerald-400">green = over</span>,{" "}
+            <span className="text-red-400">red = under</span>). Tap a chip to focus that prop, or a
+            game to expand.
+          </>
+        ) : (
+          <>
+            Edge = model probability vs. book implied probability.{" "}
+            <span className="text-emerald-400">Positive</span> = model favors the over. Most players
+            have no line until closer to game time.
+          </>
+        )}
       </p>
 
-      {/* game cards — condensed, best-edge-first, collapsible */}
-      {groups.length === 0 ? (
+      {/* games */}
+      {decorated.length === 0 ? (
         <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
-          No {activeMeta.label.toLowerCase()} projections for {date}.
+          {focus === "all"
+            ? `No projections for ${date}.`
+            : `No ${PROP_META[focus].label.toLowerCase()} projections for ${date}.`}
         </div>
       ) : (
         <>
@@ -886,27 +1232,25 @@ export default function PropBoard({
             </button>
           </div>
           <div className="space-y-3">
-            {decorated.map(({ g, summary, status }) => (
+            {decorated.map(({ gv, summary, status }) => (
               <GameCard
-                key={g.game_id}
-                group={g}
+                key={gv.game_id}
+                gv={gv}
                 summary={summary}
                 status={status}
-                expanded={isExpanded(g.game_id, summary, status)}
+                expanded={isExpanded(gv.game_id, summary, status)}
                 onToggle={() =>
                   setOverrides((prev) => ({
                     ...prev,
-                    [overrideKey(g.game_id)]: !(
-                      prev[overrideKey(g.game_id)] ??
-                      defaultExpanded(summary, status)
+                    [overrideKey(gv.game_id)]: !(
+                      prev[overrideKey(gv.game_id)] ?? defaultExpanded(summary, status)
                     ),
                   }))
                 }
-                active={active}
-                unit={activeMeta.unit}
-                isHitter={isHitter}
-                gameStats={liveStats.get(g.game_id)}
+                focus={focus}
+                gameStats={liveStats.get(gv.game_id)}
                 date={date}
+                onFocus={setFocus}
               />
             ))}
           </div>

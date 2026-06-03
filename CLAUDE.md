@@ -2788,13 +2788,49 @@ Board sort reverted to chronological (same session, user follow-up):
   ORDER changed. summarizeGame still computes topMagnitude (now unused by the
   sort, retained for the collapsed summary + any future re-sort). tsc clean;
   build passes.
-- OPEN (bigger ask, not yet built): user feels the prop-FIRST navigation ("pick
-  a prop → see every game's slice of that one prop") is disorganized — the data's
-  natural unit is a PLAYER-IN-A-GAME (carries ~6 projections) but the top-level
-  axis is the metric (12 prop tabs), so a game/player is never shown whole. Next
-  step is to choose an organizing model (game-first with prop as a filter /
-  player-first cards / flat best-bets edge list) and redesign the board around
-  it. Chronological game order is a hard constraint on whatever we pick.
+Game-first board redesign — prop becomes a filter, not the entry point (same session):
+- The "disorganized" follow-up above, BUILT. Root problem: the data's natural
+  unit is a PLAYER-IN-A-GAME (each carries ~6 projections) but navigation was
+  metric-first (12 prop tabs), so a game/player was never shown whole and you
+  tab-hunted to reassemble one entity. Researched the leading tools (Outlier
+  +EV tab, PrizePicks "Discrepancies", Props.cash "EDGE"): all surface value
+  first and never bury the line behind a metric pick. User chose GAME-FIRST.
+- web/app/PropBoard.tsx (full rewrite of the board layer; verbatim sub-components
+  — liveActualFor / paceColor / ProjectionBadge / EdgeDetail / ConfidenceBar /
+  RecentFormDots / OppContextLine / WindCardLine / StatusLine etc. — preserved):
+  * The 12 prop tabs are now a FILTER with an "All props" default (focus state =
+    PropType | "all"). You never pick a prop to start.
+  * buildGameViews(byProp): client-side INVERSION of prop→game→players into
+    game→{pitchers,hitters} where each PlayerRow carries ALL its props. page.tsx
+    + the queries + the ByProp payload are UNTOUCHED — pure frontend restructure,
+    still ZERO projection math in the UI. A player's kind (pitcher/hitter) is
+    inferred from which props it appears under.
+  * ALL-PROPS mode (default): each expanded game shows Pitchers then "Hitters
+    with edges", each player as ONE row of compact PropChips (short label + proj
+    or live actual + edge/lean badge; emerald=over, red=under, neutral=no edge).
+    Hitters default to those with a qualifying edge + a "Show N more hitters"
+    toggle (per-card useState). Tapping a chip FOCUSES that prop.
+  * FOCUSED mode (a specific prop selected): renders the EXACT old rich per-prop
+    card (FocusedPlayerCard) — EdgeDetail line, ConfidenceBar, RecentFormDots,
+    OppContextLine (strikeouts), WindCardLine (total_bases), SharpBadge, live
+    ProjectionBadge. Nothing lost; the deep context just lives one tap in.
+  * Shared evalRow(row) is the single classifier (|edge| vs EDGE_THRESHOLD for
+    two-sided books; |proj−line| vs LINE_LEAN_THRESHOLD for DFS fantasy) feeding
+    the chips, collapsed summary, "has edge" hitter filter, and edge-first
+    in-section ordering.
+  * Games stay CHRONOLOGICAL by start time, collapsible, smart-default-expand
+    (qualifying edge → open; all-even/final → collapsed), Expand/Collapse-all.
+    Collapsed summary now shows the game's best play across ALL props (e.g.
+    "Logan Gilbert · K 6.5 · ▲ +0.49 · +2 more"). Overrides keyed `${focus}:${gid}`.
+- SCOPE: PropBoard.tsx only. Engine + FEATURE_COLS (11) untouched; page.tsx,
+  types.ts, FeaturedPlays, HR composite, sharp/edge logic untouched.
+- VERIFIED: tsc --noEmit clean; npm run build passes. Dev-server DOM checks
+  (2026-06-02 slate): chronological order (SD@PHI first); All-props chip rows
+  render every prop per player (e.g. "K 8 ▲+0.12 · HA 4 ▲+0.18 · ER 2 ▲+0.38 ·
+  Outs 15 · FP 33 ▼") with live actuals + pace color on final/live games;
+  "Pitchers" + "Hitters with edges" sections; tapping a K chip switches focus to
+  Pitcher Strikeouts and renders the full rich cards (Schlittler ◆5/5 OVER Line
+  6.5 ▲+0.19 + "Facing a 20.3% K lineup"; Abbott ◆5/5 UNDER −0.53). Frontend-only.
 
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
