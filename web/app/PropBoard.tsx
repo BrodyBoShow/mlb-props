@@ -791,59 +791,106 @@ function SectionLabel({ children }: { children: string }) {
 // label + projection (or live actual), tinted/badged when the model has an
 // edge. Tapping a chip FOCUSES that prop (switches the filter), which reveals
 // the rich per-prop context (confidence, recent form, sharp agreement, etc.).
+// The chip is PHASE-AWARE — it shows different things before vs during vs after
+// a game (a finished game's pre-game edge arrow is stale; what matters then is
+// actual vs the line and whether the play hit):
+//   * pre-game (live === undefined): projection + the edge/consensus/lean badge,
+//     with a colored border tint on real edges so you can scan for them.
+//   * live: actual-so-far · line (the target), pace-colored, no verdict yet.
+//   * final: actual · line + a ✓/✗ on whether the model's lean won. Color of the
+//     actual = won (emerald) / lost (red) / push or no-lean (slate).
 function PropChip({
   prop,
   row,
   live,
+  isFinal,
   liveColor,
   onFocus,
 }: {
   prop: PropType;
   row: Pitcher;
   live: number | undefined;
+  isFinal: boolean;
   liveColor: string | undefined;
   onFocus: (p: PropType) => void;
 }) {
   const meta = PROP_META[prop];
   const e = evalRow(row);
+  const hasLine = row.line !== undefined;
 
-  let badge: JSX.Element | null = null;
+  let valueText: string;
+  let valueColor = "text-slate-200";
+  let trailing: JSX.Element | null = null;
   let tint = "border-slate-700/70 bg-slate-800/40";
-  if (e.qualifiesEdge && e.edge !== undefined) {
-    // Real-book de-vigged edge — colored chip + signed number (the eye-catcher).
-    const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
-    if (e.direction === "over") {
-      badge = <span className="text-emerald-400">▲{signed}</span>;
-      tint = "border-emerald-500/40 bg-emerald-500/10";
-    } else if (e.direction === "under") {
-      badge = <span className="text-red-400">▼{signed}</span>;
-      tint = "border-red-500/40 bg-red-500/10";
+
+  if (live === undefined) {
+    // ── pre-game (or a player who hasn't accumulated yet): projection + edge ──
+    valueText = fmt(row.projection);
+    if (e.qualifiesEdge && e.edge !== undefined) {
+      // Real-book de-vigged edge — colored chip + signed number (the eye-catcher).
+      const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
+      if (e.direction === "over") {
+        trailing = <span className="text-emerald-400">▲{signed}</span>;
+        tint = "border-emerald-500/40 bg-emerald-500/10";
+      } else if (e.direction === "under") {
+        trailing = <span className="text-red-400">▼{signed}</span>;
+        tint = "border-red-500/40 bg-red-500/10";
+      }
+    } else if (e.qualifiesConsensus && e.edge !== undefined) {
+      // Consensus (synthetic-line) edge — number but MUTED, no tint.
+      const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
+      trailing = (
+        <span className="text-slate-400">
+          {e.direction === "over" ? "▲" : e.direction === "under" ? "▼" : ""}
+          {signed}
+        </span>
+      );
+    } else if (e.qualifiesLean) {
+      // DFS (PrizePicks fantasy) lean — muted ARROW only.
+      if (e.direction === "over") trailing = <span className="text-emerald-400/70">▲</span>;
+      else if (e.direction === "under") trailing = <span className="text-red-400/70">▼</span>;
     }
-  } else if (e.qualifiesConsensus && e.edge !== undefined) {
-    // Consensus (synthetic-line) edge — show the number but MUTED, no tint, so
-    // real-book edges stand out and a big consensus number can't masquerade as
-    // a top play.
-    const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
-    badge = (
-      <span className="text-slate-400">
-        {e.direction === "over" ? "▲" : e.direction === "under" ? "▼" : ""}
-        {signed}
-      </span>
-    );
-  } else if (e.qualifiesLean) {
-    // DFS (PrizePicks fantasy) lean — softest signal: muted ARROW only, no
-    // number and no tint, so it reads as a lean, not a de-vigged edge.
-    if (e.direction === "over") badge = <span className="text-emerald-400/70">▲</span>;
-    else if (e.direction === "under") badge = <span className="text-red-400/70">▼</span>;
+  } else if (isFinal) {
+    // ── final: actual vs line, with a ✓/✗ on whether the model's lean won ──
+    valueText = fmt(live);
+    if (hasLine) {
+      const line = row.line as number;
+      const wentOver = live > line;
+      const wentUnder = live < line;
+      // Did the model's leaned side win? null = push or the model was ~even.
+      let won: boolean | null = null;
+      if (e.direction === "over") won = wentOver ? true : wentUnder ? false : null;
+      else if (e.direction === "under") won = wentUnder ? true : wentOver ? false : null;
+      valueColor =
+        won === true ? "text-emerald-400" : won === false ? "text-red-400" : "text-slate-200";
+      trailing = (
+        <>
+          <span className="text-slate-500">· {fmt(line)}</span>
+          {won === true && <span className="text-emerald-400">✓</span>}
+          {won === false && <span className="text-red-400">✗</span>}
+        </>
+      );
+    } else {
+      // No line — fall back to model accuracy (actual vs projection).
+      valueColor =
+        live > row.projection
+          ? "text-emerald-400"
+          : live < row.projection
+            ? "text-red-400"
+            : "text-slate-200";
+    }
+  } else {
+    // ── live: actual so far, pace-colored, line shown muted as the target ──
+    valueText = fmt(live);
+    valueColor = liveColor ?? "text-slate-200";
+    if (hasLine) trailing = <span className="text-slate-500">· {fmt(row.line as number)}</span>;
   }
 
-  const valueText = live !== undefined ? fmt(live) : fmt(row.projection);
-  const valueColor = liveColor ?? "text-slate-200";
   const title =
     `${meta.label}` +
-    `${row.line !== undefined ? ` · line ${row.line}` : " · no line"}` +
-    `${row.edge !== undefined && row.bookmaker ? ` · ${row.bookmaker}` : ""}` +
-    `${live !== undefined ? ` · live ${fmt(live)}` : ""}` +
+    `${hasLine ? ` · line ${row.line}` : " · no line"}` +
+    `${row.edge !== undefined && row.bookmaker ? ` (${row.bookmaker})` : ""}` +
+    `${live !== undefined ? ` · actual ${fmt(live)}` : ` · proj ${fmt(row.projection)}`}` +
     ` — tap to focus`;
 
   return (
@@ -855,7 +902,7 @@ function PropChip({
     >
       <span className="text-slate-500">{meta.short}</span>
       <span className={`font-semibold ${valueColor}`}>{valueText}</span>
-      {badge}
+      {trailing}
     </button>
   );
 }
@@ -898,6 +945,7 @@ function PlayerChipsRow({
               prop={prop}
               row={row}
               live={live}
+              isFinal={!!isFinal}
               liveColor={liveColor}
               onFocus={onFocus}
             />

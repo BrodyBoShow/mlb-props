@@ -2868,6 +2868,33 @@ Game-first board — edge classification fix (same session, from user screenshot
   proper Poisson/empirical over-prob (or calibrated confidence) is the real fix —
   separate engine task, out of scope for the board display.
 
+Phase-aware chips — final games show actual vs line + hit/miss (same session):
+- USER: on a FINISHED game the all-props chip "just shows what actually happened"
+  with no projection/line, so you can't tell how it did vs the line; and a final
+  game should look different from one that hasn't started. The pre-game edge arrow
+  is also stale once the game's over.
+- FIX (PropBoard.tsx PropChip — now PHASE-AWARE off `live`/`isFinal`):
+  * pre-game (live === undefined): projection + edge/consensus/lean badge, colored
+    border tint on real edges (UNCHANGED — forward-looking scan view).
+  * live (live !== undefined, !isFinal): "K 5 · 6.5" — actual-so-far · line (the
+    target), pace-colored, no verdict yet.
+  * final (isFinal): "K 8 · 6.5 ✓" — actual · line + a ✓/✗ on whether the model's
+    LEAN won. Actual colored emerald=won / red=lost / slate=push-or-no-lean. The
+    two numbers show over/under at a glance; ✓/✗ + color give the betting result
+    without a third number. No line → "K 8" colored by actual-vs-projection.
+  PlayerChipsRow passes isFinal; win/loss uses evalRow(row).direction (the
+  pre-game lean still on the row) vs actual-vs-line, same rule /results grades on.
+  Chip title (tooltip): "<prop> · line X (book) · actual N".
+- VERIFIED (dev server, 2026-06-02 SD@PHI final 2-3): Aaron Nola K 8·5.5 ✓ (over
+  lean hit), HA 4·5.5 ✗ (over lean missed), BB 0·1.5 (no lean → no verdict), ER
+  2·2.5 ✗, FP 33·29.5 ✗ (under lean lost); Bryce Harper all ✓ (big game), Schwarber
+  all ✗ (0-fer); no-line props (RBI/R) show actual only. Reads clean, not congested
+  (≈3 chips/row at narrow width). tsc clean; build passes. Frontend-only; engine +
+  FEATURE_COLS (11) untouched.
+- POSSIBLE follow-up (not done): scheduled chips still don't show the line number
+  (proj + edge only; line is in the focus card / tooltip). Could add it but it's a
+  3rd element — left out to avoid pre-game congestion.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 
