@@ -1077,18 +1077,51 @@ def upsert_edges(rows: "list[EdgeRow] | list[dict]") -> int:
 
 
 def update_confidences(rows: list[dict]) -> int:
-    """Update the confidence column for existing projection rows.
+    """UPDATE the confidence column on EXISTING projection rows (never inserts).
 
     Each row must contain: game_id, player_id, prop_type, projection_date,
-    confidence. PostgREST only sets the columns present in the payload, so
-    the projection value and updated_at are left untouched.
+    confidence. We previously used an UPSERT, but that INSERTS when a confidence
+    row's key doesn't match a current projection — and the insert carries no
+    `projection` value, violating the NOT NULL constraint. That happens whenever
+    a confidence key is stale: the calibration step injects today's
+    projection_date, so a skipped pitcher whose stored projection has an OLDER
+    date (or a since-changed game_id) yields a key with no matching row.
 
-    Re-runs are safe — the upsert resolves on the composite PK and only
-    writes the confidence value.
+    Fix: a per-row UPDATE (the same update-only pattern update_matchup_expected_k
+    uses). A non-matching key updates 0 rows — a harmless no-op — so a stale
+    confidence key can never crash the pipeline. Bulk-upsert fast path first;
+    only fall back to per-row when that path would have inserted.
     """
     if not rows:
         return 0
-    _client().table("projections").upsert(
-        rows, on_conflict="game_id,player_id,prop_type,projection_date"
-    ).execute()
-    return len(rows)
+    client = _client()
+    try:
+        # Fast path: when every key matches a live projection, one statement.
+        client.table("projections").upsert(
+            rows, on_conflict="game_id,player_id,prop_type,projection_date"
+        ).execute()
+        return len(rows)
+    except Exception as exc:
+        # A non-matching key made the upsert try to INSERT a null-projection row.
+        # Roll back to per-row UPDATE so the valid rows still land and the
+        # stale key is skipped instead of crashing the run.
+        print(
+            f"  confidence bulk write hit a stale key ({str(exc)[:70]}) -- "
+            f"per-row UPDATE fallback"
+        )
+        updated = 0
+        for r in rows:
+            try:
+                (
+                    client.table("projections")
+                    .update({"confidence": r["confidence"]})
+                    .eq("game_id", r["game_id"])
+                    .eq("player_id", r["player_id"])
+                    .eq("prop_type", r["prop_type"])
+                    .eq("projection_date", r["projection_date"])
+                    .execute()
+                )
+                updated += 1
+            except Exception:
+                pass
+        return updated

@@ -1005,7 +1005,12 @@ def main() -> None:
                 print(f"  calibration scorecard failed ({exc}) -- skipping")
 
         _run_lines_and_edges(name_to_id, all_projections)
-        _run_calibration(all_projections)
+        # Confidence calibration is a display enhancement — never let it sink the
+        # run (the projections/lines/edges above are already written).
+        try:
+            _run_calibration(all_projections)
+        except Exception as exc:
+            print(f"  calibration failed ({exc}) -- skipping (non-fatal)")
 
         # Future-slate previews are decorative (powers the
         # "tomorrow's slate" cards on the frontend) so any failure
