@@ -3561,9 +3561,47 @@ Season backfill — calibration Stage 1 (this session):
   full season improves prediction (holdout/scorecard) BEFORE flipping train() to
   include backfilled rows. Edges/CLV stay forward-only (no historical odds exist).
 
+STAGE 2 — RESUME PLAN (feed the backfilled season to the MODEL, validated):
+- TRIGGER: user says "continue Stage 2". Fully resumable — all state is in git +
+  this file + the DB (16,662 backfilled rows already present, flagged
+  backfilled=true, currently EXCLUDED from train() by the foundation guard).
+- GOAL: decide whether training XGBoost on the backfilled season improves K
+  prediction, and ONLY THEN flip train() to include backfilled rows. Never flip
+  without a measured improvement.
+- WHAT THE BACKFILLED ROWS HAVE: actual_strikeouts (+ other actuals). They do NOT
+  have the stored context features (opp_k_rate, whiff/csw, velo, platoon, park,
+  lineup_lhh) NOR home_away / days_rest. NOTE train() COMPUTES last5_k_rate /
+  last30_k_rate at train time from the actual_strikeouts sequence (rolling
+  shift(1)), so backfilled rows DO contribute rolling-rate signal; the stored
+  Statcast features impute to constants for them.
+- STEP A — VALIDATION HARNESS (read-only, NO train() change, zero model risk):
+  new engine/validate_backfill.py. Time-based holdout: hold out the most recent
+  ~25% of GRADED pitcher games as TEST. Train model A on the rest (graded-only);
+  train model B on the rest + all backfilled rows dated BEFORE the test cutoff
+  (no leakage). Compare RMSE (and/or the calibration Brier) on the held-out
+  GRADED test set. Reuse train()'s feature engineering (extract it or replicate
+  the rolling-rate + impute logic) but do NOT modify the live train(). Report:
+  does B beat A?
+- STEP B — DECISION:
+  * B clearly beats A: add home_away (+ days_rest) to the backfill for is_home
+    signal (re-run backfill builder w/ home_away, or UPDATE the flagged rows),
+    re-validate, THEN flip train() to INCLUDE backfilled rows (relax the
+    foundation guard) — the deliberate, measured flip. Keep the calibration
+    scorecard watching after.
+  * B ~ A or worse: the cheap backfill doesn't help (imputed Statcast features
+    dilute). Pursue 2b — GRADER-REPLAY: parameterize grade.py by an arbitrary
+    date, replay opening-day -> May-29 to compute the REAL features (whiff/csw/
+    opp-K/platoon, strict-prior) INTO the backfilled rows, then re-validate.
+    Heavy (Statcast per start, ~hours).
+- SAFETY: Step A is a separate read-only script — cannot touch the live model.
+  The Step-B flip is the ONLY model change and is gated on a measured win. The
+  foundation guard (train() excludes backfilled) stays until that flip. Edges/CLV
+  stay forward-only (no historical odds).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
-self-heal count + lined-hitter coverage count).
+self-heal count + lined-hitter coverage count). PAUSED MID-STAGE-2: resume with
+"continue Stage 2" -> start at STEP A (engine/validate_backfill.py).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
