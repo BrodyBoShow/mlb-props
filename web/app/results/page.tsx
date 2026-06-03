@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
+import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
 import { ALL_PROP_TYPES, FEATURED_MIN_LINE, MIN_LINE, REAL_BOOKS, TRACKER_PROPS } from "@/lib/constants";
 import type {
   EvaluatedResult,
@@ -208,6 +208,12 @@ async function getResults(): Promise<{
   // N_books × N_days rows, well over 1000 for any non-trivial history.
   type TrackedFromRow = { prop_type: string; game_date: string };
 
+  // Resolve the player_game_logs actual_* columns that actually exist (drops any
+  // whose migration is still pending) so one un-applied migration can't blank
+  // the page. Reused by both the 7-day and 42-day log reads below.
+  const safeLogCols = await resolveExistingColumns(supabase, "player_game_logs", Object.values(ACTUAL_COLUMN));
+  const logSelect = "player_id, game_date, " + safeLogCols.join(", ");
+
   const [projData, lineData, logData, trackedFromRows, edgeData] = await Promise.all([
     fetchAllPages<ProjectionRow>(
       (from, to) =>
@@ -244,9 +250,7 @@ async function getResults(): Promise<{
       (from, to) =>
         supabase
           .from("player_game_logs")
-          .select(
-            "player_id, game_date, " + Object.values(ACTUAL_COLUMN).join(", "),
-          )
+          .select(logSelect)
           .gte("game_date", startDate)
           .lte("game_date", endDate)
           .range(from, to) as unknown as PromiseLike<{
@@ -592,7 +596,7 @@ async function getResults(): Promise<{
       (from, to) =>
         supabase
           .from("player_game_logs")
-          .select("player_id, game_date, " + Object.values(ACTUAL_COLUMN).join(", "))
+          .select(logSelect)
           .gte("game_date", trendStart)
           .lte("game_date", endDate)
           .range(from, to) as unknown as PromiseLike<{

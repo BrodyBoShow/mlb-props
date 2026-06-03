@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { fetchAllPages, getSupabaseClient } from "@/lib/supabase";
+import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
 import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
 import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType } from "@/lib/types";
@@ -1022,10 +1022,15 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   const allFeaturedPlays = [...pitchingPlays, ...hittingPlays, ...hrMatchups];
   const featuredPlayerIds = [...new Set(allFeaturedPlays.map((p) => p.playerId))];
   if (featuredPlayerIds.length > 0) {
-    const cols = [
-      "player_id",
-      ...new Set(Object.values(FEATURED_ACTUAL_COL)),
-    ].join(", ");
+    // Drop any not-yet-migrated actual_* column so a pending migration can't
+    // 42703 the whole graded-counts read (which would zero every featured
+    // play's history). Mirrors /results.
+    const actualCols = await resolveExistingColumns(
+      supabase,
+      "player_game_logs",
+      [...new Set(Object.values(FEATURED_ACTUAL_COL))],
+    );
+    const cols = ["player_id", ...actualCols].join(", ");
     const { data: gradeRows } = await supabase
       .from("player_game_logs")
       .select(cols)

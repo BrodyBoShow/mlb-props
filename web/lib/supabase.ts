@@ -38,6 +38,42 @@ const PAGE = 1000;
 //
 // Previously inlined in both web/app/page.tsx and web/app/results/page.tsx;
 // hoisted here so a future page can paginate Supabase reads with one import.
+// PostgREST 400s the ENTIRE select when ANY named column doesn't exist (code
+// 42703) — it does NOT silently skip the unknown column. So naming a column
+// whose migration hasn't been applied yet wipes the whole read and can blank a
+// page. This probes `table` and returns the subset of `desired` columns that
+// actually exist, dropping any not-yet-migrated column (mirrors the engine's
+// PGRST204 strip-and-retry). A pending migration then degrades to "that one
+// column is absent" instead of taking the page down. `probeOnly` columns are
+// included in the probe (they're known to exist, e.g. player_id) but never
+// returned. On any non-missing-column error the full `desired` set is returned
+// so the real query behaves exactly as it would have without the probe.
+export async function resolveExistingColumns(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  table: string,
+  desired: string[],
+  probeOnly: string[] = ["player_id"],
+): Promise<string[]> {
+  let cols = [...desired];
+  for (let attempt = 0; attempt <= desired.length; attempt++) {
+    if (cols.length === 0) break;
+    const { error } = await supabase
+      .from(table)
+      .select([...probeOnly, ...cols].join(", "))
+      .limit(1);
+    if (!error) return cols;
+    const msg = (error as { message?: string })?.message ?? String(error);
+    const missing = msg.match(/(\w+) does not exist/)?.[1];
+    if (!missing || !cols.includes(missing)) {
+      console.log(`[supabase] resolveExistingColumns(${table}): unhandled error, using full set — ${msg}`);
+      break;
+    }
+    console.log(`[supabase] ${table}.${missing} not migrated yet — excluded from read`);
+    cols = cols.filter((c) => c !== missing);
+  }
+  return cols;
+}
+
 export async function fetchAllPages<T>(
   build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
   label = "paginate",
