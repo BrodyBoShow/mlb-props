@@ -3359,6 +3359,41 @@ Calibration scorecard — measure before correcting (this session):
   pitcher props are already ~calibrated. Verified: py_compile OK; scorecard runs
   read-only end-to-end; FEATURE_COLS still 11; no projection/edge math touched.
 
+Calibration step 2 INVESTIGATED -> NOT BUILT (the centering fix would HARM)
+(this session):
+- Asked to build the hitter projection-centering fix. DIAGNOSED the mechanism
+  first (the right discipline) and it KILLED the fix — three findings:
+  1. Projection is NOT high. mean(model_proj) vs mean(actual): hitter_total_bases
+     1.46 vs 1.97 (projBias -0.51), hitter_hits 0.83 vs 0.94 (-0.11), rbis/runs
+     also negative. Projections are if anything slightly LOW, so "center down"
+     would have made calibration WORSE, not better.
+  2. The scorecard's over-bias was 100% PRE-POISSON. The Poisson fix (de86179)
+     landed 2026-06-03 03:39 UTC; every graded pair in the 180-day window is
+     pre-fix (post-fix games aren't graded yet), so it stored the OLD
+     normal-approximation prob. Split by era: pre-Poisson ALL gap +0.34; post:
+     no graded data yet.
+  3. The current Poisson code is sane: stored model_over_prob on the latest slate
+     EXACTLY matches a fresh poisson.sf(floor(line), proj) recompute, and
+     proj~=line -> ~0.5 (proj 1.6/line 1.5 -> 0.48; 1.7 -> 0.51).
+- ROOT-CAUSE: the scorecard was reading the STALE stored edges.model_over_prob,
+  so it reported an already-fixed bug that would persist for months until old
+  rows aged out of the window.
+- FIX (calibration_scorecard.py only): recompute P(over) FRESH from the stored
+  projection + line via the live edge._model_over_prob, so the scorecard measures
+  the CURRENT model on the whole graded history at once. Re-run on the same 1535
+  pairs: POOLED gap +0.29 -> -0.02, Brier 0.357 -> 0.228 (now BELOW base 0.242 =
+  informative). hitter_hits 0.47/0.50, hitter_total_bases 0.46/0.46,
+  hitter_runs/HR all well-calibrated; reliability curves track the diagonal. The
+  Poisson fix ALREADY solved the hitter over-bias.
+- RESIDUALS to WATCH (not fix — thin n, and they're UNDER not over, so NOT a
+  centering-down candidate): strikeouts -0.12 (n=63), earned_runs -0.18 (n=50);
+  flat/noisy reliability, likely small-sample + selection. Let them accumulate.
+- NET: no projection/baseline/edge code changed; the only change was making the
+  scorecard honest (measure the live model). The hitter centering fix was
+  correctly NOT built — it would have harmed a model that's already calibrated.
+  Next calibration step is now "wait for post-Poisson graded data + watch the
+  two under-biased pitcher props," NOT a projection change. FEATURE_COLS 11.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count).
