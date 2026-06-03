@@ -9,14 +9,19 @@ Baseline ("fair") probability source, in priority order:
      their individual de-vigged over probabilities.
   3. Neither available -> skip this projection (no edge row emitted).
 
-Model over probability uses a normal approximation around the projection
-(std = projection * 0.35) until calibrated confidence scores accumulate.
+Model over probability uses a Poisson survival function for the integer count
+props (the correct distribution for counts — sane for low-mean props like HR,
+where the old normal approximation overstated the over) and a normal
+approximation for the continuous fantasy-score props, until calibrated
+confidence scores accumulate.
 Positive edge = the model thinks the over is more likely than the book implies.
 """
 
 from typing import TYPE_CHECKING
 
-from scipy.stats import norm
+import math
+
+from scipy.stats import norm, poisson
 
 from constants import MIN_STD, PROP_CV
 
@@ -65,13 +70,33 @@ def _devig_over_prob(over_price, under_price) -> float | None:
     return over_imp / total
 
 
-def _model_over_prob(projection: float, line: float) -> float:
-    """P(actual >= line) under a normal approximation around the projection.
+def _model_over_prob(projection: float, line: float, prop_type: str | None = None) -> float:
+    """P(actual > line) given the model's projection.
 
-    Uses a 0.5 continuity correction since prop outcomes are integers.
+    Integer COUNT props (strikeouts, hits, total bases, HR, ...) use the POISSON
+    survival function — the correct distribution for non-negative integer
+    outcomes, and critically SANE for low-mean props. The old normal
+    approximation (std = projection * 0.35) badly overstated P(over) for small
+    counts: a HR projected 1.0 vs a 0.5 line read 0.98 (Poisson gives 0.63),
+    which is exactly what inflated the displayed HR / total-bases edges to
+    implausible +0.5 .. +0.85 values.
+
+    Over wins when actual > line; for a half-point line L the smallest winning
+    integer is floor(L)+1, so P(over) = P(X >= floor(L)+1) = poisson.sf(floor(L)).
+
+    Fantasy-score props are a continuous points total (not a count), so they keep
+    the normal approximation. They never yield a two-sided de-vigged edge anyway
+    (DFS-only line), so that branch is effectively defensive.
+
+    (Poisson assumes variance == mean; real counts are mildly over-dispersed, so a
+    negative binomial would be marginally better — a future refinement once
+    calibration data accumulates. Poisson is the right first correction.)
     """
-    std = max(projection * PROP_CV, MIN_STD)
-    return float(1.0 - norm.cdf(line - 0.5, loc=projection, scale=std))
+    if prop_type and prop_type.endswith("fantasy_score"):
+        std = max(projection * PROP_CV, MIN_STD)
+        return float(1.0 - norm.cdf(line - 0.5, loc=projection, scale=std))
+    mu = max(projection, 1e-6)  # Poisson mean must be > 0
+    return float(poisson.sf(math.floor(line), mu))
 
 
 def _fair_over_prob(book_lines: dict) -> tuple[str, dict, float] | None:
@@ -157,7 +182,7 @@ def compute_edges(
         source_book, source_row, fair_over_prob = baseline
         line = float(source_row["line"])
         model_proj = float(proj["projection"])
-        model_over_prob = _model_over_prob(model_proj, line)
+        model_over_prob = _model_over_prob(model_proj, line, prop_type)
         edge = model_over_prob - fair_over_prob
 
         edges.append({

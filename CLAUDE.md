@@ -2992,6 +2992,46 @@ Matchup-K daily scorecard — log-only flip gate (this session):
   untouched. Engine-only; takes effect on the next FULL cron run (the daily log
   line). _validate_matchup_k.py kept as the verbose manual deep-dive.
 
+Poisson over-probability — kills inflated low-count edges (this session):
+- MONETIZATION-PREP correctness fix. edge._model_over_prob used a NORMAL
+  approximation (std = projection * 0.35) for P(over). For low-mean COUNT props
+  (HR, RBI, runs, TB) that math is just wrong and massively overstated the over:
+  a HR projected 1.0 vs a 0.5 line read P(over)=0.977 → inflated, implausible
+  +0.5..+0.88 "edges" the board would have sold a paying user.
+- FIX (engine/edge.py): integer count props now use the POISSON survival
+  function — over wins when actual > line, so for a half-point line L,
+  P(over) = P(X >= floor(L)+1) = poisson.sf(floor(L), mu). prop_type threaded
+  into _model_over_prob (it was already in scope in compute_edges). Fantasy-score
+  props (continuous points, never a two-sided edge anyway) keep the normal approx.
+- VERIFIED on live edges (read-only old-vs-new): HR 1.0/0.5 MOP 0.977→0.632;
+  TB 2.0/1.5 0.923→0.594; K 6.0/5.5 0.683→0.554 (higher means barely move);
+  worst real cases hitter_rbis 0.7/0.5 +0.877→+0.462; a real pinnacle TB edge
+  +0.55→+0.22 (still real, now believable). Across 719 edges with |old edge|>=0.30,
+  avg |edge| 0.458 → 0.116. py_compile clean.
+- IMPACT: takes effect on the next cron run (edges recompute). The board will
+  show FEWER green edges — correctly, because most of the big ones were artifacts.
+  Existing edge rows persist until overwritten. Frontend untouched (reads the
+  recomputed edges). FEATURE_COLS (11) untouched.
+- SEPARATE known issue, NOT fixed here: consensus 0.5-line hitter_rbis/runs still
+  carry an implausibly low fair_over_prob (base-rate junk from the one-sided
+  de-vig) — these are ALREADY muted on the board (consensus) + excluded from
+  Featured Plays + /results, so they don't reach a paying user as "edges". A
+  negative-binomial (over-dispersed) model_over_prob is a future refinement once
+  calibration data accumulates.
+
+Build-readiness audit (this session, for monetization):
+- Migration audit (read-only, since removed): 13/13 column-adding migrations
+  APPLIED. player_game_logs has all 81 columns (every data-foundation +
+  context-feature col present, prefixed pitcher_*/hitter_*). All 11 FEATURE_COLS
+  resolve (last30_k_rate/is_home are derived at train time, not stored). Nothing
+  dark, nothing for the user to run.
+- Prioritized build to-do recorded: (1) DONE — Poisson edges above; (2) CLV
+  (closing-line-value) tracking as the fastest credible proof of edge for the
+  paid product; (3) line-data reliability (PRIZEPICKS_PROXY_URL in CI; ParlayAPI
+  credit budget); (4) pitcher-ID resolution hardening; (5) gated/later —
+  calibration (isotonic/Platt), context models for the non-K props, flip
+  matchup-K when the scorecard goes green.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K scorecard / FLIP-READY verdict).
 
