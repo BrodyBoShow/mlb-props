@@ -2,7 +2,7 @@ import Link from "next/link";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
 import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
-import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType } from "@/lib/types";
+import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType, Trends, TrendWindow } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
 import LiveUpdated from "./LiveUpdated";
@@ -66,6 +66,25 @@ const SPARK_ACTUAL_COL: Partial<Record<PropType, string>> = {
   outs_recorded: "actual_outs_recorded",
   walks:         "actual_walks",
   earned_runs:   "actual_earned_runs",
+};
+
+// Hit-rate trends (L5/L10/L15/SZN vs the line) — the props.cash-style panel,
+// shown ONLY in the focused single-prop card. Covers pitcher AND hitter main
+// props (fantasy props omitted — they're a computed total, not a single graded
+// column). Same graded actuals the spark dots use; this just computes windows
+// from them. Pure display — no projection/edge/model involvement.
+const TREND_ACTUAL_COL: Partial<Record<PropType, string>> = {
+  strikeouts:             "actual_strikeouts",
+  hits_allowed:           "actual_hits_allowed",
+  outs_recorded:          "actual_outs_recorded",
+  walks:                  "actual_walks",
+  earned_runs:            "actual_earned_runs",
+  hitter_hits:            "actual_hits",
+  hitter_total_bases:     "actual_total_bases",
+  hitter_hits_runs_rbis:  "actual_hits_runs_rbis",
+  hitter_rbis:            "actual_rbis",
+  hitter_runs:            "actual_runs",
+  hitter_home_runs:       "actual_home_runs",
 };
 
 // Always read fresh from the DB at request time — the cron updates rows
@@ -343,27 +362,32 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     game_date: string;
     [col: string]: number | string | null;
   };
-  const pitcherIds = [
-    ...new Set(rows.filter((r) => r.prop_type === "strikeouts").map((r) => r.player_id)),
-  ];
+  // Every slate player (pitchers AND hitters) so the trends panel covers hitter
+  // props too. The pitcher-only spark dots (sparkFor) still work — their columns
+  // are a subset of the trend columns fetched here.
+  const allPlayerIds = [...new Set(rows.map((r) => r.player_id))];
   const recentByPlayer = new Map<number, RecentGameRow[]>();
-  if (pitcherIds.length > 0) {
+  if (allPlayerIds.length > 0) {
+    // Resolve which trend actual_* columns exist (drops a not-yet-migrated one
+    // so a pending migration can't 42703 the whole read — same guard /results uses).
+    const trendCols = await resolveExistingColumns(
+      supabase,
+      "player_game_logs",
+      [...new Set(Object.values(TREND_ACTUAL_COL))],
+    );
+    const recentSelect = "player_id, game_date, " + trendCols.join(", ");
     const recentGames = await fetchAllPages<RecentGameRow>(
       (from, to) =>
         supabase
           .from("player_game_logs")
-          .select(
-            "player_id, game_date, actual_strikeouts, actual_hits_allowed, " +
-              "actual_outs_recorded, actual_walks, actual_earned_runs",
-          )
-          .in("player_id", pitcherIds)
-          .eq("player_type", "pitcher")
+          .select(recentSelect)
+          .in("player_id", allPlayerIds)
           .order("game_date", { ascending: false })
           .range(from, to) as unknown as PromiseLike<{
             data: RecentGameRow[] | null;
             error: unknown;
           }>,
-      "recent-pitcher-form",
+      "recent-form",
     );
     // Global desc order preserves per-player desc order, so just bucket in
     // encounter order — each player's array stays newest→oldest.
@@ -400,6 +424,64 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
     if (dots.length === 0) return undefined;
     return dots.reverse();   // oldest→newest for left-to-right display
+  }
+
+  // ── hit-rate trends (props.cash-style L5/L10/L15/SZN + Diff + Streak) ─────
+  // For one (player, prop) vs tonight's line, from the SAME graded actuals as
+  // the spark dots: each window's over-rate, the recent-avg-minus-line gap, and
+  // the current over/under streak. Pure display — undefined when there's no
+  // line, no trend column for the prop (fantasy), or no graded history.
+  function trendsFor(
+    playerId: number,
+    propType: PropType,
+    line: number | undefined,
+  ): Trends | undefined {
+    if (line === undefined || line === null) return undefined;
+    const col = TREND_ACTUAL_COL[propType];
+    if (!col) return undefined;
+    const games = recentByPlayer.get(playerId);
+    if (!games || games.length === 0) return undefined;
+
+    // Actuals newest→oldest (skip games without a value for this prop).
+    const vals: number[] = [];
+    for (const g of games) {
+      const v = g[col];
+      if (v === null || v === undefined) continue;
+      const n = Number(v);
+      if (Number.isFinite(n)) vals.push(n);
+    }
+    if (vals.length === 0) return undefined;
+
+    const windowStat = (k: number): TrendWindow | undefined => {
+      const slice = vals.slice(0, k);
+      if (slice.length === 0) return undefined;
+      const over = slice.filter((v) => v > line).length;
+      return { pct: over / slice.length, over, total: slice.length };
+    };
+
+    const l10 = vals.slice(0, 10);
+    const diff = l10.length
+      ? l10.reduce((a, b) => a + b, 0) / l10.length - line
+      : undefined;
+
+    // Streak: consecutive most-recent games all over (+) or all under (−).
+    let streak = 0;
+    if (vals[0] !== line) {
+      const over = vals[0] > line;
+      for (const v of vals) {
+        if (over ? v > line : v < line) streak += over ? 1 : -1;
+        else break;
+      }
+    }
+
+    return {
+      l5: windowStat(5),
+      l10: windowStat(10),
+      l15: windowStat(15),
+      szn: windowStat(vals.length),
+      diff,
+      streak: streak || undefined,
+    };
   }
 
   // ── opposing-lineup K rate (feature 4) ──────────────────────────────────
@@ -717,6 +799,10 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           // L5 recent-form dots for THIS prop vs this prop's current line.
           // undefined on hitter/fantasy tabs and when there's no line/history.
           recentForm: sparkFor(r.player_id, propType, e?.line),
+          // Hit-rate trends (L5/L10/L15/SZN + Diff + Streak) vs the line, for the
+          // focused-card panel. Covers pitcher + hitter props; undefined for
+          // fantasy / no line / no history.
+          trends: trendsFor(r.player_id, propType, e?.line),
           // Tonight's opposing-lineup context. Attached to every prop's row
           // but only rendered on the Strikeouts tab. undefined when opp_k_rate
           // isn't available (pre-migration or no model run for this pitcher).

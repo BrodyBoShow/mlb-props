@@ -28,6 +28,18 @@ export type PropType =
 // One graded game's actual vs tonight's line, oldest→newest for display.
 export type FormDot = "over" | "under" | "push";
 
+// Hit-rate trends (props.cash-style) for one (player, prop) vs tonight's line.
+// Pure display — computed from graded game logs, no model involvement.
+export type TrendWindow = { pct: number; over: number; total: number };
+export type Trends = {
+  l5?: TrendWindow;     // over-rate in the last ≤5 graded games vs the line
+  l10?: TrendWindow;
+  l15?: TrendWindow;
+  szn?: TrendWindow;    // over-rate across all graded games
+  diff?: number;        // avg(last-10 actual) − line
+  streak?: number;      // signed: +N current over-streak, −N under-streak
+};
+
 // Tonight's opposing-lineup context for a pitcher. kRate is the opponent
 // team's season strikeout rate (0–1), persisted onto strikeouts projection
 // rows by the engine (feature 4 / Option A). lhh/rhh handedness is deferred
@@ -70,6 +82,9 @@ export type Pitcher = {
   // build time so each prop tab carries the right dots. undefined when the
   // pitcher has no graded history OR no current line to compare against.
   recentForm?: FormDot[];
+  // Hit-rate trends (L5/L10/L15/SZN + Diff + Streak vs the line) for the focused
+  // single-prop card. undefined for fantasy props / no line / no graded history.
+  trends?: Trends;
   // Tonight's opposing-lineup context (feature 4). Attached to every pitcher
   // prop tab's row but only RENDERED on the Strikeouts tab. undefined when
   // opp_k_rate isn't available (pre-migration, or a non-model prop).

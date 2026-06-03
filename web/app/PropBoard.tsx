@@ -18,6 +18,8 @@ import type {
   Pitcher,
   PropType,
   StatLine,
+  Trends,
+  TrendWindow,
 } from "@/lib/types";
 import { EDGE_THRESHOLD, HITTER_PROPS, REAL_BOOKS } from "@/lib/constants";
 import {
@@ -402,6 +404,60 @@ const FORM_DOT_CLASS: Record<FormDot, string> = {
   under: "bg-red-500/70",
   push:  "bg-slate-600",
 };
+
+// ── hit-rate trends row (props.cash-style) ───────────────────────────────────
+// Focused-card ONLY (the deep-dive view), so it adds nothing to the dense scan
+// grid. One quiet tabular line: L5 / L10 / L15 / SZN over-rate vs the line, the
+// recent-avg-minus-line gap, and the current streak. Each window tones emerald
+// (lean-over ≥60%), red (≤40%), else slate — same restrained palette as the
+// rest of the card. Returns null when there's no trend data.
+function trendTone(pct: number): string {
+  return pct >= 0.6 ? "text-emerald-400/80" : pct <= 0.4 ? "text-red-400/80" : "text-slate-300";
+}
+function TrendCell({ label, w }: { label: string; w: TrendWindow | undefined }) {
+  if (!w) return null;
+  return (
+    <span title={`${w.over}/${w.total} over the line in the ${label}`}>
+      <span className="text-slate-600">{label} </span>
+      <span className={`tabular-nums ${trendTone(w.pct)}`}>{Math.round(w.pct * 100)}</span>
+    </span>
+  );
+}
+function TrendRow({ trends }: { trends: Trends | undefined }) {
+  if (!trends) return null;
+  const { l5, l10, l15, szn, diff, streak } = trends;
+  if (!l5 && !l10 && !l15 && !szn) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
+      <span className="text-[9px] uppercase tracking-wider text-slate-600">Hit&nbsp;%</span>
+      <TrendCell label="L5" w={l5} />
+      <TrendCell label="L10" w={l10} />
+      <TrendCell label="L15" w={l15} />
+      <TrendCell label="SZN" w={szn} />
+      {diff !== undefined && (
+        <span
+          className="tabular-nums text-slate-500"
+          title="Average over the last 10 games minus tonight's line"
+        >
+          ·{" "}
+          <span className={diff > 0 ? "text-emerald-400/70" : diff < 0 ? "text-red-400/70" : ""}>
+            {diff >= 0 ? "+" : "−"}
+            {Math.abs(diff).toFixed(1)} vs line
+          </span>
+        </span>
+      )}
+      {streak !== undefined && Math.abs(streak) >= 2 && (
+        <span
+          className={`tabular-nums ${streak > 0 ? "text-emerald-400/70" : "text-red-400/70"}`}
+          title={`On a ${Math.abs(streak)}-game ${streak > 0 ? "over" : "under"} streak`}
+        >
+          · {streak > 0 ? "▲" : "▼"}
+          {Math.abs(streak)}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function RecentFormDots({ form }: { form: FormDot[] | undefined }) {
   if (!form || form.length === 0) return null;
@@ -1048,7 +1104,7 @@ function FocusedPlayerCard({
         </div>
         <EdgeDetail pitcher={row} actual={liveActual} isFinal={status?.state === "final"} />
         <ConfidenceBar confidence={row.confidence} />
-        <RecentFormDots form={row.recentForm} />
+        <TrendRow trends={row.trends} />
         {prop === "strikeouts" && <OppContextLine kRate={row.oppContext?.kRate} />}
         {prop === "hitter_total_bases" && (
           <WindCardLine
