@@ -3433,6 +3433,45 @@ Pre-game hitter coverage — project every hitter with a line (this session):
   change (the board already renders hitters whenever they exist). Self-maintains
   every cron as lines post for later games.
 
+Hit-rate trends panel (props.cash-style) — focused card only (this session):
+- Research (deep-research workflow) into props.cash/pickfinder/Outlier: their
+  centerpiece is a HIT-RATE TRENDS table (L5/L10/L15/H2H/SZN/Streak/Diff) that is
+  mostly DISPLAY computed from game logs, not a model. (The workflow burned ~1.6M
+  tokens and its verifier misfired — 0-0 votes marked all claims "refuted", a
+  harness bug, not genuine refutation; the surfaced facts were correct. Do NOT
+  re-run it casually — expensive.)
+- BUILT the safest highest-value item: a hit-rate trends row. PURE DISPLAY — no
+  projection/edge/model/FEATURE_COLS involvement (still 11). Frontend-only.
+- CONGESTION DISCIPLINE (user: strict about UI congestion): renders ONLY in the
+  FOCUSED single-prop card (the deep-dive view you get tapping a chip), REPLACING
+  the L5 spark-dot row — so the dense all-props chip grid gains nothing and the
+  focused card gains zero net lines. One quiet tabular line.
+- web/app/page.tsx: TREND_ACTUAL_COL (5 pitcher + 6 hitter main props; fantasy
+  omitted — computed total, not one graded column). The existing recent-form
+  fetch now reads ALL slate players (was pitcher-only) + all trend columns
+  (resolveExistingColumns-guarded against a pending migration) so ONE read serves
+  both the spark dots (unchanged) and trends. trendsFor(player, prop, line)
+  computes per-window over-rate vs the line + Diff (avg-L10 − line) + signed
+  streak. Attached as row.trends next to recentForm.
+- web/lib/types.ts: Trends/TrendWindow + Pitcher.trends.
+- web/app/PropBoard.tsx: TrendRow (Hit% L5/L10/L15/SZN, each toned emerald >=60%
+  / red <=40% / slate; + "±X vs line"; + a ▲/▼N streak chip only when |streak|>=2
+  so 1-game noise is hidden). Swapped in for <RecentFormDots/> in
+  FocusedPlayerCard. The dots code (sparkFor/recentForm/RecentFormDots) is left in
+  place but unrendered — superseded; harmless, prune in a later cleanup.
+- VERIFIED: trend math exact vs raw logs (Tommy Troy TB [5,0,0] vs line 1.5 ->
+  1/3 = 33% all windows, Diff +0.2, streak +1); tsc clean; npm run build passes
+  (/ 13.2 kB). Thin early-season history shows as a small honest sample (like the
+  confidence bar) and fills out as games accumulate. Committed 954c76b.
+- ROADMAP (researched, not yet built; all gated on the same measure->validate
+  discipline): de-vig fair% + book IP display (you already compute fair_over_prob
+  — just surface it), multi-book line-shopping row (per-book lines already in the
+  lines table), DVP-style opp-pitcher matchup tag for hitters (opp_sp_* exist),
+  Statcast quality-of-contact display (barrel%/hard-hit%>=95mph/xwOBA — sweet-spot
+  + EV already pulled), Shin de-vig as an OPTIONAL edge.py tweak (changes edges ->
+  must pass the calibration scorecard before/after). Pitcher props are already
+  ~calibrated; hitter over-bias was the old pre-Poisson math, already fixed.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count).
