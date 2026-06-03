@@ -13,11 +13,21 @@ measure": this prints, per prop, the Brier score + a reliability table + the
 calibration-in-the-large gap so you can see exactly which props are miscalibrated
 and in which direction.
 
+IMPORTANT — measures the CURRENT model, not stale stored probabilities. The
+`edges.model_over_prob` column holds whatever a (possibly months-old) cron stored,
+so after a prob-model change (e.g. the Poisson fix) the column is full of the OLD
+math and would keep showing an already-fixed bias for months until those rows age
+out. Instead we recompute the probability FRESH from the stored projection + line
+via the live edge._model_over_prob — so this scorecard answers "is my CURRENT
+code calibrated?" on the entire graded history at once (a large sample now,
+rather than waiting weeks for new edges to grade).
+
 Method, per prop:
   * One (predicted P(over), realized over) pair per (player, prop, day) — we
     pick the SHARPEST book present (Pinnacle first; `consensus` last) so a single
     game with many books isn't counted many times.
-  * predicted = edges.model_over_prob ; line = edges.line.
+  * predicted = edge._model_over_prob(model_proj, line) recomputed live ;
+    line = edges.line ; projection = edges.model_proj.
   * realized  = the graded actual (player_game_logs, via calibrate._ACTUAL_COL)
     joined on (player_id, game_date). over = actual > line. Pushes (actual ==
     line) are dropped (no over/under outcome).
@@ -36,6 +46,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 import db
+import edge
 from calibrate import _ACTUAL_COL
 from constants import et_today
 
@@ -82,7 +93,7 @@ def gather() -> dict[str, list[tuple[float, int]]]:
 
     edges = _paginate(
         "edges",
-        "player_id, prop_type, game_date, line, model_over_prob, bookmaker",
+        "player_id, prop_type, game_date, line, model_proj, bookmaker",
         [lambda q: q.gte("game_date", cutoff)],
     )
     if not edges:
@@ -103,7 +114,7 @@ def gather() -> dict[str, list[tuple[float, int]]]:
     rank = {b: i for i, b in enumerate(_BOOK_PREF)}
     best: dict[tuple, tuple[int, dict]] = {}
     for e in edges:
-        if e.get("model_over_prob") is None or e.get("line") is None:
+        if e.get("model_proj") is None or e.get("line") is None:
             continue
         key = (e["player_id"], e["prop_type"], e["game_date"])
         r = rank.get(e.get("bookmaker"), 99)
@@ -125,8 +136,11 @@ def gather() -> dict[str, list[tuple[float, int]]]:
         actual = float(actual)
         if actual == line:
             continue  # push — no over/under outcome
+        # Recompute the probability with the LIVE model so the scorecard reflects
+        # the current code, not whatever (possibly pre-Poisson) value was stored.
+        pred = edge._model_over_prob(float(e["model_proj"]), line, prop)
         over = 1 if actual > line else 0
-        pairs[prop].append((float(e["model_over_prob"]), over))
+        pairs[prop].append((pred, over))
     return pairs
 
 
