@@ -3542,6 +3542,20 @@ Season backfill — calibration Stage 1 (this session):
   Supabase, THEN python engine/backfill_logs.py. Until the migration is applied
   the script aborts safely (refuses to insert un-flagged rows). After the
   backfill: verify model.train() row count is IDENTICAL (foundation untouched).
+- FK FIX + RAN (this session): first run hit player_game_logs_game_id_fkey
+  (historical games not in the games table). Fix KEPT the FK — stats helpers now
+  return home_team/away_team off the gameLog split; db.insert_backfill_games()
+  INSERT-ONLY upserts minimal games rows (game_id, game_date, home/away) so the FK
+  is satisfied and existing richer games rows are never overwritten; backfill
+  inserts games FIRST, then flagged logs. RESULT (verified live): 17,525 log rows
+  built across 911 games; 16,662 inserted (863 already-present games skipped);
+  games 911 submitted (existing skipped). FOUNDATION GUARD CONFIRMED: graded
+  (non-backfilled) rows 859 -> 859 UNCHANGED (model training set byte-identical);
+  total 17,521 = 859 graded + 16,662 backfilled. Aaron Judge TB trend now 27/59 =
+  46% season (was ~1-2 games). Committed aac249b. Frontend needs NO change — it
+  already reads player_game_logs; the trends/confidence just have the full season
+  now. (Note: the client trend fetch now pulls ~17k rows paginated; if getSlate
+  feels slow, precompute trend columns server-side — not needed yet.)
 - STAGE 2 (separate, gated): the grader-replay to populate historical FEATURES
   (whiff/CSW/opp-K/platoon, strict-prior) -> then MEASURE whether training on the
   full season improves prediction (holdout/scorecard) BEFORE flipping train() to
