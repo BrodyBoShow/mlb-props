@@ -7,6 +7,7 @@ import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
 import LiveUpdated from "./LiveUpdated";
 import AutoRefresh from "./AutoRefresh";
+import StaleBanner from "./StaleBanner";
 
 // ── Featured-play filter constants ───────────────────────────────────────────
 // Tight filters — featuring a marginal play on the top of the home page is
@@ -1062,13 +1063,8 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   };
 }
 
-function formatDate(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
+// (formatDate moved into web/app/StaleBanner.tsx — its only consumer was the
+// stale banner, now client-rendered in the viewer's local timezone.)
 
 // (formatUpdatedAt removed — the "Last updated" line is now client-rendered in
 // the viewer's local timezone by web/app/LiveUpdated.tsx, so a non-ET viewer
@@ -1094,18 +1090,11 @@ export default async function Home({
     hasCurrentProjections,
   } = await getSlate(dateOverride);
 
-  // Stale banner: ONLY when the displayed date is before today AND today
-  // (or later) has no projections in the DB. When the user is browsing a
-  // past date but current data exists, suppress the banner — that's
-  // intentional navigation, not a freshness problem.
-  const todayET = new Date().toLocaleDateString("en-CA", {
-    timeZone: "America/New_York",
-  });
-  const isStale =
-    date !== null &&
-    updatedAt !== null &&
-    date < todayET &&
-    !hasCurrentProjections;
+  // Stale banner now lives in the client <StaleBanner>, which judges "stale"
+  // from the VIEWER'S local date (not Eastern) — so a late-evening West-Coast /
+  // Arizona user isn't told their current slate is yesterday's. The slate data
+  // itself stays ET-keyed (MLB schedules are ET). hasCurrentProjections still
+  // suppresses the banner when newer data exists.
 
   // hasAny: at least one prop type has at least one game. If every prop list
   // is empty we're on a future-preview date even though we have a `date`.
@@ -1138,11 +1127,11 @@ export default async function Home({
         </Link>
       </header>
 
-      {isStale && (
-        <div className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
-          Showing {formatDate(date!)} projections — today&apos;s slate updates after 8 AM ET.
-        </div>
-      )}
+      <StaleBanner
+        date={date}
+        hasData={updatedAt !== null}
+        hasCurrentProjections={hasCurrentProjections}
+      />
 
       {hasAny ? (
         <PropBoard

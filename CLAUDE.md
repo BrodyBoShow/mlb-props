@@ -3137,6 +3137,31 @@ Projection-date timezone bug — hitters misfiled to the next day (this session)
   correctly now.) Featured Plays "leaving" was THIS bug, not a design issue;
   they populate normally on a correctly-dated slate with real edges.
 
+Stale banner now judged from the VIEWER's local date, not Eastern (this session):
+- USER (Arizona, 9:34 PM June 2): the board showed the June 2 slate but with the
+  amber "Showing June 2 projections — today's slate updates after 8 AM ET" banner,
+  i.e. it called their CURRENT slate stale. Cause: page.tsx computed the stale
+  flag as `date < todayET` where todayET = America/New_York. At 9:34 PM MST it's
+  already 12:34 AM EDT (June 3), so June 2 (the viewer's actual today) read as a
+  past slate.
+- DISTINCTION: the slate DATA stays ET-keyed (MLB schedules are ET; the engine
+  date fix above keeps projections on the right ET slate). Only the "is this
+  stale FOR THE VIEWER" judgment should use the viewer's own calendar day — which
+  is only knowable client-side.
+- FIX (frontend-only): new web/app/StaleBanner.tsx (client). Computes the
+  viewer's local date (new Date().toLocaleDateString("en-CA")) and shows the
+  banner only when `date < browserToday && hasData && !hasCurrentProjections`.
+  Renders null on SSR/first paint (state starts false, set in useEffect) so
+  there's no hydration mismatch. page.tsx removed the server `todayET`/`isStale`
+  computation + the dead formatDate helper (moved into StaleBanner) and renders
+  <StaleBanner date hasData hasCurrentProjections/>.
+- The DEFAULT slate date is unchanged and already lands correctly: getSlate
+  resolves earliest projection_date >= todayET else the latest, and since a new
+  ET day's projections aren't built until ~8 AM ET, an evening viewer in any US
+  tz falls back to the latest (current) slate. So only the banner needed fixing.
+- VERIFIED: tsc --noEmit clean; npm run build passes (/ 12.9 kB). For the Arizona
+  9:34 PM case, June 2 == browserToday -> banner suppressed.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV scorecards).
 
