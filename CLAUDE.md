@@ -3394,9 +3394,48 @@ Calibration step 2 INVESTIGATED -> NOT BUILT (the centering fix would HARM)
   Next calibration step is now "wait for post-Poisson graded data + watch the
   two under-biased pitcher props," NOT a projection change. FEATURE_COLS 11.
 
+Pre-game hitter coverage — project every hitter with a line (this session):
+- USER report (screenshots): (1) only ONE team's hitters showed per game (e.g.
+  KC@CIN showed 9 Royals, no Reds); (2) later/not-yet-started games showed no
+  hitters at all — "there are lines for these hitters, so why can't we show the
+  projections." DIAGNOSED (live DB): both are the SAME root cause. Hitter
+  projections were built ONLY for confirmed-lineup players (fetch_lineups), which
+  post ~60-90 min before first pitch and team-by-team. On the 6/3 slate: 269
+  hitters had a hitter-prop LINE but only 90 were projected (178 lined-but-
+  unprojected); fetch_lineups returned both KC+CIN now but only KC had been built
+  when the cron ran.
+- FIX (engine, ADDITIVE + DEFENSIVE — never touches the skip/stale/delete logic):
+  new main._fill_in_lined_hitters, called EVERY cron after _run_hitter_pipeline.
+  * db.get_hitter_line_players_for_date(date) -> {player_id: name} for distinct
+    hitters with ANY hitter-prop line today (paginated).
+  * fetch.build_expected_hitters(line_players, games, exclude_ids): resolves each
+    missing hitter's TEAM via the MLB /people bulk call (_fetch_handedness_by_id,
+    which already returns currentTeam name matching games.home_team) and maps it
+    to today's game (home_team->home / away_team->away) -> the game_id + home_away
+    the rolling baseline builders need. batting_order=0 (not a confirmed slot; the
+    builders don't use it). Players whose team isn't on the slate are dropped.
+  * Builds ONLY lined hitters MISSING a hitter_hits projection (purely additive —
+    no delete), upserts them, adds them to name_to_id so the lines fetch resolves
+    their lines and edges compute. If it builds any, main() sets all_projections
+    = [] so _run_lines_and_edges re-fetches the COMPLETE set (bulk + fill-in) from
+    the DB. Any failure logs + returns 0; the pipeline is unaffected.
+- WHY it covers both issues: it's anchored on LINES (which the books post hours
+  ahead for both teams of every game), not on confirmed lineups — so the second
+  team AND later games both get projected pre-game. Speculative downside (a line
+  for a player who ends up benched) is harmless: an extra projection that simply
+  doesn't grade.
+- VERIFIED end-to-end (ran the pipeline on the live 6/3 slate): read-only test
+  resolved 178/179 missing -> 89/89 home/away (both teams); the live run built
+  157 lined hitters across 15 games, recomputed 647 edges on 2072 projections;
+  post-run coverage = 15/15 games have hitter projections (14-22 each, 270 total
+  hitter_hits rows) — every previously-empty later game now covered, KC@CIN 9 ->
+  19 (Reds filled in). py_compile OK; FEATURE_COLS untouched (11); no frontend
+  change (the board already renders hitters whenever they exist). Self-maintains
+  every cron as lines post for later games.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
-self-heal count).
+self-heal count + lined-hitter coverage count).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
