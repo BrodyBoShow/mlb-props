@@ -2667,6 +2667,38 @@ HR composite 4th term — opposing-starter HR/9 (this session):
   3-term ranking unchanged). Pre-migration the frontend query 400s → term degrades
   to neutral, so the live board is unchanged until the migration + next build.
 
+Hitter/pitcher fantasy-score projected Over for ~every player — fixed (this session):
+- USER-REPORTED: the hitter_fantasy_score tab leaned Over on almost every player.
+- DIAGNOSIS (not assumed): (1) SCORING is correct — the official PrizePicks MLB
+  hitter chart EXACTLY matches engine/fantasy_score.py (single 3 / double 5 /
+  triple 8 / HR 10 / run·RBI·walk·HBP 2 / SB 5), verified via the PrizePicks
+  playbook. (2) LINES are correct — all 178 are PrizePicks-direct STANDARD rungs
+  (single observed_lines value). (3) The bug was the PROJECTION STATISTIC:
+  build_hitter/pitcher_fantasy_score_projections used the recency-weighted MEAN
+  of per-game FP, but fantasy score is heavily RIGHT-SKEWED (a few 20–30 FP games)
+  so the mean sits well above the MEDIAN — and a PrizePicks flat-payout DFS line
+  is set at the ~50% (median) point. Measured slate-wide (178 hitters): mean proj
+  → 155/178 Over (87%), avg(proj − line) = +1.99; MEDIAN proj → 72 Over / 83 Under
+  / 23 push (40/47/13%), avg(median − line) = −0.08 (centred on the line). So the
+  lines track the median; the mean projection was the systematic Over bias.
+- FIX (engine-only, baseline.py): new _median_projection(values) = median of the
+  per-game/per-start FP. build_hitter_fantasy_score_projections and
+  build_pitcher_fantasy_score_projections now use it instead of
+  _weighted_projection. The empty/zero → LEAGUE_AVG_HITTER_FP floor is unchanged.
+  Other props (hits/TB/etc.) keep the weighted mean — they're far less skewed and
+  their lines come from real de-vigged books, not median DFS lines.
+- SCOPE: NOT a model change — fantasy score is not a FEATURE_COL (still 11), the
+  model is untouched, no schema/migration. web/lib/fantasyScore.ts is the SCORING
+  formula (live in-game overlay), NOT the projection — untouched. The displayed
+  "proj" for the two fantasy props now shows the MEDIAN (e.g. Cruz 9.9→7.0,
+  Ohtani 10.8→9.0, Reynolds 8.8→7.0), which is the right central estimate to
+  compare against a median-set line.
+- VERIFIED: scoring chart matches PrizePicks; slate-wide leans rebalance 87%→40%
+  Over; new builder returns the median (spot-checked Reynolds 7.0 / Ohtani 9.0 /
+  Marte 8.0 / Gonzales 5.0); FEATURE_COLS 11; engine imports clean; py_compile OK.
+  Goes live for the displayed projections + /results grading on the next
+  lineups-posted hitter build (cron) — or a manual rebuild.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

@@ -54,6 +54,24 @@ def _weighted_projection(values_newest_first: list[float]) -> float:
     )
 
 
+def _median_projection(values: list[float]) -> float:
+    """Median of per-game values — the right central estimate for the
+    fantasy-score props.
+
+    PrizePicks fantasy-score lines are flat-payout DFS lines set near the
+    player's MEDIAN game (the ~50% over/under point). Fantasy score is heavily
+    right-skewed (a few 20–30 FP games), so the weighted MEAN runs systematically
+    ABOVE the median — and thus above the line — producing an Over lean for nearly
+    every player (measured: 87% Over, mean +1.99 FP above the line, vs the median
+    which centres on the line at −0.08). Using the median makes the projection
+    comparable to how the line is set, so the leans are balanced and informative.
+    """
+    import statistics
+    if not values:
+        return 0.0
+    return round(float(statistics.median(values)), 1)
+
+
 # ─── strikeout projections (Statcast via pybaseball) ─────────────────────────
 
 def _strikeouts_per_start(
@@ -226,7 +244,9 @@ def build_pitcher_fantasy_score_projections(
             if is_quality_start(outs, er):
                 fp += PITCHER_QUALITY_START_PTS
             per_start_fp.append(float(fp))
-        projection = _weighted_projection(per_start_fp)
+        # MEDIAN (not weighted mean) — same right-skew reasoning as the hitter
+        # fantasy-score builder; the PrizePicks line is the ~50% point.
+        projection = _median_projection(per_start_fp)
         rows.append(
             {
                 "game_id": s["game_id"],
@@ -373,7 +393,10 @@ def build_hitter_fantasy_score_projections(
             )
             for g in games
         ]
-        projection = _weighted_projection(per_game_fp)
+        # MEDIAN (not weighted mean): PrizePicks fantasy-score lines sit at the
+        # ~50% (median) point, and FP is right-skewed, so the mean over-projects
+        # and leans Over for nearly everyone. See _median_projection.
+        projection = _median_projection(per_game_fp)
         # A thin sample (1-2 games all scoring 0 FP) yields a 0 projection —
         # a sentinel, not a real forecast. Floor it to the league average.
         # Players with real history keep their genuine projection unchanged.
