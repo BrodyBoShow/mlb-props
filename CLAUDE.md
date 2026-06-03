@@ -2965,8 +2965,35 @@ Projections verified frozen pre-game + strict-prior hardening (this session):
   untouched. (Statcast strikeout path is lower-risk — Savant data lags, so an
   in-progress start isn't available mid-game; not changed.)
 
+Matchup-K daily scorecard — log-only flip gate (this session):
+- CONTEXT: user wants the skill-led matchup-K to eventually drive the strikeouts
+  projection, but with NO harm. Ran the validator (_validate_matchup_k.py) on the
+  live DB: 17 graded shadow starts, 5 divergences, matchup-K won 2/5 (40%) on
+  divergences vs baseline 3/5 — NOT proven better, so flipping now would be a
+  coin-flip gamble. Correct no-harm call: do NOT flip; leave the live model as-is.
+- IMPLEMENTED (the no-harm forward step): engine/matchup_k_scorecard.py — a
+  daily LOG-ONLY scorecard. ZERO projection impact, NEVER auto-flips. Reads
+  projections.matchup_expected_k (shadow) + player_game_logs.actual_strikeouts +
+  the strikeouts line, computes line-region Brier per predictor + realized edge
+  on divergences, and prints a "FLIP-READY? yes/no" verdict against a
+  PRE-COMMITTED gate. Hooked into engine/main.py after the shadow step, gated on
+  `not is_refresh` (full run only, once/day after grading), wrapped in try/except.
+- FLIP GATE (engine/constants.py, objective so the flip is a data check, not a
+  debate): MATCHUP_K_FLIP_MIN_DIVERGENCES=40 AND MATCHUP_K_FLIP_MIN_WINRATE=0.55
+  AND matchup-K Brier <= baseline Brier. Until all three hold, matchup-K stays
+  shadow. A "FLIP-READY? YES" log line is a PROMPT for a human to make the
+  (small, rolling-avg-regularizer-backed) code change — it never switches itself.
+- LIVE READING NOW: 17 starts, 5 divergences, matchup-K 40% win-rate (gate not
+  met — only 5/40 divergences), Brier matchup-K 0.188 vs baseline 0.210 (matchup-K
+  calibration slightly BETTER — an early encouraging sign, but the divergence
+  win-rate + sample size are the binding gates). Verdict: NOT flip-ready.
+- VERIFIED: py_compile clean (constants / scorecard / main); scorecard runs
+  read-only and prints the correct verdict; FEATURE_COLS (11) + live projections
+  untouched. Engine-only; takes effect on the next FULL cron run (the daily log
+  line). _validate_matchup_k.py kept as the verbose manual deep-dive.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
-WARNING lines.
+WARNING lines (incl. the daily matchup-K scorecard / FLIP-READY verdict).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any

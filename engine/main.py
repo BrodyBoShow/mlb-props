@@ -886,6 +886,18 @@ def main() -> None:
         except Exception as exc:
             print(f"  matchup-K shadow failed ({exc}) -- skipping")
 
+        # LOG-ONLY daily scorecard: does the shadow matchup-K beat the baseline
+        # yet? Prints a FLIP-READY verdict so the validate-then-flip decision is
+        # data-driven. NEVER changes the live projection and NEVER auto-flips.
+        # Full run only (once/day, after yesterday graded) to avoid 7x/day reads.
+        if not is_refresh:
+            print("Scoring shadow matchup-K vs baseline (log-only)...")
+            try:
+                import matchup_k_scorecard
+                matchup_k_scorecard.log_scorecard()
+            except Exception as exc:
+                print(f"  matchup-K scorecard failed ({exc}) -- skipping")
+
         _run_lines_and_edges(name_to_id, all_projections)
         _run_calibration(all_projections)
 

@@ -251,6 +251,18 @@ EDGE_THRESHOLD = 0.1
 # prop) pair. Pitchers below this stay NULL in the confidence column.
 MIN_GRADED_STARTS = 5
 
+# ─── Matchup-K flip gate (matchup_k_scorecard.py) ────────────────────────────
+# Pre-committed, objective trigger for promoting the SHADOW matchup-expected-K
+# from log-only to the primary strikeouts projection. The scorecard NEVER auto-
+# flips — these only decide when the daily log says "FLIP-READY? YES", at which
+# point a human makes the (small, regularizer-backed) code change. Until all
+# gates hold, matchup-K stays shadow.
+MATCHUP_K_FLIP_MIN_DIVERGENCES = 40   # graded starts where matchup-K and the
+#                                       baseline leaned OPPOSITE the line — edges
+#                                       live in the divergences, not in agreement
+MATCHUP_K_FLIP_MIN_WINRATE = 0.55     # matchup-K's side must win >= this share
+#                                       of those divergences (50% = coin flip)
+
 # ─── Park factors (grade.py + model.py) ──────────────────────────────────────
 #
 # Park factor = multiplicative effect of the venue on the named outcome.
