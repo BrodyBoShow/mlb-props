@@ -74,6 +74,36 @@ function fmt(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
+// Grade the PROJECTION'S LEAN against the line vs the actual — the EXACT rule
+// the /results page uses, surfaced on the board so the two agree:
+//   lean   = sign(projection − line)   (|gap| < LINE_LEAN_THRESHOLD ⇒ no lean)
+//   result = sign(actual − line)
+//   "win" when the lean matched the result, "loss" when it didn't.
+// (NOT the de-vigged edge direction — that's a separate forward-looking signal.)
+// Every stat only counts UP during a game, so a line that's already been crossed
+// (over) is LOCKED even mid-game; an actual still under the line is "alive" while
+// the game is live and only decided once it's final.
+type LeanGrade = "win" | "loss" | "push" | "alive" | "none";
+function gradeLean(
+  projection: number,
+  line: number,
+  actual: number,
+  isFinal: boolean,
+): LeanGrade {
+  const leanDiff = projection - line;
+  if (Math.abs(leanDiff) < LINE_LEAN_THRESHOLD) return "none"; // model had no lean (≈ /results skip)
+  const leanOver = leanDiff > 0;
+  if (actual > line) return leanOver ? "win" : "loss"; // over the line — locked even live
+  if (actual < line) {
+    if (!isFinal) return "alive"; // could still cross the line
+    return leanOver ? "loss" : "win";
+  }
+  return isFinal ? "push" : "alive"; // actual === line
+}
+function gradeTextColor(g: LeanGrade): string {
+  return g === "win" ? "text-emerald-400" : g === "loss" ? "text-red-400" : "text-slate-200";
+}
+
 // Map each SIMPLE prop type to the StatLine field it reads. Fantasy-score
 // props are computed across multiple StatLine fields, not mapped 1:1 here —
 // handled in liveActualFor below.
@@ -141,56 +171,17 @@ function liveActualFor(
   return stat[key] as number | undefined;
 }
 
-// Pace coloring for the actual stat shown next to the projection.
-//
-// Final games: this is the "did the model hit" indicator -- actual > proj is
-// green (model underestimated), actual < proj is red (model overestimated),
-// equal is neutral. Same calibration logic the /results Model Tracker uses.
-//
-// Live games: pitchers compare actual vs the pro-rated portion of the
-// projection given how far into the game we are; hitters have no
-// half-inning baseline so any contribution >0 is green, 0 is neutral.
-function paceColor(
-  actual: number,
-  projection: number,
-  isHitter: boolean,
-  status: GameStatus | undefined,
-): string {
-  // Final game: actual vs projection.
-  if (status?.state === "final") {
-    if (actual > projection) return "text-emerald-400";
-    if (actual < projection) return "text-red-400";
-    return "text-slate-300";
-  }
-  if (isHitter) {
-    return actual > 0 ? "text-emerald-400" : "text-slate-300";
-  }
-  // Pitcher pacing (live only)
-  if (!status || !status.inningOrdinal) return "text-slate-300";
-  const inningNum = parseInt(status.inningOrdinal, 10);
-  if (!Number.isFinite(inningNum) || inningNum < 1) return "text-slate-300";
-  const half = status.inningHalf?.toLowerCase() ?? "";
-  const inningsElapsed = (inningNum - 1) + (half === "bottom" ? 0.5 : 0);
-  if (inningsElapsed <= 0) return "text-slate-300";
-  const expected = projection * (inningsElapsed / 9);
-  if (actual >= expected * 0.8) return "text-emerald-400";
-  if (actual >= expected * 0.5) return "text-amber-400";
-  return "text-red-400";
-}
-
 // Render the right-side badge. When a live actual exists, show "{actual} {unit}
 // · proj {projection}"; otherwise just the projection (existing behavior).
 function ProjectionBadge({
   pitcher,
   unit,
   liveActual,
-  isHitter,
   status,
 }: {
   pitcher: Pitcher;
   unit: string;
   liveActual: number | undefined;
-  isHitter: boolean;
   status: GameStatus | undefined;
 }) {
   if (liveActual === undefined) {
@@ -200,12 +191,22 @@ function ProjectionBadge({
       </span>
     );
   }
-  const color = paceColor(liveActual, pitcher.projection, isHitter, status);
+  // Color the actual by whether the projection's lean vs the line is winning
+  // (same grading as /results), not by raw actual-vs-projection — so a high ER
+  // on an under lean reads red, not green.
+  const isFinal = status?.state === "final";
+  const g =
+    pitcher.line !== undefined
+      ? gradeLean(pitcher.projection, pitcher.line, liveActual, !!isFinal)
+      : "none";
+  const color = g === "win" ? "text-emerald-400" : g === "loss" ? "text-red-400" : "text-slate-300";
   return (
     <span className="ml-3 shrink-0 rounded-md bg-slate-800/80 px-2.5 py-1 text-sm font-semibold tabular-nums">
       <span className={color}>
         {liveActual} {unit}
       </span>
+      {g === "win" && <span className="ml-1 text-emerald-400">✓</span>}
+      {g === "loss" && <span className="ml-1 text-red-400">✗</span>}
       <span className="ml-1.5 font-normal text-slate-500">
         · proj {pitcher.projection.toFixed(1)}
       </span>
@@ -213,13 +214,61 @@ function ProjectionBadge({
   );
 }
 
-// ── edge sub-component ──────────────────────────────────────────────────────
-// Pure display. Receives the pre-computed edge + line and picks colors/labels.
+// ── edge / result sub-component ─────────────────────────────────────────────
+// Pure display. Pre-game it shows the line + de-vigged edge (forward-looking).
+// Once the game has started (an `actual` is passed) it switches to the RESULT:
+// the projection's lean vs the line and whether it hit — the same grading as
+// /results, since the pre-game edge arrow is stale once the game is underway.
 
-function EdgeDetail({ pitcher }: { pitcher: Pitcher }) {
+function EdgeDetail({
+  pitcher,
+  actual,
+  isFinal,
+}: {
+  pitcher: Pitcher;
+  actual?: number;
+  isFinal?: boolean;
+}) {
   // No line for this player → render nothing (the common case).
   if (pitcher.line === undefined) {
     return null;
+  }
+
+  // ── POST-GAME / LIVE: proj-vs-line LEAN + result (mirrors /results) ──
+  if (actual !== undefined) {
+    const g = gradeLean(pitcher.projection, pitcher.line, actual, !!isFinal);
+    let node;
+    if (g === "none") {
+      node = <span className="text-slate-500">~Even (no lean)</span>;
+    } else {
+      const leanOver = pitcher.projection - pitcher.line > 0;
+      const leanLabel = leanOver ? "▲ Over" : "▼ Under";
+      const leanColor = leanOver ? "text-emerald-400/70" : "text-red-400/70";
+      const result =
+        g === "win" ? (
+          <span className="text-emerald-400">✓ hit</span>
+        ) : g === "loss" ? (
+          <span className="text-red-400">✗ miss</span>
+        ) : g === "push" ? (
+          <span className="text-slate-500">push</span>
+        ) : (
+          <span className="text-slate-500">live</span>
+        );
+      node = (
+        <>
+          <span className={leanColor}>proj {leanLabel}</span>
+          <span className="mx-1.5 text-slate-600">·</span>
+          {result}
+        </>
+      );
+    }
+    return (
+      <div className="mt-1 text-xs tabular-nums">
+        <span className="text-slate-500">Line {pitcher.line}</span>
+        <span className="mx-1.5 text-slate-600">·</span>
+        {node}
+      </div>
+    );
   }
 
   // Two-sided book line WITH a de-vigged edge (every prop tab except the two
@@ -804,14 +853,12 @@ function PropChip({
   row,
   live,
   isFinal,
-  liveColor,
   onFocus,
 }: {
   prop: PropType;
   row: Pitcher;
   live: number | undefined;
   isFinal: boolean;
-  liveColor: string | undefined;
   onFocus: (p: PropType) => void;
 }) {
   const meta = PROP_META[prop];
@@ -850,40 +897,24 @@ function PropChip({
       if (e.direction === "over") trailing = <span className="text-emerald-400/70">▲</span>;
       else if (e.direction === "under") trailing = <span className="text-red-400/70">▼</span>;
     }
-  } else if (isFinal) {
-    // ── final: actual vs line, with a ✓/✗ on whether the model's lean won ──
+  } else {
+    // ── game started (live OR final): grade the projection's lean vs the line,
+    //    exactly like /results. Actual is colored win/loss; ✓/✗ once the play is
+    //    decided (line crossed, or final). An "alive" play stays neutral. ──
     valueText = fmt(live);
     if (hasLine) {
       const line = row.line as number;
-      const wentOver = live > line;
-      const wentUnder = live < line;
-      // Did the model's leaned side win? null = push or the model was ~even.
-      let won: boolean | null = null;
-      if (e.direction === "over") won = wentOver ? true : wentUnder ? false : null;
-      else if (e.direction === "under") won = wentUnder ? true : wentOver ? false : null;
-      valueColor =
-        won === true ? "text-emerald-400" : won === false ? "text-red-400" : "text-slate-200";
+      const g = gradeLean(row.projection, line, live, isFinal);
+      valueColor = gradeTextColor(g);
       trailing = (
         <>
           <span className="text-slate-500">· {fmt(line)}</span>
-          {won === true && <span className="text-emerald-400">✓</span>}
-          {won === false && <span className="text-red-400">✗</span>}
+          {g === "win" && <span className="text-emerald-400">✓</span>}
+          {g === "loss" && <span className="text-red-400">✗</span>}
         </>
       );
-    } else {
-      // No line — fall back to model accuracy (actual vs projection).
-      valueColor =
-        live > row.projection
-          ? "text-emerald-400"
-          : live < row.projection
-            ? "text-red-400"
-            : "text-slate-200";
     }
-  } else {
-    // ── live: actual so far, pace-colored, line shown muted as the target ──
-    valueText = fmt(live);
-    valueColor = liveColor ?? "text-slate-200";
-    if (hasLine) trailing = <span className="text-slate-500">· {fmt(row.line as number)}</span>;
+    // no line → neutral actual, no benchmark to grade against
   }
 
   const title =
@@ -923,7 +954,6 @@ function PlayerChipsRow({
   const showActual = status?.state === "live" || status?.state === "final";
   const isFinal = status?.state === "final";
   const stat = gameStats?.get(player.player_id);
-  const isHitterKind = player.kind === "hitter";
 
   const chips = propKeys
     .map((prop) => ({ prop, row: player.props[prop] }))
@@ -937,8 +967,6 @@ function PlayerChipsRow({
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {chips.map(({ prop, row }) => {
           const live = showActual ? liveActualFor(prop, stat, !!isFinal) : undefined;
-          const liveColor =
-            live !== undefined ? paceColor(live, row.projection, isHitterKind, status) : undefined;
           return (
             <PropChip
               key={prop}
@@ -946,7 +974,6 @@ function PlayerChipsRow({
               row={row}
               live={live}
               isFinal={!!isFinal}
-              liveColor={liveColor}
               onFocus={onFocus}
             />
           );
@@ -994,7 +1021,7 @@ function FocusedPlayerCard({
           <span className="text-slate-100">{row.name}</span>
           {!isHitter && <SharpBadge sharp={row.sharpAgreement} />}
         </div>
-        <EdgeDetail pitcher={row} />
+        <EdgeDetail pitcher={row} actual={liveActual} isFinal={status?.state === "final"} />
         <ConfidenceBar confidence={row.confidence} />
         <RecentFormDots form={row.recentForm} />
         {prop === "strikeouts" && <OppContextLine kRate={row.oppContext?.kRate} />}
@@ -1011,7 +1038,6 @@ function FocusedPlayerCard({
         pitcher={row}
         unit={unit}
         liveActual={liveActual}
-        isHitter={isHitter}
         status={status}
       />
     </li>

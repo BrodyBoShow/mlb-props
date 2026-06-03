@@ -2895,6 +2895,44 @@ Phase-aware chips — final games show actual vs line + hit/miss (same session):
   (proj + edge only; line is in the focus card / tooltip). Could add it but it's a
   3rd element — left out to avoid pre-game congestion.
 
+Board result grading now mirrors /results (projection-lean vs line) (same session):
+- USER (screenshots, live CLE@NYY): the chip/focused result was graded by the
+  de-vigged EDGE direction, but it should be graded by the PROJECTION'S LEAN vs
+  the line — exactly like /results. Schlittler ER proj 1.0 / line 1.5 (leans
+  UNDER) / actual 4 (over) is a clear MISS, but the chip drew no ✗ because the
+  edge was "~Even", and the focused card showed stale "~Even" + a misleading
+  GREEN "4 ER" (paceColor treats actual>proj as good, wrong for lower-is-better
+  props on an under lean).
+- FIX (PropBoard.tsx): new shared gradeLean(projection, line, actual, isFinal)
+  → "win"|"loss"|"push"|"alive"|"none", the EXACT /results rule:
+    lean   = sign(proj − line), |gap| < LINE_LEAN_THRESHOLD ⇒ no lean
+    result = sign(actual − line); win when lean matched result.
+  Because every stat only counts UP in-game, a line already crossed (over) is
+  LOCKED even live; an actual still under the line is "alive" (undecided) while
+  live and decided once final. Rewired:
+  * PropChip (all-props chip): live + final both grade via gradeLean. Actual
+    colored win=emerald / loss=red / alive·push·none=slate; ✓/✗ shown once
+    decided. Replaced the old evalRow-edge-direction win/loss AND the live
+    paceColor. Schlittler now reads "ER 4 · 1.5 ✗" (red); undecided live props
+    (K 3 · 6.5) stay neutral.
+  * ProjectionBadge (focused right chip): actual colored by gradeLean (+ ✓/✗),
+    not paceColor — so a high ER on an under lean reads RED, not green.
+  * EdgeDetail (focused line): when an actual exists (live/final) it now shows
+    the proj-vs-line LEAN + result ("Line 1.5 · proj ▼ Under · ✗ miss") instead
+    of the stale pre-game edge; pre-game still shows the de-vigged edge.
+  * Removed paceColor entirely; dropped isHitter from ProjectionBadge and
+    liveColor/isHitterKind from PlayerChipsRow (all paceColor-only).
+- NOTE: this is the RESULT/grading lean (proj-vs-line, matches /results). The
+  PRE-GAME edge arrows (de-vigged, real-book) are unchanged — a separate
+  forward-looking signal. The two intentionally differ; the board now uses
+  proj-vs-line wherever it's showing a realized result.
+- VERIFIED (dev server, live CLE@NYY 9th): all-props chips — Schlittler ER
+  4·1.5 ✗, Cantillo BB 3·2.5 ✓ (over lean won) / HA 6·4.5 ✗ / ER 4·2.5 ✗,
+  Goldschmidt TB 7·1.5 ✓ / FP 28·5.5 ✓; no-line props (H/RBI/R) neutral; alive
+  props neutral. Focused ER: "Line 1.5 · proj ▼ Under · ✗ miss" + "4 ER ✗ ·
+  proj 1.0". tsc clean; build passes. Frontend-only; engine + FEATURE_COLS (11)
+  untouched.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 
