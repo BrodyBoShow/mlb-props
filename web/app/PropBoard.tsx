@@ -959,13 +959,15 @@ function PropChip({
   row,
   live,
   isFinal,
-  onFocus,
+  active,
+  onTap,
 }: {
   prop: PropType;
   row: Pitcher;
   live: number | undefined;
   isFinal: boolean;
-  onFocus: (p: PropType) => void;
+  active: boolean;       // this chip's inline detail is open
+  onTap: () => void;
 }) {
   const meta = PROP_META[prop];
   const e = evalRow(row);
@@ -1028,14 +1030,18 @@ function PropChip({
     `${hasLine ? ` · line ${row.line}` : " · no line"}` +
     `${row.edge !== undefined && row.bookmaker ? ` (${row.bookmaker})` : ""}` +
     `${live !== undefined ? ` · actual ${fmt(live)}` : ` · proj ${fmt(row.projection)}`}` +
-    ` — tap to focus`;
+    `${active ? " — tap to close" : " — tap for detail"}`;
 
   return (
     <button
       type="button"
-      onClick={() => onFocus(prop)}
+      onClick={onTap}
       title={title}
-      className={`flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] tabular-nums transition hover:brightness-125 ${tint}`}
+      className={[
+        "flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] tabular-nums transition hover:brightness-125",
+        tint,
+        active ? "ring-1 ring-emerald-400/60" : "",
+      ].join(" ")}
     >
       <span className="text-slate-500">{meta.short}</span>
       <span className={`font-semibold ${valueColor}`}>{valueText}</span>
@@ -1044,18 +1050,105 @@ function PropChip({
   );
 }
 
+// ── inline prop detail (props.cash-style detail-on-demand) ───────────────────
+// Opens directly under a player's chip row when a chip is tapped — so you get
+// the full play detail (Fair%/Book%, edge, trends, confidence, sharp badge, live
+// pace) WITHOUT leaving the All-props overview. Only one is open board-wide at a
+// time (clean, never congests). Composes the same leaf components the focused
+// card uses, so there's no logic duplication. "all <prop> →" jumps to the
+// cross-game focused view for that prop.
+function InlinePropDetail({
+  player,
+  prop,
+  gameStats,
+  status,
+  homeTeam,
+  windSpeed,
+  windDirDeg,
+  isDome,
+  onViewAll,
+}: {
+  player: PlayerRow;
+  prop: PropType;
+  gameStats: Map<number, StatLine> | undefined;
+  status: GameStatus | undefined;
+  homeTeam: string;
+  windSpeed?: number | null;
+  windDirDeg?: number | null;
+  isDome?: boolean | null;
+  onViewAll: () => void;
+}) {
+  const row = player.props[prop];
+  if (!row) return null;
+  const isHitter = HITTER_PROPS.has(prop);
+  const meta = PROP_META[prop];
+  const showActual = status?.state === "live" || status?.state === "final";
+  const liveActual = showActual
+    ? liveActualFor(prop, gameStats?.get(player.player_id), status?.state === "final")
+    : undefined;
+
+  return (
+    <div className="mt-2 rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              {meta.label}
+            </span>
+            {!isHitter && <SharpBadge sharp={row.sharpAgreement} />}
+          </div>
+          <EdgeDetail pitcher={row} actual={liveActual} isFinal={status?.state === "final"} />
+          <ConfidenceBar confidence={row.confidence} />
+          <TrendRow trends={row.trends} />
+          {prop === "strikeouts" && <OppContextLine kRate={row.oppContext?.kRate} />}
+          {prop === "hitter_total_bases" && (
+            <WindCardLine
+              homeTeam={homeTeam}
+              windSpeed={windSpeed}
+              windDirDeg={windDirDeg}
+              isDome={isDome}
+            />
+          )}
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <ProjectionBadge pitcher={row} unit={meta.unit} liveActual={liveActual} status={status} />
+          <button
+            type="button"
+            onClick={onViewAll}
+            className="text-[10px] text-slate-500 transition-colors hover:text-slate-300"
+          >
+            all {meta.short} →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PlayerChipsRow({
   player,
   propKeys,
   gameStats,
   status,
-  onFocus,
+  openDetail,
+  onToggleDetail,
+  onViewAll,
+  homeTeam,
+  windSpeed,
+  windDirDeg,
+  isDome,
 }: {
   player: PlayerRow;
   propKeys: PropType[];
   gameStats: Map<number, StatLine> | undefined;
   status: GameStatus | undefined;
-  onFocus: (p: PropType) => void;
+  openDetail: string | null;             // `${playerId}|${prop}` open board-wide
+  onToggleDetail: (key: string) => void;
+  onViewAll: (p: PropType) => void;
+  homeTeam: string;
+  windSpeed?: number | null;
+  windDirDeg?: number | null;
+  isDome?: boolean | null;
 }) {
   const showActual = status?.state === "live" || status?.state === "final";
   const isFinal = status?.state === "final";
@@ -1067,12 +1160,18 @@ function PlayerChipsRow({
 
   if (chips.length === 0) return null;
 
+  // Which of this player's props (if any) is the open inline detail.
+  const openProp = chips.find(
+    (c) => openDetail === `${player.player_id}|${c.prop}`,
+  )?.prop;
+
   return (
     <li className="px-5 py-2.5">
       <div className="text-sm text-slate-100">{player.name}</div>
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {chips.map(({ prop, row }) => {
           const live = showActual ? liveActualFor(prop, stat, !!isFinal) : undefined;
+          const key = `${player.player_id}|${prop}`;
           return (
             <PropChip
               key={prop}
@@ -1080,11 +1179,25 @@ function PlayerChipsRow({
               row={row}
               live={live}
               isFinal={!!isFinal}
-              onFocus={onFocus}
+              active={openDetail === key}
+              onTap={() => onToggleDetail(key)}
             />
           );
         })}
       </div>
+      {openProp && (
+        <InlinePropDetail
+          player={player}
+          prop={openProp}
+          gameStats={gameStats}
+          status={status}
+          homeTeam={homeTeam}
+          windSpeed={windSpeed}
+          windDirDeg={windDirDeg}
+          isDome={isDome}
+          onViewAll={() => onViewAll(openProp)}
+        />
+      )}
     </li>
   );
 }
@@ -1161,6 +1274,8 @@ function GameCard({
   gameStats,
   date,
   onFocus,
+  openDetail,
+  onToggleDetail,
 }: {
   gv: GameView;
   summary: GameSummary;
@@ -1171,6 +1286,8 @@ function GameCard({
   gameStats: Map<number, StatLine> | undefined;
   date: string;
   onFocus: (p: PropType) => void;
+  openDetail: string | null;
+  onToggleDetail: (key: string) => void;
 }) {
   const [showAllHitters, setShowAllHitters] = useState(false);
 
@@ -1261,7 +1378,13 @@ function GameCard({
                       propKeys={PITCHER_PROP_KEYS}
                       gameStats={gameStats}
                       status={status}
-                      onFocus={onFocus}
+                      openDetail={openDetail}
+                      onToggleDetail={onToggleDetail}
+                      onViewAll={onFocus}
+                      homeTeam={homeTeam}
+                      windSpeed={gv.windSpeed}
+                      windDirDeg={gv.windDirDeg}
+                      isDome={gv.isDome}
                     />
                   ))}
                 </ul>
@@ -1283,7 +1406,13 @@ function GameCard({
                         propKeys={HITTER_PROP_KEYS}
                         gameStats={gameStats}
                         status={status}
-                        onFocus={onFocus}
+                        openDetail={openDetail}
+                        onToggleDetail={onToggleDetail}
+                        onViewAll={onFocus}
+                        homeTeam={homeTeam}
+                        windSpeed={gv.windSpeed}
+                        windDirDeg={gv.windDirDeg}
+                        isDome={gv.isDome}
                       />
                     ))}
                   </ul>
@@ -1344,6 +1473,19 @@ export default function PropBoard({
   // every player's full line of chips; a specific prop shows the rich per-prop
   // card. Defaulting to "all" means you never have to pick a prop to start.
   const [focus, setFocus] = useState<PropType | "all">("all");
+
+  // Inline detail-on-demand (All-props view): which `${playerId}|${prop}` chip's
+  // detail panel is open. Board-wide single value -> only ONE open at a time, so
+  // the overview never congests. Tapping the open chip again closes it.
+  const [openDetail, setOpenDetail] = useState<string | null>(null);
+  const toggleDetail = (key: string) =>
+    setOpenDetail((prev) => (prev === key ? null : key));
+  // Switching the prop lens clears any open inline panel (it belongs to the
+  // All-props view) — keeps the two modes from leaking into each other.
+  const selectFocus = (f: PropType | "all") => {
+    setOpenDetail(null);
+    setFocus(f);
+  };
 
   // Manual expand/collapse overrides, keyed by `${focus}:${gameId}` so a choice
   // under one lens never leaks onto another.
@@ -1414,11 +1556,11 @@ export default function PropBoard({
 
       {/* prop FILTER — "All props" (game-first matrix) or focus a single prop */}
       <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
-        <button onClick={() => setFocus("all")} className={chipCls(focus === "all")}>
+        <button onClick={() => selectFocus("all")} className={chipCls(focus === "all")}>
           All props
         </button>
         {PROPS.map((p) => (
-          <button key={p.key} onClick={() => setFocus(p.key)} className={chipCls(focus === p.key)}>
+          <button key={p.key} onClick={() => selectFocus(p.key)} className={chipCls(focus === p.key)}>
             {p.label}
           </button>
         ))}
@@ -1482,7 +1624,9 @@ export default function PropBoard({
                 focus={focus}
                 gameStats={liveStats.get(gv.game_id)}
                 date={date}
-                onFocus={setFocus}
+                onFocus={selectFocus}
+                openDetail={openDetail}
+                onToggleDetail={toggleDetail}
               />
             ))}
           </div>
