@@ -926,6 +926,16 @@ def main() -> None:
             except Exception as exc:
                 print(f"  CLV scorecard failed ({exc}) -- skipping")
 
+            # Calibration: does model_over_prob match the realized over-rate?
+            # Log-only, read-only — measures Brier + reliability + over/under bias
+            # per prop. The prerequisite for any calibration map (measure first).
+            print("Scoring probability calibration (log-only)...")
+            try:
+                import calibration_scorecard
+                calibration_scorecard.log_scorecard()
+            except Exception as exc:
+                print(f"  calibration scorecard failed ({exc}) -- skipping")
+
         _run_lines_and_edges(name_to_id, all_projections)
         _run_calibration(all_projections)
 
