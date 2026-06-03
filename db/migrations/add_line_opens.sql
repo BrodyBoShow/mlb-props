@@ -18,5 +18,11 @@ create table if not exists line_opens (
     unique (player_id, prop_type, bookmaker, game_date)
 );
 
-alter table line_opens enable row level security;
-create policy "public read line_opens" on line_opens for select to anon using (true);
+-- NO row-level security: line_opens is an ENGINE-INTERNAL table (the frontend
+-- never reads it) and the engine writes with the anon key, the same as the
+-- other write tables in this project. Enabling RLS with only a read policy
+-- silently BLOCKS the engine's inserts ("new row violates row-level security
+-- policy"). If you ever switch the engine to the service_role key, you can
+-- enable RLS here safely (service_role bypasses it).
+-- If the table was already created WITH rls enabled, run this once to fix it:
+alter table line_opens disable row level security;

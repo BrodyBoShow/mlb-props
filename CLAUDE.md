@@ -3075,6 +3075,33 @@ CLV (closing-line-value) tracking — the proof-of-edge engine (this session):
   SQL editor. Until then the pipeline runs cleanly and the CLV log says "no
   opening lines captured yet".
 
+End-of-session health check + line_opens RLS fix (this session):
+- Read-only health check: ALL engine modules import clean; FEATURE_COLS=11;
+  model.train() fits against live data (830 rows -> 78 pitcher rows -> 0 NaN
+  after imputation -> XGBoost FITTED). GitHub Actions: last 7 runs all green +
+  a scheduled run mid-session succeeded exercising the new Poisson/CLV code.
+- BUG caught via the production Actions log (would have been silent): the CLV
+  capture was failing with "new row violates row-level security policy for table
+  line_opens" (code 42501). add_line_opens.sql enabled RLS with a read-only
+  policy, but the engine writes with the ANON key (db._client falls back to anon;
+  the project's other write tables have RLS OFF — the engine never used a
+  service_role key in CI). RLS + read-only policy therefore BLOCKED every CLV
+  insert — CLV would have captured nothing, silently (record_line_opens degrades
+  gracefully).
+- FIX: line_opens is engine-internal (frontend never reads it), so it needs NO
+  RLS. add_line_opens.sql now does `disable row level security` instead of
+  enabling it. db/schema.sql already had no RLS on line_opens (only the migration
+  did). USER ACTION (one-time, live DB already has the table):
+    alter table line_opens disable row level security;
+  After that the next cron's record_line_opens succeeds and CLV starts capturing.
+  (Proper long-term alternative: set SUPABASE_KEY to the service_role in CI
+  secrets — then RLS can stay on everywhere and writes bypass it. Separate
+  hardening; not required for CLV to work.)
+- NOTE (not a bug): the 11 PM ET scheduled run logged "edges: 0 computed, 1620
+  skipped (no line)" — expected late-night behavior (that day's markets closed,
+  next day's lines keyed to the next date), not the Poisson change. Existing
+  edges persist (upsert, not delete); the morning full run recomputes them.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV scorecards).
 
