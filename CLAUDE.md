@@ -3102,6 +3102,41 @@ End-of-session health check + line_opens RLS fix (this session):
   next day's lines keyed to the next date), not the Poisson change. Existing
   edges persist (upsert, not delete); the morning full run recomputes them.
 
+Projection-date timezone bug — hitters misfiled to the next day (this session):
+- USER report: Featured Plays "left" (June 2 Hitting Edges + HR Matchups empty)
+  AND June 3 showed "the same HR guys" as June 2. Read-only check nailed it:
+  2026-06-02 hitter_home_runs = 0 rows; 2026-06-03 = 270 rows whose game_ids
+  (822971, 823129, 823460, ...) are JUNE 2's games (e.g. 823129 = NYM@SEA, 9:40
+  PM ET June 2). One bug caused BOTH symptoms: June 2's hitter projections were
+  filed under projection_date 2026-06-03.
+- ROOT CAUSE: the baseline/model projection builders default
+  `proj_date = projection_date or date.today()` — date.today() is the SERVER's
+  UTC date. After 8 PM ET (midnight UTC) the UTC date is already TOMORROW while
+  et_today() (Eastern) is still today. main.py called the builders WITHOUT
+  projection_date (main.py:343 pitcher loop, :584 hitter loop), so evening crons
+  dated the build with UTC (June 3) while the skip/delete logic used et_today
+  (June 2) — the mismatch emptied June 2 and dumped its hitters onto June 3. The
+  pitcher full-build only runs in the morning (UTC==ET) so it never manifested;
+  hitters rebuild/fill-in in the evening, so they did. This is the same class as
+  the earlier "9 PM ET / 1 AM UTC" tz bug; the date.today() default was the
+  remaining hole.
+- FIX (root + explicit, engine-only): baseline.py (5 builders) and model.py
+  (predict) now default `projection_date or et_today()` (Eastern), with et_today
+  imported in both. main.py also passes projection_date=et_today()/today
+  EXPLICITLY at both builder loops (belt-and-suspenders). Verified: py_compile
+  clean; et_today resolves in baseline+model and all agree; FEATURE_COLS=11;
+  the local check shows et_today (June 3 ET) differs from date.today (June 2
+  local) — proving the gap the bug rode on.
+- DATA CLEANUP (user runs once in Supabase): the already-misfiled rows are
+  orphaned (June 2 games under projection_date June 3). Delete any projection
+  whose date doesn't match its game's Eastern date:
+    delete from projections p using games g
+     where p.game_id = g.game_id and g.start_time is not null
+       and p.projection_date <> (g.start_time at time zone 'America/New_York')::date;
+  (June 2's hitter data for that past slate is lost — acceptable; June 3+ build
+  correctly now.) Featured Plays "leaving" was THIS bug, not a design issue;
+  they populate normally on a correctly-dated slate with real edges.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV scorecards).
 

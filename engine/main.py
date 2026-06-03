@@ -340,7 +340,7 @@ def _run_pitcher_pipeline(
         (baseline.build_pitcher_fantasy_score_projections, "pitcher_fantasy_score"),
     ]:
         print(f"Building {label} projections...")
-        rows = builder(starters)
+        rows = builder(starters, projection_date=et_today())
         other_prop_rows.extend(rows)
         n = db.upsert_projections(rows)
         print(f"  upserted {n} {label} projections")
@@ -581,7 +581,7 @@ def _build_and_upsert_hitters(
         (baseline.build_hitter_fantasy_score_projections, "hitter_fantasy_score"),
     ]:
         print(f"Building {label} projections...")
-        rows = builder(players)
+        rows = builder(players, projection_date=today)
         if label == "hitter_hits":
             hitter_hit_rows = rows
         # Attach display/ranking context to the HR rows only (never to the model).

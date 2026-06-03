@@ -36,6 +36,7 @@ from constants import (
     MIN_TRAINING_ROWS,
     STATCAST_LOOKBACK_DAYS,
     STRIKEOUT_EVENTS,
+    et_today,
     get_park_factor_k,
 )
 from stats import _opp_k_rate
@@ -430,7 +431,7 @@ def predict(
     a fresh API call. If the bulk fetch comes back empty (Savant flake) we
     fall back to per-pitcher fetches so the run can still produce projections.
     """
-    proj_date = projection_date or date.today()
+    proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
     proj_date_str = proj_date.strftime("%Y-%m-%d")
 
     print(f"  bulk Statcast fetch for {STATCAST_LOOKBACK_DAYS}-day window...")

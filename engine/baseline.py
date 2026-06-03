@@ -25,6 +25,7 @@ from constants import (
     RECENT_STARTS,
     RECENT_WEIGHT,
     STRIKEOUT_EVENTS,
+    et_today,
 )
 from fantasy_score import (
     PITCHER_EARNED_RUN_PTS,
@@ -107,7 +108,7 @@ def build_strikeout_projections(
     When provided, each pitcher is filtered out of the shared frame in memory
     instead of triggering its own statcast_pitcher() round-trip.
     """
-    proj_date = projection_date or date.today()
+    proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
     start_dt = (proj_date - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     end_dt = proj_date.strftime("%Y-%m-%d")
     proj_date_str = proj_date.strftime("%Y-%m-%d")
@@ -148,7 +149,7 @@ def _build_from_starts(
     prop_type: value to store in the projections table
     label:     short unit string for stdout (e.g. 'H', 'BB')
     """
-    proj_date = projection_date or date.today()
+    proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
     proj_date_str = proj_date.strftime("%Y-%m-%d")
 
     rows: list[dict] = []
@@ -221,7 +222,7 @@ def build_pitcher_fantasy_score_projections(
     to reading historical actual_pitcher_fantasy_score directly -- that
     already includes the W bonus.
     """
-    proj_date = projection_date or date.today()
+    proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
     proj_date_str = proj_date.strftime("%Y-%m-%d")
 
     rows: list[dict] = []
@@ -281,7 +282,7 @@ def _build_hitter_from_games(
     prop_type: value to store in the projections table
     label:     short unit string for stdout (e.g. 'H', 'TB')
     """
-    proj_date = projection_date or date.today()
+    proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
     proj_date_str = proj_date.strftime("%Y-%m-%d")
 
     rows: list[dict] = []
@@ -353,7 +354,7 @@ def build_hitter_fantasy_score_projections(
     NO cold start -- the baseline works on day one without waiting for
     player_game_logs to accumulate.
     """
-    proj_date = projection_date or date.today()
+    proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
     proj_date_str = proj_date.strftime("%Y-%m-%d")
 
     rows: list[dict] = []
