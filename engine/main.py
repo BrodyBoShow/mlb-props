@@ -601,6 +601,63 @@ def _build_and_upsert_hitters(
     return hitter_projections, hitter_hit_rows
 
 
+def _fill_in_lined_hitters(
+    games: list[dict],
+    name_to_id: dict[str, int],
+    bulk_df: object = None,
+    starters: list[dict] | None = None,
+) -> int:
+    """Project hitters that the books have posted a LINE for but who have no
+    confirmed lineup slot yet — so pre-game games (later starts + the
+    not-yet-posted second team) still show hitter projections instead of waiting
+    for confirmed lineups ~60-90 min before first pitch.
+
+    PURELY ADDITIVE + DEFENSIVE: builds ONLY lined hitters that are missing a
+    hitter_hits projection (never deletes, never touches _run_hitter_pipeline's
+    skip/stale logic), maps each to its game via team resolution, and upserts.
+    Adds the built hitters to name_to_id so the subsequent lines fetch resolves
+    their lines and edges compute for them. Returns the count built; any failure
+    is logged and returns 0 (the pipeline is unaffected). Runs every cron, so it
+    only does real work when newly-lined games appear.
+    """
+    today_str = et_today().strftime("%Y-%m-%d")
+    line_players = db.get_hitter_line_players_for_date(today_str)
+    if not line_players:
+        return 0
+    already = db.get_projection_player_ids_for_date(today_str, "hitter_hits")
+    missing = {pid: nm for pid, nm in line_players.items() if pid not in already}
+    if not missing:
+        print("  lined-hitter coverage: all lined hitters already projected")
+        return 0
+
+    expected = fetch.build_expected_hitters(missing, games)
+    if not expected:
+        print(
+            f"  lined-hitter coverage: {len(missing)} lined hitters missing a "
+            f"projection but none map to a team playing today"
+        )
+        return 0
+
+    covered = {p["game_id"] for p in expected}
+    print(
+        f"  lined-hitter coverage: building {len(expected)} hitters with a line "
+        f"but no confirmed lineup slot (across {len(covered)} game(s))"
+    )
+    db.upsert_players(
+        [
+            {k: v for k, v in p.items()
+             if k in ("player_id", "full_name", "team", "position", "bats", "throws")}
+            for p in expected
+        ]
+    )
+    # So the upcoming lines fetch resolves these names -> lines -> edges.
+    name_to_id.update(
+        {p["full_name"]: p["player_id"] for p in expected if p.get("full_name")}
+    )
+    _build_and_upsert_hitters(expected, bulk_df=bulk_df, starters=starters)
+    return len(expected)
+
+
 def _run_matchup_shadow(starters: list[dict], games: list[dict]) -> None:
     """SHADOW MODE: deterministic matchup-expected-K stored ALONGSIDE the live
     strikeout projection (projections.matchup_expected_k). NEVER changes the
@@ -887,6 +944,17 @@ def main() -> None:
             name_to_id, bulk_df=bulk_df, starters=starters
         )
         all_projections = pitcher_projections + hitter_projections
+
+        # PRE-GAME HITTER COVERAGE: also project hitters with a posted LINE but no
+        # confirmed lineup slot yet (later games + the not-yet-posted second
+        # team). Additive + defensive — if it builds any, discard the in-memory
+        # list so _run_lines_and_edges re-fetches the COMPLETE set (bulk + fill-in)
+        # from the DB and computes edges for everyone.
+        try:
+            if _fill_in_lined_hitters(games, name_to_id, bulk_df=bulk_df, starters=starters):
+                all_projections = []
+        except Exception as exc:
+            print(f"  lined-hitter coverage failed ({exc}) -- skipping")
 
         # SELF-HEAL: drop any projection misfiled onto the wrong date (defense in
         # depth behind the et_today() builder fix). Runs every cron so the daily

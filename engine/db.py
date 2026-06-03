@@ -333,6 +333,42 @@ def get_projection_player_ids_for_date(
         return set()
 
 
+def get_hitter_line_players_for_date(date_str: str) -> dict[int, str]:
+    """{player_id: player_name} for distinct players with ANY hitter-prop line on
+    date_str. Used by main._fill_in_lined_hitters to project hitters that the
+    books have posted lines for but who have no confirmed lineup slot yet (later
+    games + the not-yet-posted second team), so pre-game hitter coverage doesn't
+    wait for confirmed lineups. Paginated (a full slate has thousands of line
+    rows). Returns {} on any error — the caller skips the fill-in gracefully.
+    """
+    try:
+        out: dict[int, str] = {}
+        page_size = 1000
+        for page in range(50):
+            start = page * page_size
+            end = start + page_size - 1
+            resp = (
+                _client()
+                .table("lines")
+                .select("player_id, player_name")
+                .eq("game_date", date_str)
+                .in_("prop_type", list(_HITTER_PROP_TYPES))
+                .range(start, end)
+                .execute()
+            )
+            batch = resp.data or []
+            for r in batch:
+                pid = r.get("player_id")
+                if pid is not None:
+                    out.setdefault(int(pid), r.get("player_name") or "")
+            if len(batch) < page_size:
+                break
+        return out
+    except Exception as exc:
+        print(f"  get_hitter_line_players_for_date failed ({exc})")
+        return {}
+
+
 def get_players_with_sweet_spot(date_str: str) -> set[int]:
     """player_ids whose hitter_home_runs row on `date_str` already has a non-null
     sweet_spot_pct.

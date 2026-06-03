@@ -312,6 +312,70 @@ def fetch_lineups(date_str: str | None = None) -> list[dict]:
     return records
 
 
+def build_expected_hitters(
+    line_players: dict[int, str],
+    games: list[dict],
+    exclude_ids: set[int] | None = None,
+) -> list[dict]:
+    """Shape lineup-style dicts for hitters that have a LINE but no confirmed
+    lineup slot, so pre-game games (later starts + the not-yet-posted second
+    team) still get hitter projections.
+
+    line_players: {player_id: full_name} (from db.get_hitter_line_players_for_date).
+    games:        today's games (need game_id, home_team, away_team).
+    exclude_ids:  player_ids already covered by a confirmed lineup — skipped.
+
+    Each player's team is resolved via the MLB /people bulk call and mapped to
+    today's game (team == home_team -> home, == away_team -> away), giving the
+    game_id + home_away the baseline builders need. batting_order is 0 (not a
+    confirmed slot; the rolling-average builders don't use it). Players whose
+    team isn't in today's slate (or can't be resolved) are dropped. Returns the
+    same dict shape as fetch_lineups so it slots straight into the builders.
+    """
+    exclude = exclude_ids or set()
+    ids = [pid for pid in line_players if pid not in exclude]
+    if not ids or not games:
+        return []
+
+    # team name -> (game_id, home_away). games.home_team is the statsapi
+    # home_name, which matches the /people currentTeam name string.
+    team_to_game: dict[str, tuple[int, str]] = {}
+    for g in games:
+        gid = g.get("game_id")
+        if gid is None:
+            continue
+        if g.get("home_team"):
+            team_to_game[g["home_team"]] = (gid, "home")
+        if g.get("away_team"):
+            team_to_game[g["away_team"]] = (gid, "away")
+
+    bio = _fetch_handedness_by_id(ids)
+    out: list[dict] = []
+    for pid in ids:
+        b = bio.get(pid) or {}
+        team = b.get("team")
+        if not team:
+            continue
+        slot = team_to_game.get(team)
+        if not slot:
+            continue   # player's team has no game on this slate
+        gid, home_away = slot
+        out.append(
+            {
+                "player_id":     pid,
+                "full_name":     line_players[pid],
+                "team":          team,
+                "position":      None,
+                "bats":          b.get("bats"),
+                "throws":        b.get("throws"),
+                "game_id":       gid,
+                "batting_order": 0,        # not a confirmed slot
+                "home_away":     home_away,
+            }
+        )
+    return out
+
+
 def _fetch_handedness_by_id(player_ids: list[int]) -> dict[int, dict]:
     """Resolve player_id -> {bats, throws, team} via the MLB Stats API /people.
 
