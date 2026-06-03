@@ -3598,6 +3598,27 @@ STAGE 2 — RESUME PLAN (feed the backfilled season to the MODEL, validated):
   foundation guard (train() excludes backfilled) stays until that flip. Edges/CLV
   stay forward-only (no historical odds).
 
+Backfill regression on /results — FIXED + a deeper thread to chase (this session):
+- SYMPTOM: after the season backfill, /results Betting-Edge count dropped ~285 ->
+  64. Data was NOT lost (503 graded rows in the 7-day window intact, 859 total).
+- CAUSE: /results builds logsByKey keyed (player_id, game_date), ONE actual per
+  key. The backfill added 1197 historical rows into the 7-day window alongside
+  503 graded -> 401 (player,date) COLLISIONS where a backfill row displaced the
+  graded actual, shrinking the join.
+- FIX (committed 937c1c0): results/page.tsx now excludes backfilled rows from all
+  THREE player_game_logs reads (window anchor + 7-day betting + 42-day trend) via
+  `.or("backfilled.is.null,backfilled.eq.false")`. /results grades engine
+  projections vs lines vs ENGINE-graded actuals; backfill rows have no
+  projections/lines so they must be excluded. Restores pre-backfill counts.
+- DEEPER THREAD (NOT yet investigated — for next session, low priority): 401
+  collisions imply the backfill's gamePk != the graded game_id for ~401 games
+  (same real game, two game_ids), OR doubleheaders. If gamePks genuinely differ,
+  insert_backfill_games may have created DUPLICATE games rows (inert on the board
+  — no projections — but untidy), and the HOME trends (which INCLUDE backfill by
+  design) may double-count those dates slightly. Worth a dedup-by-(player,date)
+  in the trend bucket + understanding the game_id mismatch. Symptom (the reported
+  /results drop) is resolved; this is cleanup.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). PAUSED MID-STAGE-2: resume with
