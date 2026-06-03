@@ -74,15 +74,27 @@ function fmt(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
-// Grade the PROJECTION'S LEAN against the line vs the actual — the EXACT rule
-// the /results page uses, surfaced on the board so the two agree:
+// Grade the PROJECTION'S LEAN against the line vs the actual — i.e. if you'd
+// bet the side the projection points to (over if proj > line, under if proj <
+// line), did that bet WIN. green = win money, red = lose money. This is the
+// canonical grading for the (monetized) tool; it matches the /results page so
+// the board and the results page always agree.
 //   lean   = sign(projection − line)   (|gap| < LINE_LEAN_THRESHOLD ⇒ no lean)
 //   result = sign(actual − line)
 //   "win" when the lean matched the result, "loss" when it didn't.
-// (NOT the de-vigged edge direction — that's a separate forward-looking signal.)
-// Every stat only counts UP during a game, so a line that's already been crossed
-// (over) is LOCKED even mid-game; an actual still under the line is "alive" while
-// the game is live and only decided once it's final.
+//
+// Canonical spec examples (these MUST keep producing these colors):
+//   proj 10, line 7.5, actual 9 → over lean,  actual over  → WIN  (green)
+//   proj 10, line 7.5, actual 7 → over lean,  actual under → LOSS (red)
+//   proj  6, line 7.5, actual 7 → under lean, actual under → WIN  (green)
+//   proj  6, line 7.5, actual 9 → under lean, actual over  → LOSS (red)
+//   proj ≈ line (|proj − line| < threshold)                → no mark
+//
+// (This is NOT the de-vigged edge direction — that's a separate forward-looking
+// pre-game signal.) Every stat only counts UP during a game, so a line already
+// crossed (over) is LOCKED even mid-game; an actual still under the line is
+// "alive" (the bet hasn't settled — could still cross) while live, and is only
+// graded win/loss once the game is final.
 type LeanGrade = "win" | "loss" | "push" | "alive" | "none";
 function gradeLean(
   projection: number,
