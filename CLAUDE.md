@@ -2729,6 +2729,55 @@ Fantasy lines corrupted by the ParlayAPI ladder when PP-direct fails — fixed:
   currently applies only to the 2 fill-in hitters from that run; the other ~268
   self-heal on the next fresh-slate full build (or a line-safe projection rebuild).
 
+Condensed, best-edge-first, collapsible per-game board (this session):
+- PROBLEM (user): a 15-game slate rendered every game fully expanded, stacked
+  vertically — a very long scroll where the games at the bottom were buried.
+  User asked to "condense the props into game labels."
+- DETERMINATION (delegated to me; user said "compare successful prop sites").
+  Research (Outlier.bet +EV tab, PrizePicks "Discrepancies", Props.cash "EDGE"
+  feature; common UX failure = "getting lost clicking through menus to find
+  lines"): every successful prop tool SURFACES VALUE FIRST and never makes you
+  hunt for the edge. So a plain accordion (hide everything behind a tap) is the
+  anti-pattern; the right design is condense-but-keep-the-signal. Decisions:
+  * Collapsed row = the game's single best play inline (name · line · edge/lean
+    + "+N more"), never blank ("No edge" / "No lines yet" fallback).
+  * Sort = best-edge-first, banded bettable(scheduled) → live → final so an edge
+    on an unbettable live/final game can't outrank an upcoming play. Fixes
+    "good stuff buried at the bottom."
+  * Default = smart: a game with a qualifying edge auto-expands; all-even games
+    collapse to a thin row; final games collapse (that's /results' job).
+  * Plus an Expand all / Collapse all control.
+- SCOPE: web/app/PropBoard.tsx ONLY — pure presentation. NO edge math, NO
+  selection logic, NO Featured Plays / HR composite / sharp-badge / live-overlay
+  changes; engine + FEATURE_COLS (11) untouched. The expanded player list is the
+  EXACT prior card layout (EdgeDetail / ConfidenceBar / RecentFormDots /
+  OppContextLine / WindCardLine / ProjectionBadge / SharpBadge all reused as-is).
+- IMPLEMENTATION (PropBoard.tsx):
+  * summarizeGame(g) → {bestPlay, qualifyingCount, hasAnyLine, topMagnitude}.
+    Per player with a line: two-sided book → |edge| vs EDGE_THRESHOLD (same as
+    EdgeDetail); DFS fantasy → |proj−line| vs LINE_LEAN_THRESHOLD (same rule
+    /results grades on). bestPlay = strongest QUALIFYING play; topMagnitude
+    (qualifying-or-not) drives the sort.
+  * stateRank (scheduled/other 0, live 1, final 2) + topMagnitude desc +
+    startTime asc tiebreak. NOTE: game order now differs PER TAB (each tab's
+    best edge differs) — intentional, supersedes the old "identical order across
+    all 10 tabs" note.
+  * defaultExpanded(summary,status): final → collapsed; else qualifyingCount>0.
+  * Manual overrides keyed `${activeTab}:${gameId}` (so a choice on one tab never
+    leaks to another — game ids are shared across tabs); no useEffect/reset
+    needed. allExpanded + toggleAll for the Expand/Collapse-all button.
+  * New sub-components: Chevron (▶, rotate-90 when open), CollapsedSummary,
+    GameCard (clickable role=button header — can't wrap an <h2> in a <button> —
+    + collapsed summary OR the full <ul> player list). The old GameHeader
+    function was folded into GameCard (deleted; no stray refs).
+  * GameGroup added to the type import.
+- VERIFIED: tsc --noEmit clean; npm run build passes (/ 10.8 kB, was 9.55).
+  Dev-server screenshot (2026-06-02 slate, Strikeouts tab): games sorted
+  best-edge-first → LA Dodgers @ Arizona on top (Eric Lauer +0.49, the slate's
+  strongest); collapsed summary renders "Eric Lauer 3.5 K ▲ +0.49 +1 more";
+  edge games auto-expanded, Expand/Collapse-all toggles the whole slate; park/
+  wind tags + live-status line preserved on the header. Frontend-only.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

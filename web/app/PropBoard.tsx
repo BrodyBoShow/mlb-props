@@ -13,6 +13,7 @@ import type {
   ByProp,
   FeaturedSection,
   FormDot,
+  GameGroup,
   GameStatus,
   Pitcher,
   PropType,
@@ -483,59 +484,287 @@ function StatusLine({ status }: { status: GameStatus | undefined }) {
   return <span>{status.detailedState || "—"}</span>;
 }
 
-function GameHeader({
-  matchup,
-  date,
-  status,
-  windSpeed,
-  windDirDeg,
-  isDome,
-}: {
-  matchup: string;
-  date: string;
-  status: GameStatus | undefined;
-  windSpeed?: number | null;
-  windDirDeg?: number | null;
-  isDome?: boolean | null;
-}) {
-  // matchup is "Away @ Home" — the home team is what determines the park.
-  // No MLB team name contains " @ " so the split is safe; fall back to ""
-  // if the matchup is a Game-N placeholder (no home team known).
-  const homeTeam = matchup.includes(" @ ")
-    ? matchup.split(" @ ")[1]
-    : "";
+// ── per-game edge summary (presentation-only) ────────────────────────────────
+// Scans a game's players for the active prop and returns its single strongest
+// QUALIFYING play + how many qualify. This lets a COLLAPSED game surface its
+// best edge inline and lets the slate be ordered best-edge-first. Pure display
+// math over the already-computed edge/line fields — no edge-model logic here.
 
-  // Today's wind clause ALONGSIDE the static park tag (display-only). null when
-  // there's no usable wind / calm / unknown bearing → only the park tag shows.
-  // Same arrow + mph + direction + colors as the HR cards. The "·" separator
-  // renders only when BOTH a (non-neutral) park tag and a wind clause appear.
-  const wc = windClause({ homeTeam, windSpeed, windDirDeg, isDome });
-  const parkShown = !!homeTeam && getParkProfile(homeTeam).direction !== "neutral";
+type BestPlay = {
+  name: string;
+  line: number;
+  edge?: number; // undefined for DFS (PrizePicks fantasy) lean-only props
+  direction: "over" | "under" | "even";
+};
+
+type GameSummary = {
+  bestPlay: BestPlay | null; // strongest qualifying play (null = none qualify)
+  qualifyingCount: number; // players clearing the edge/lean threshold
+  hasAnyLine: boolean; // any player carries a line at all
+  topMagnitude: number; // strongest |edge|/|lean| — drives the sort
+};
+
+function summarizeGame(g: GameGroup): GameSummary {
+  let bestPlay: BestPlay | null = null;
+  let bestQualMag = -1;
+  let topMagnitude = 0;
+  let qualifyingCount = 0;
+  let hasAnyLine = false;
+
+  for (const p of g.pitchers) {
+    if (p.line === undefined) continue;
+    hasAnyLine = true;
+
+    let magnitude: number;
+    let direction: "over" | "under" | "even";
+    let qualifies: boolean;
+    let edge: number | undefined;
+
+    if (p.edge !== undefined) {
+      // Two-sided book: de-vigged edge drives it all (same thresholds as EdgeDetail).
+      edge = p.edge;
+      magnitude = Math.abs(p.edge);
+      direction =
+        p.edge > EDGE_THRESHOLD ? "over" : p.edge < -EDGE_THRESHOLD ? "under" : "even";
+      qualifies = magnitude > EDGE_THRESHOLD;
+    } else {
+      // DFS fantasy line: lean = proj − line (the exact rule /results grades on).
+      const diff = p.projection - p.line;
+      magnitude = Math.abs(diff);
+      direction =
+        diff > LINE_LEAN_THRESHOLD ? "over" : diff < -LINE_LEAN_THRESHOLD ? "under" : "even";
+      qualifies = magnitude > LINE_LEAN_THRESHOLD;
+    }
+
+    if (magnitude > topMagnitude) topMagnitude = magnitude;
+    if (qualifies) {
+      qualifyingCount += 1;
+      if (magnitude > bestQualMag) {
+        bestQualMag = magnitude;
+        bestPlay = { name: p.name, line: p.line, edge, direction };
+      }
+    }
+  }
+
+  return { bestPlay, qualifyingCount, hasAnyLine, topMagnitude };
+}
+
+// Sort rank by game state: scheduled/upcoming (bettable) first, then live, then
+// final. Within a rank, games sort by their strongest edge (descending), so the
+// juiciest BETTABLE matchups float to the top — the fix for "good plays buried
+// at the bottom of the slate".
+function stateRank(s: GameStatus | undefined): number {
+  if (!s) return 0;
+  if (s.state === "final") return 2;
+  if (s.state === "live") return 1;
+  return 0;
+}
+
+// Default open/closed: a game with a qualifying edge starts EXPANDED (its plays
+// are why you opened the app); an all-even game collapses to a thin row; final
+// games collapse (they're results — /results covers that view).
+function defaultExpanded(summary: GameSummary, status: GameStatus | undefined): boolean {
+  if (status?.state === "final") return false;
+  return summary.qualifyingCount > 0;
+}
+
+function Chevron({ expanded }: { expanded: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`mt-1 inline-block shrink-0 text-[10px] text-slate-500 transition-transform ${
+        expanded ? "rotate-90" : ""
+      }`}
+    >
+      ▶
+    </span>
+  );
+}
+
+// One-line summary shown when a game is collapsed: its single best play inline
+// (name · line · edge/lean) + a "+N more" count. Falls back to a muted
+// "No edge" / "No lines yet" so a collapsed game is never blank.
+function CollapsedSummary({ summary, unit }: { summary: GameSummary; unit: string }) {
+  const { bestPlay, qualifyingCount, hasAnyLine } = summary;
+
+  if (!bestPlay) {
+    return (
+      <div className="mt-1.5 pl-5 text-xs text-slate-600">
+        {hasAnyLine ? "No edge" : "No lines yet"}
+      </div>
+    );
+  }
+
+  const arrow =
+    bestPlay.direction === "over" ? "▲" : bestPlay.direction === "under" ? "▼" : "";
+  const tone =
+    bestPlay.direction === "over"
+      ? "text-emerald-400"
+      : bestPlay.direction === "under"
+        ? "text-red-400"
+        : "text-slate-500";
+  const value =
+    bestPlay.edge !== undefined
+      ? `${bestPlay.edge >= 0 ? "+" : "−"}${Math.abs(bestPlay.edge).toFixed(2)}`
+      : bestPlay.direction === "over"
+        ? "Over"
+        : "Under";
 
   return (
-    <div className="border-b border-slate-800 bg-slate-900 px-5 py-3">
-      <div className="flex items-start justify-between gap-2">
-        <h2 className="font-semibold text-slate-200">{matchup}</h2>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-1.5 gap-y-1">
-          <ParkTag homeTeam={homeTeam} />
-          {parkShown && wc && <span className="text-[10px] text-slate-600">·</span>}
-          {wc && (
-            <span
-              title={wc.tooltip}
-              className={`text-[11px] font-medium tabular-nums ${wc.tone}`}
-            >
-              {wc.arrow ? `${wc.arrow} ` : ""}
-              {wc.text}
-            </span>
-          )}
-        </div>
-      </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
-        <span>{formatShortDate(date)}</span>
-        {status && <span className="text-slate-600">·</span>}
-        <StatusLine status={status} />
-      </div>
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-5 text-xs tabular-nums">
+      <span className="font-medium text-slate-200">{bestPlay.name}</span>
+      <span className="text-slate-500">
+        {bestPlay.line} {unit}
+      </span>
+      <span className={`font-semibold ${tone}`}>
+        {arrow} {value}
+      </span>
+      {qualifyingCount > 1 && (
+        <span className="text-slate-600">+{qualifyingCount - 1} more</span>
+      )}
     </div>
+  );
+}
+
+// ── one collapsible game card ────────────────────────────────────────────────
+// Clickable header (chevron + matchup + park/wind tag + status) over EITHER the
+// collapsed summary line OR the full player list. The expanded player list is
+// the exact card layout as before — only the wrapping/collapse is new.
+function GameCard({
+  group: g,
+  summary,
+  status,
+  expanded,
+  onToggle,
+  active,
+  unit,
+  isHitter,
+  gameStats,
+  date,
+}: {
+  group: GameGroup;
+  summary: GameSummary;
+  status: GameStatus | undefined;
+  expanded: boolean;
+  onToggle: () => void;
+  active: PropType;
+  unit: string;
+  isHitter: boolean;
+  gameStats: Map<number, StatLine> | undefined;
+  date: string;
+}) {
+  // matchup is "Away @ Home" — the home team determines the park. No MLB team
+  // name contains " @ " so the split is safe; "" for a Game-N placeholder.
+  const homeTeam = g.matchup.includes(" @ ") ? g.matchup.split(" @ ")[1] : "";
+  const wc = windClause({
+    homeTeam,
+    windSpeed: g.windSpeed,
+    windDirDeg: g.windDirDeg,
+    isDome: g.isDome,
+  });
+  const parkShown = !!homeTeam && getParkProfile(homeTeam).direction !== "neutral";
+
+  // Show the live/final actual chip in the same cases as before.
+  const showActual = status?.state === "live" || status?.state === "final";
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50">
+      {/* clickable header — role=button keeps the <h2> heading semantics
+          (a <button> can't legally wrap an <h2>). */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        className={[
+          "cursor-pointer px-5 py-3 transition-colors hover:bg-slate-900",
+          expanded ? "border-b border-slate-800 bg-slate-900" : "",
+        ].join(" ")}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-start gap-2">
+            <Chevron expanded={expanded} />
+            <div className="min-w-0">
+              <h2 className="font-semibold text-slate-200">{g.matchup}</h2>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+                <span>{formatShortDate(date)}</span>
+                {status && <span className="text-slate-600">·</span>}
+                <StatusLine status={status} />
+              </div>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-1.5 gap-y-1">
+            <ParkTag homeTeam={homeTeam} />
+            {parkShown && wc && <span className="text-[10px] text-slate-600">·</span>}
+            {wc && (
+              <span
+                title={wc.tooltip}
+                className={`text-[11px] font-medium tabular-nums ${wc.tone}`}
+              >
+                {wc.arrow ? `${wc.arrow} ` : ""}
+                {wc.text}
+              </span>
+            )}
+          </div>
+        </div>
+        {!expanded && <CollapsedSummary summary={summary} unit={unit} />}
+      </div>
+
+      {expanded && (
+        <ul className="divide-y divide-slate-800">
+          {g.pitchers.map((p, i) => {
+            const liveActual = showActual
+              ? liveActualFor(
+                  active,
+                  gameStats?.get(p.player_id),
+                  status?.state === "final",
+                )
+              : undefined;
+            return (
+              <li
+                key={`${g.game_id}-${i}`}
+                className="flex items-start justify-between px-5 py-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-slate-100">{p.name}</span>
+                    {/* Sharp badge on pitcher prop tabs only. */}
+                    {!isHitter && <SharpBadge sharp={p.sharpAgreement} />}
+                  </div>
+                  <EdgeDetail pitcher={p} />
+                  <ConfidenceBar confidence={p.confidence} />
+                  <RecentFormDots form={p.recentForm} />
+                  {active === "strikeouts" && (
+                    <OppContextLine kRate={p.oppContext?.kRate} />
+                  )}
+                  {active === "hitter_total_bases" && (
+                    <WindCardLine
+                      homeTeam={homeTeam}
+                      windSpeed={g.windSpeed}
+                      windDirDeg={g.windDirDeg}
+                      isDome={g.isDome}
+                    />
+                  )}
+                </div>
+                <ProjectionBadge
+                  pitcher={p}
+                  unit={unit}
+                  liveActual={liveActual}
+                  isHitter={isHitter}
+                  status={status}
+                />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -577,6 +806,49 @@ export default function PropBoard({
 
   const isHitter = HITTER_PROPS.has(active);
 
+  // Manual expand/collapse overrides, keyed by `${tab}:${gameId}` so a choice on
+  // one prop tab never leaks onto another (game ids are shared across tabs).
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const overrideKey = (gid: number) => `${active}:${gid}`;
+
+  // Decorate each game with its edge summary + live status, then order
+  // best-edge-first within bettable → live → final bands. Presentation only —
+  // the edge/line values come pre-computed from the engine.
+  const decorated = groups
+    .map((g) => ({
+      g,
+      summary: summarizeGame(g),
+      status: liveStatus.get(g.game_id),
+    }))
+    .sort((a, b) => {
+      const ra = stateRank(a.status);
+      const rb = stateRank(b.status);
+      if (ra !== rb) return ra - rb;
+      if (b.summary.topMagnitude !== a.summary.topMagnitude) {
+        return b.summary.topMagnitude - a.summary.topMagnitude;
+      }
+      // tiebreak: earliest first pitch (TBD start times sink to the end).
+      const ta = a.g.startTime ? Date.parse(a.g.startTime) : Number.POSITIVE_INFINITY;
+      const tb = b.g.startTime ? Date.parse(b.g.startTime) : Number.POSITIVE_INFINITY;
+      return ta - tb;
+    });
+
+  const isExpanded = (
+    gid: number,
+    summary: GameSummary,
+    status: GameStatus | undefined,
+  ) => overrides[overrideKey(gid)] ?? defaultExpanded(summary, status);
+
+  const allExpanded =
+    decorated.length > 0 &&
+    decorated.every((d) => isExpanded(d.g.game_id, d.summary, d.status));
+
+  const toggleAll = () => {
+    const next = { ...overrides };
+    for (const d of decorated) next[overrideKey(d.g.game_id)] = !allExpanded;
+    setOverrides(next);
+  };
+
   return (
     <>
       {/* date navigation */}
@@ -610,91 +882,51 @@ export default function PropBoard({
         over. Most players have no line until closer to game time.
       </p>
 
-      {/* game cards */}
+      {/* game cards — condensed, best-edge-first, collapsible */}
       {groups.length === 0 ? (
         <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
           No {activeMeta.label.toLowerCase()} projections for {date}.
         </div>
       ) : (
-        <div className="space-y-5">
-          {groups.map((g) => (
-            <section
-              key={g.game_id}
-              className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
+        <>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <p className="text-xs text-slate-500">
+              Games sorted by strongest edge · tap a game to expand
+            </p>
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="shrink-0 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800"
             >
-              <GameHeader
-                matchup={g.matchup}
+              {allExpanded ? "Collapse all" : "Expand all"}
+            </button>
+          </div>
+          <div className="space-y-3">
+            {decorated.map(({ g, summary, status }) => (
+              <GameCard
+                key={g.game_id}
+                group={g}
+                summary={summary}
+                status={status}
+                expanded={isExpanded(g.game_id, summary, status)}
+                onToggle={() =>
+                  setOverrides((prev) => ({
+                    ...prev,
+                    [overrideKey(g.game_id)]: !(
+                      prev[overrideKey(g.game_id)] ??
+                      defaultExpanded(summary, status)
+                    ),
+                  }))
+                }
+                active={active}
+                unit={activeMeta.unit}
+                isHitter={isHitter}
+                gameStats={liveStats.get(g.game_id)}
                 date={date}
-                status={liveStatus.get(g.game_id)}
-                windSpeed={g.windSpeed}
-                windDirDeg={g.windDirDeg}
-                isDome={g.isDome}
               />
-              <ul className="divide-y divide-slate-800">
-                {g.pitchers.map((p, i) => {
-                  const gameStatus = liveStatus.get(g.game_id);
-                  // Show the actual stat next to the projection for both
-                  // live games (in-progress overlay) and final games (the
-                  // "did the model hit" result chip). Scheduled / other
-                  // states stay projection-only.
-                  const showActual =
-                    gameStatus?.state === "live" ||
-                    gameStatus?.state === "final";
-                  const liveActual = showActual
-                    ? liveActualFor(
-                        active,
-                        liveStats.get(g.game_id)?.get(p.player_id),
-                        gameStatus?.state === "final",
-                      )
-                    : undefined;
-                  return (
-                    <li
-                      key={`${g.game_id}-${i}`}
-                      className="flex items-start justify-between px-5 py-3"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-slate-100">{p.name}</span>
-                          {/* Sharp badge on pitcher prop tabs only — subtle,
-                              inline. Renders nothing unless 2+ real books
-                              agree with the model's lean. */}
-                          {!isHitter && (
-                            <SharpBadge sharp={p.sharpAgreement} />
-                          )}
-                        </div>
-                        <EdgeDetail pitcher={p} />
-                        <ConfidenceBar confidence={p.confidence} />
-                        <RecentFormDots form={p.recentForm} />
-                        {active === "strikeouts" && (
-                          <OppContextLine kRate={p.oppContext?.kRate} />
-                        )}
-                        {active === "hitter_total_bases" && (
-                          <WindCardLine
-                            homeTeam={
-                              g.matchup.includes(" @ ")
-                                ? g.matchup.split(" @ ")[1]
-                                : ""
-                            }
-                            windSpeed={g.windSpeed}
-                            windDirDeg={g.windDirDeg}
-                            isDome={g.isDome}
-                          />
-                        )}
-                      </div>
-                      <ProjectionBadge
-                        pitcher={p}
-                        unit={activeMeta.unit}
-                        liveActual={liveActual}
-                        isHitter={isHitter}
-                        status={gameStatus}
-                      />
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ))}
-        </div>
+            ))}
+          </div>
+        </>
       )}
     </>
   );
