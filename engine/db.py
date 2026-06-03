@@ -223,6 +223,9 @@ _CONTEXT_COLS = (
     "series_game_number", "is_home_team",
     "temperature_f", "wind_speed_mph", "wind_dir",
     "is_dome", "precipitation_pct",
+    # New combo-prop actual (add_hits_runs_rbis.sql). Stripped pre-migration so
+    # grading still persists the other actuals; once applied, the retry is a no-op.
+    "actual_hits_runs_rbis",
 )
 
 
@@ -372,8 +375,8 @@ _PITCHER_PROP_TYPES = (
     "outs_recorded", "pitcher_fantasy_score",
 )
 _HITTER_PROP_TYPES = (
-    "hitter_hits", "hitter_total_bases", "hitter_rbis", "hitter_runs",
-    "hitter_home_runs", "hitter_fantasy_score",
+    "hitter_hits", "hitter_total_bases", "hitter_hits_runs_rbis",
+    "hitter_rbis", "hitter_runs", "hitter_home_runs", "hitter_fantasy_score",
 )
 
 

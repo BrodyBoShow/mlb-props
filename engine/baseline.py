@@ -321,6 +321,15 @@ def build_hitter_total_bases_projections(
     return _build_hitter_from_games(lineup_players, "total_bases", "hitter_total_bases", "TB", projection_date)
 
 
+def build_hitter_hits_runs_rbis_projections(
+    lineup_players: list[dict], projection_date: date | None = None
+) -> "list[ProjectionRow]":
+    """Weighted rolling projection for a hitter's hits+runs+RBIs per game (combo)."""
+    return _build_hitter_from_games(
+        lineup_players, "hits_runs_rbis", "hitter_hits_runs_rbis", "HRR", projection_date
+    )
+
+
 def build_hitter_rbis_projections(
     lineup_players: list[dict], projection_date: date | None = None
 ) -> "list[ProjectionRow]":

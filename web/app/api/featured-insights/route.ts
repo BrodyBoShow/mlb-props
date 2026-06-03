@@ -55,6 +55,7 @@ const PROP_NOUN: Record<string, string> = {
   outs_recorded:      "outs recorded",
   hitter_hits:        "hits",
   hitter_total_bases: "total bases",
+  hitter_hits_runs_rbis: "hits + runs + RBIs",
   hitter_home_runs:   "home runs",
 };
 

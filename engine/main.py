@@ -575,6 +575,7 @@ def _build_and_upsert_hitters(
     for builder, label in [
         (baseline.build_hitter_hits_projections,        "hitter_hits"),
         (baseline.build_hitter_total_bases_projections, "hitter_total_bases"),
+        (baseline.build_hitter_hits_runs_rbis_projections, "hitter_hits_runs_rbis"),
         (baseline.build_hitter_rbis_projections,        "hitter_rbis"),
         (baseline.build_hitter_runs_projections,        "hitter_runs"),
         (baseline.build_hitter_home_runs_projections,   "hitter_home_runs"),

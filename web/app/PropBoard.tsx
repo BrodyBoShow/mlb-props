@@ -48,6 +48,7 @@ const PROPS: { key: PropType; label: string; unit: string; short: string }[] = [
   // hitter props
   { key: "hitter_hits",           label: "Hitter Hits",           unit: "H",    short: "H"    },
   { key: "hitter_total_bases",    label: "Hitter Total Bases",    unit: "TB",   short: "TB"   },
+  { key: "hitter_hits_runs_rbis", label: "Hitter Hits+Runs+RBIs", unit: "HRR",  short: "HRR"  },
   { key: "hitter_rbis",           label: "Hitter RBIs",           unit: "RBI",  short: "RBI"  },
   { key: "hitter_runs",           label: "Hitter Runs",           unit: "R",    short: "R"    },
   { key: "hitter_home_runs",      label: "Hitter Home Runs",      unit: "HR",   short: "HR"   },
@@ -162,6 +163,12 @@ function liveActualFor(
       hitByPitch:  stat.hitByPitch ?? 0,
       stolenBases: stat.stolenBases ?? 0,
     });
+  }
+
+  // Combo prop: hits + runs + RBIs, synthesized from the box-score line.
+  if (propType === "hitter_hits_runs_rbis") {
+    if (stat.hits === undefined) return undefined;
+    return (stat.hits ?? 0) + (stat.runs ?? 0) + (stat.rbi ?? 0);
   }
 
   if (propType === "pitcher_fantasy_score") {

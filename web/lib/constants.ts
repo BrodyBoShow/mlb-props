@@ -15,6 +15,7 @@ export const ALL_PROP_TYPES: PropType[] = [
   "pitcher_fantasy_score",
   "hitter_hits",
   "hitter_total_bases",
+  "hitter_hits_runs_rbis",
   "hitter_rbis",
   "hitter_runs",
   "hitter_home_runs",
@@ -34,6 +35,7 @@ export const TRACKER_PROPS: ReadonlySet<PropType> = new Set([
 export const HITTER_PROPS: ReadonlySet<PropType> = new Set([
   "hitter_hits",
   "hitter_total_bases",
+  "hitter_hits_runs_rbis",
   "hitter_rbis",
   "hitter_runs",
   "hitter_home_runs",
@@ -59,6 +61,7 @@ export const MIN_LINE: Partial<Record<PropType, number>> = {
   outs_recorded:          10.5,
   pitcher_fantasy_score:  6.0,
   hitter_fantasy_score:   4.0,
+  hitter_hits_runs_rbis:  1.5,   // combo prop — main two-sided line
 };
 
 // The sharp badge's OWN main-market floor — intentionally SEPARATE from
@@ -103,6 +106,7 @@ export const FEATURED_MIN_LINE: Partial<Record<PropType, number>> = {
   outs_recorded:         10.5,
   hitter_hits:           0.5,
   hitter_total_bases:    1.5,
+  hitter_hits_runs_rbis: 1.5,
 };
 
 // Real, two-sided sportsbooks — the only books that count toward sharp-money
@@ -295,6 +299,7 @@ export const PROP_LABELS: Record<PropType, string> = {
   pitcher_fantasy_score: "Pitcher Fantasy",
   hitter_hits:           "Hits",
   hitter_total_bases:    "Total Bases",
+  hitter_hits_runs_rbis: "Hits+Runs+RBIs",
   hitter_rbis:           "RBIs",
   hitter_runs:           "Runs",
   hitter_home_runs:      "Home Runs",

@@ -24,7 +24,7 @@ export { PROP_LABELS } from "@/lib/constants";
 const BETTING_PITCHER_PROPS: PropType[] = [
   "strikeouts", "hits_allowed", "outs_recorded", "pitcher_fantasy_score",
 ];
-const BETTING_HITTER_PROPS: PropType[] = ["hitter_fantasy_score"];
+const BETTING_HITTER_PROPS: PropType[] = ["hitter_hits_runs_rbis", "hitter_fantasy_score"];
 
 const TRACKER_PROPS: PropType[] = [
   "hitter_hits", "hitter_total_bases", "walks", "earned_runs",

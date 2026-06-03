@@ -48,9 +48,10 @@ create table if not exists player_game_logs (
     actual_earned_runs   integer,
     actual_outs_recorded integer,
     -- hitter actuals
-    actual_hits        integer,
-    actual_total_bases integer,
-    actual_rbis        integer,
+    actual_hits          integer,
+    actual_total_bases   integer,
+    actual_hits_runs_rbis integer,   -- hits + runs + rbis combo (main line ~1.5)
+    actual_rbis          integer,
     actual_runs        integer,
     actual_home_runs   integer,
     -- hitter component columns (needed to recompute fantasy score from history

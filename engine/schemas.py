@@ -124,6 +124,7 @@ class HitterGameLogRow(TypedDict, total=False):
     # ── core actuals (from boxscore batting stats) ───────────────────────
     actual_hits: int
     actual_total_bases: int      # hits + doubles + 2*triples + 3*home_runs
+    actual_hits_runs_rbis: int   # hits + runs + rbis (combo prop, main line ~1.5)
     actual_rbis: int
     actual_runs: int
     actual_home_runs: int

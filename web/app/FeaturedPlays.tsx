@@ -12,6 +12,7 @@ const PROP_LABEL: Partial<Record<PropType, string>> = {
   outs_recorded:      "OUTS RECORDED",
   hitter_hits:        "HITS",
   hitter_total_bases: "TOTAL BASES",
+  hitter_hits_runs_rbis: "HITS+RUNS+RBIS",
   hitter_home_runs:   "HOME RUNS",
 };
 

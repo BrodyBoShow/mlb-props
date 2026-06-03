@@ -34,7 +34,7 @@ const FEATURED_PITCHER_PROPS: ReadonlySet<PropType> = new Set([
 // bias (the Model Tracker surfaces this); the AI insight is written to be honest
 // about the signal rather than filtering these out — the user wants them shown.
 const FEATURED_HITTER_PROPS: ReadonlySet<PropType> = new Set([
-  "hitter_hits", "hitter_total_bases",
+  "hitter_hits", "hitter_total_bases", "hitter_hits_runs_rbis",
 ]);
 
 // Edge threshold is set ABOVE the regular display threshold (0.10) so we
@@ -1016,6 +1016,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     outs_recorded:      "actual_outs_recorded",
     hitter_hits:        "actual_hits",
     hitter_total_bases: "actual_total_bases",
+    hitter_hits_runs_rbis: "actual_hits_runs_rbis",
     hitter_home_runs:   "actual_home_runs",
   };
   const allFeaturedPlays = [...pitchingPlays, ...hittingPlays, ...hrMatchups];

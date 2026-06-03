@@ -14,6 +14,7 @@ export type PropType =
   | "pitcher_fantasy_score"
   | "hitter_hits"
   | "hitter_total_bases"
+  | "hitter_hits_runs_rbis"
   | "hitter_rbis"
   | "hitter_runs"
   | "hitter_home_runs"

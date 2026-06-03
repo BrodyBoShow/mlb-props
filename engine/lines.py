@@ -46,6 +46,7 @@ PROP_TO_MARKET = {
     # hitter
     "hitter_hits":        "player_hits",
     "hitter_total_bases": "player_total_bases",
+    "hitter_hits_runs_rbis": "player_hits_runs_rbis",
     "hitter_rbis":        "player_rbis",
     "hitter_runs":        "player_runs",
     "hitter_home_runs":   "player_home_runs",
@@ -81,6 +82,9 @@ MARKET_TO_PROP = {
     # hitter
     "player_hits":         "hitter_hits",
     "player_total_bases":  "hitter_total_bases",
+    "player_hits_runs_rbis": "hitter_hits_runs_rbis",
+    "player_hits_runs_rbis_thrown": "hitter_hits_runs_rbis",
+    "player_hits_+_runs_+_rbis": "hitter_hits_runs_rbis",
     "player_rbis":         "hitter_rbis",
     "player_runs":         "hitter_runs",
     "player_home_runs":    "hitter_home_runs",

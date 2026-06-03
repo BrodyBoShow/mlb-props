@@ -38,6 +38,7 @@ _ACTUAL_COL: dict[str, str] = {
     # hitter
     "hitter_hits":        "actual_hits",
     "hitter_total_bases": "actual_total_bases",
+    "hitter_hits_runs_rbis": "actual_hits_runs_rbis",
     "hitter_rbis":        "actual_rbis",
     "hitter_runs":        "actual_runs",
     "hitter_home_runs":   "actual_home_runs",

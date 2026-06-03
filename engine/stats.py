@@ -390,6 +390,10 @@ def get_hitter_games(
                 "total_bases":  int(st.get("totalBases", 0)),
                 "rbis":         int(st.get("rbi", 0)),
                 "runs":         int(st.get("runs", 0)),
+                # combo prop: hits + runs + RBIs (main betting line usually 1.5)
+                "hits_runs_rbis": int(st.get("hits", 0))
+                + int(st.get("runs", 0))
+                + int(st.get("rbi", 0)),
                 "home_runs":    int(st.get("homeRuns", 0)),
                 "doubles":      int(st.get("doubles", 0)),
                 "triples":      int(st.get("triples", 0)),

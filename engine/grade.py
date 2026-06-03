@@ -646,6 +646,9 @@ def _hitter_result(box: dict, player_id: int) -> dict | None:
             "home_away":          side,
             "actual_hits":        hits,
             "actual_total_bases": total_bases,
+            "actual_hits_runs_rbis": hits
+            + int(batting.get("runs", 0))
+            + int(batting.get("rbi", 0)),
             "actual_rbis":        int(batting.get("rbi", 0)),
             "actual_runs":        int(batting.get("runs", 0)),
             "actual_home_runs":   home_runs,
@@ -795,6 +798,7 @@ def grade_hitters_yesterday(
             "player_type":        "hitter",
             "actual_hits":        result["actual_hits"],
             "actual_total_bases": result["actual_total_bases"],
+            "actual_hits_runs_rbis": result["actual_hits_runs_rbis"],
             "actual_rbis":        result["actual_rbis"],
             "actual_runs":        result["actual_runs"],
             "actual_home_runs":   result["actual_home_runs"],

@@ -56,6 +56,7 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
   pitcher_fantasy_score:  "actual_pitcher_fantasy_score",
   hitter_hits:            "actual_hits",
   hitter_total_bases:     "actual_total_bases",
+  hitter_hits_runs_rbis:  "actual_hits_runs_rbis",
   hitter_rbis:            "actual_rbis",
   hitter_runs:            "actual_runs",
   hitter_home_runs:       "actual_home_runs",
@@ -82,7 +83,7 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
 //   needs an extra edges fetch (the main betting join is line-based).
 const FEATURED_RESULT_PROPS: ReadonlySet<PropType> = new Set([
   "strikeouts", "hits_allowed", "outs_recorded",
-  "hitter_hits", "hitter_total_bases",
+  "hitter_hits", "hitter_total_bases", "hitter_hits_runs_rbis",
 ]);
 const FEATURED_MIN_EDGE = 0.12;
 const FEATURED_MIN_LEAN = 0.3;
@@ -315,7 +316,8 @@ async function getResults(): Promise<{
   const DIAG_PROPS: PropType[] = [
     "strikeouts", "hits_allowed", "walks", "earned_runs", "outs_recorded",
     "pitcher_fantasy_score",
-    "hitter_hits", "hitter_total_bases", "hitter_fantasy_score",
+    "hitter_hits", "hitter_total_bases", "hitter_hits_runs_rbis",
+    "hitter_fantasy_score",
   ];
   for (const pt of DIAG_PROPS) {
     const col = ACTUAL_COLUMN[pt];
