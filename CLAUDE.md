@@ -3184,6 +3184,56 @@ Self-healing misdated-projection guard — no manual cleanup ever (this session)
   already clean, nothing else misdated) — confirms it doesn't touch correct rows
   and runs without error. Engine-only; takes effect next cron run.
 
+New prop: hitter_hits_runs_rbis (H+R+RBI combo) end-to-end (this session):
+- Added a full new prop type mirroring hitter_total_bases across EVERY layer.
+  Combo = hits + runs + RBIs, graded against the standard ~1.5 main betting
+  line. It is a BETTING-EDGE prop (real two-sided book lines), NOT a Model-
+  Tracker prop. FEATURE_COLS unchanged (11) — not a model input.
+- Engine:
+  * stats.get_hitter_games: new computed field hits_runs_rbis = hits + runs +
+    rbis (same MLB Stats API gameLog response, additive).
+  * baseline.build_hitter_hits_runs_rbis_projections — thin wrapper over the
+    generic _build_hitter_from_games("hits_runs_rbis", "hitter_hits_runs_rbis",
+    "HRR"). Weighted rolling mean like the other hitter props (NOT median —
+    that's only for the skewed fantasy_score props).
+  * main.py: added to the hitter builder loop (builds in the same lineups-
+    posted pass as hits/TB/etc.).
+  * grade.py: _hitter_result + grade_hitters_yesterday write
+    actual_hits_runs_rbis = hits + runs + rbi from the boxscore batting line.
+  * lines.py: PROP_TO_MARKET hitter_hits_runs_rbis -> player_hits_runs_rbis;
+    MARKET_TO_PROP maps player_hits_runs_rbis (+ defensive _thrown /
+    +-separated response-key variants) back. Two-sided book, so edges flow
+    through edge.py unchanged (prop-generic).
+  * db.py: _HITTER_PROP_TYPES + _CONTEXT_COLS strip list include the new prop
+    / actual column (PGRST204 strip-and-retry pre-migration).
+  * calibrate.py _ACTUAL_COL + schemas.HitterGameLogRow field.
+- DB: db/migrations/add_hits_runs_rbis.sql (actual_hits_runs_rbis integer on
+  player_game_logs) + schema.sql. ACTION REQUIRED: run the migration once in
+  Supabase — until then grading PGRST204-strips the actual gracefully;
+  projections/lines/edges/board all work immediately, the graded actual lands
+  once applied.
+- Frontend: types.ts PropType; constants.ts ALL_PROP_TYPES + HITTER_PROPS +
+  MIN_LINE 1.5 + FEATURED_MIN_LINE 1.5 + PROP_LABELS "Hits+Runs+RBIs" (NOT in
+  TRACKER_PROPS); PropBoard.tsx PROPS tab + liveActualFor combo branch
+  (hits + runs + rbi from the live boxscore); page.tsx FEATURED_HITTER_PROPS +
+  FEATURED_ACTUAL_COL; results/page.tsx ACTUAL_COLUMN + FEATURED_RESULT_PROPS +
+  DIAG_PROPS; ResultsBoard.tsx BETTING_HITTER_PROPS; FeaturedPlays.tsx +
+  featured-insights route labels/noun.
+- VERIFIED: get_hitter_games computes the combo (hits 1 + runs 1 + rbis 2 = 4);
+  builder produced a real projection (Julio Rodriguez 2.3 HRR); py_compile clean
+  (8 engine files); tsc --noEmit clean; npm run build passes. Committed +
+  pushed (d1fe41f). Goes live on the board/lines/edges on the next cron; graded
+  results populate once the migration is applied and games grade.
+
+HFS (hitter fantasy score) collection — fixed going forward (confirmed):
+- Yes. The June 2 gap (empty Hitter Fantasy + missing June 2 game on /results)
+  was the projection-date timezone bug (hitters misfiled to the next ET day),
+  now fixed at root (builders default et_today(); main.py passes it explicitly;
+  cleanup_misdated_projections self-heals on every cron). HFS itself was already
+  correct (PrizePicks-direct standard line + median projection + grading). So
+  from a correctly-dated slate forward, HFS collects and grades normally; the
+  one-time June 2 hitter data is lost (acceptable, not backfilled).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV scorecards + self-heal count).
 
