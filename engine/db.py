@@ -270,6 +270,40 @@ def upsert_game_logs(
         raise
 
 
+def insert_backfill_game_logs(rows: "list[dict]") -> int:
+    """INSERT-ONLY season-backfill rows into player_game_logs (ON CONFLICT DO
+    NOTHING on the (player_id, game_id) PK) so a genuinely-graded row — which has
+    the full context features — is NEVER overwritten by a feature-less backfill
+    row. Every row MUST carry backfilled=true.
+
+    FOUNDATION SAFETY: if the `backfilled` column doesn't exist yet (migration
+    not applied) this REFUSES to insert and returns 0 — inserting un-flagged rows
+    would let them silently enter model.train() and break the foundation guard.
+    Run db/migrations/add_backfilled_flag.sql first.
+    """
+    if not rows:
+        return 0
+    for r in rows:
+        r["backfilled"] = True   # hard guarantee — never insert an un-flagged row
+    try:
+        _client().table("player_game_logs").upsert(
+            rows, on_conflict="player_id,game_id", ignore_duplicates=True
+        ).execute()
+        return len(rows)
+    except Exception as exc:
+        msg = str(exc)
+        if "backfilled" in msg and (
+            "PGRST204" in msg or "Could not find" in msg or "column" in msg
+        ):
+            print(
+                "  BACKFILL ABORTED: player_game_logs.backfilled column is missing "
+                "-- run db/migrations/add_backfilled_flag.sql FIRST. Refusing to "
+                "insert un-flagged rows (they would pollute model training)."
+            )
+            return 0
+        raise
+
+
 def get_projection_count_for_date(
     date_str: str, prop_type: str | None = None
 ) -> int:

@@ -336,6 +336,18 @@ def train() -> XGBRegressor | None:
     print(f"  {len(rows)} training rows found")
     df = pd.DataFrame(rows).sort_values(["player_id", "game_date"]).reset_index(drop=True)
 
+    # FOUNDATION GUARD: drop season-backfill rows (actuals only, no context
+    # features). They exist so hit-rate trends + confidence reflect the full
+    # season, but feeding feature-less rows into XGBoost would add noise, so the
+    # model trains on exactly the same genuinely-graded rows as before
+    # (byte-identical). Folding the backfill INTO training is a separate,
+    # measured Stage-2 decision — never silent.
+    if "backfilled" in df.columns:
+        before = len(df)
+        df = df[~df["backfilled"].fillna(False)].reset_index(drop=True)
+        if before != len(df):
+            print(f"  excluded {before - len(df)} backfilled rows from training (foundation guard)")
+
     # Step 1: keep only pitcher rows. player_game_logs mixes pitcher + hitter
     # rows (hitter rows have actual_strikeouts=NULL); training on hitter rows
     # produces all-NaN features and silently drops the entire pool.

@@ -280,6 +280,11 @@ def get_pitcher_starts(
         results.append(
             {
                 "game_date": sp["date"],
+                # game_id (MLB gamePk) + home_away come straight off the gameLog
+                # split — used by the season backfill (player_game_logs PK is
+                # (player_id, game_id)); existing callers ignore these keys.
+                "game_id": (sp.get("game") or {}).get("gamePk"),
+                "home_away": "home" if sp.get("isHome") else "away",
                 "strikeouts": int(st.get("strikeOuts", 0)),
                 "hits_allowed": int(st.get("hits", 0)),
                 "walks": int(st.get("baseOnBalls", 0)),
@@ -386,6 +391,10 @@ def get_hitter_games(
         results.append(
             {
                 "game_date":    sp["date"],
+                # game_id + home_away off the gameLog split (for the season
+                # backfill); existing baseline/form callers ignore these keys.
+                "game_id":      (sp.get("game") or {}).get("gamePk"),
+                "home_away":    "home" if sp.get("isHome") else "away",
                 "hits":         int(st.get("hits", 0)),
                 "total_bases":  int(st.get("totalBases", 0)),
                 "rbis":         int(st.get("rbi", 0)),

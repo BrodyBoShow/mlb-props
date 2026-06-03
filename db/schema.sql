@@ -41,6 +41,9 @@ create table if not exists player_game_logs (
     game_id           integer references games(game_id),
     game_date         date,
     player_type       text default 'pitcher',  -- 'pitcher' | 'hitter'
+    -- true = season backfill (actuals only, no features). model.train() EXCLUDES
+    -- these so the model is untouched; trends + confidence use all rows.
+    backfilled        boolean default false,
     -- pitcher actuals
     actual_strikeouts    integer,
     actual_hits_allowed  integer,
