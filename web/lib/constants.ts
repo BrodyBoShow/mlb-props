@@ -289,6 +289,18 @@ export const HR_COMPOSITE = {
 // populated on the current (shallow) graded history; raise it as that deepens.
 export const HR_MIN_GAMES_TRACKED = 2;
 
+// Same guard for the Featured Plays HITTING EDGES section. A hitter with ~0
+// graded games gets a baseline projection that just echoes one recent game
+// (e.g. a 4.0 total-bases proj off a single big game), inflating the edge and
+// headlining the section ahead of established hitters. Require this many graded
+// games (counted via actual_total_bases — present on every graded hitter row,
+// so it covers hits AND total bases) before a hitter edge play can be featured.
+// 2 drops 0–1-game debuts/call-ups while keeping established hitters (who have
+// 2–3+ graded games even early-season, since hitters play daily). NOT applied to
+// pitcher edge plays — pitchers have ~1 graded start early-season, so a 2-gate
+// would empty the PITCHING section.
+export const HITTER_MIN_GAMES_TRACKED = 2;
+
 // Display labels — single source of truth for both pages.
 export const PROP_LABELS: Record<PropType, string> = {
   strikeouts:            "Strikeouts",

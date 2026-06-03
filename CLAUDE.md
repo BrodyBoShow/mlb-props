@@ -3288,6 +3288,38 @@ session):
   just make them show up promptly once the lineup is up, instead of waiting for
   the 8 PM ET run. YAML validated (9 crons parse).
 
+Featured Plays diagnosis + hitter min-history gate (this session):
+- USER concern: a Featured Plays card (Gleyber Torres, Total Bases, proj 4.0 vs
+  line 1.5, edge +0.54) looked like it might be reflecting LIVE in-game data
+  (Torres already had 3 TB mid-game). DIAGNOSED against the live DB:
+  * NOT a live-data leak. All featured projections (Torres/Vargas/Yandy) were
+    written at 15:26 UTC (11:26 AM ET) and never updated; first pitch was
+    17:10 UTC (1:10 PM ET) — locked ~1h44m PRE-GAME. Featured Plays reads the
+    stored, frozen projections/edges (page.tsx getSlate -> buildEdgePlays); the
+    live box-score overlay is ONLY on the main board (PropBoard), never here. So
+    the pre-game-freeze behavior is CORRECT.
+  * The REAL issue: Torres had 0 graded TB games -> the baseline rolling average
+    just echoed one recent big game -> absurd 4.0 TB projection -> inflated +0.54
+    edge -> headlined the section. Verified the pattern across the candidate pool:
+    every hitter with >=2 graded games had a sane proj (2.1-2.7) + edge
+    (+0.24-0.30); only the 0-history Torres was the 4.0/+0.54 outlier.
+- FIX (frontend-only, mirrors the HR min-sample guard): new
+  HITTER_MIN_GAMES_TRACKED=2 in web/lib/constants.ts. page.tsx buildEdgePlays no
+  longer slices to top-3 internally; the PITCHING section slices as before, but
+  the HITTING section now gates candidates on >= 2 graded games (counted via
+  actual_total_bases, non-null on every graded hitter row, so it covers hits AND
+  TB) BEFORE the top-3 cut. Same paginated graceful-degrade-on-error as the HR
+  gate (a broken query never empties the section). NOT applied to pitchers —
+  pitchers have ~1 graded start early-season, so a 2-gate would empty PITCHING.
+- RESULT: Torres (0 graded) drops out; the new hitting top-3 becomes
+  Bleday/Acuña/Kurtz (all 2-3 graded, proj 2.5-2.7, edge +0.29-0.30). Section
+  stays full with legit, track-record-backed plays. Note: this gates only the
+  curated Featured Plays top-3 — thin-history hitters still appear on the normal
+  hitter prop tabs (the 4.0 is still a real, if poor, pre-game projection; the
+  deeper fix is regression-to-mean on thin-sample hitter baselines, an ENGINE
+  change deferred). tsc clean; npm run build passes (/ 13 kB). Scope: page.tsx +
+  constants.ts only; no engine, no /results, no FEATURE_COLS change (still 11).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV scorecards + self-heal count).
 

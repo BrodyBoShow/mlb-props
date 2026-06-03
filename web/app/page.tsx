@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
-import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
 import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType } from "@/lib/types";
 import PropBoard from "./PropBoard";
@@ -854,11 +854,58 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         };
       })
       .filter((p): p is FeaturedPlay => p !== null)
-      .sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0))
-      .slice(0, 3);
+      .sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
+  // NOTE: no longer sliced here — callers slice to top-3 AFTER any min-sample
+  // gate so a thin-history outlier can't consume a top-3 slot.
 
-  const pitchingPlays = buildEdgePlays(FEATURED_PITCHER_PROPS);
-  const hittingPlays = buildEdgePlays(FEATURED_HITTER_PROPS);
+  const pitchingPlays = buildEdgePlays(FEATURED_PITCHER_PROPS).slice(0, 3);
+
+  // HITTING EDGES: gate out thin-history hitters BEFORE the top-3 cut. A hitter
+  // with ~0 graded games gets a baseline projection that just echoes one recent
+  // game (e.g. Gleyber Torres 4.0 TB off a single big game), which inflates the
+  // edge (+0.54) and headlines the section ahead of established hitters with sane
+  // 2.1–2.7 projections. Require >= HITTER_MIN_GAMES_TRACKED graded games
+  // (counted via actual_total_bases — non-null on every graded hitter row, so it
+  // proxies hits AND total bases). Mirrors the HR min-sample guard, incl. the
+  // graceful-degrade-on-error (a broken query must never empty the section).
+  const hittingCandidates = buildEdgePlays(FEATURED_HITTER_PROPS);
+  const hitterGradedByPlayer = new Map<number, number>();
+  let hitterGateAvailable = false;
+  {
+    const hitIds = [...new Set(hittingCandidates.map((p) => p.playerId))];
+    if (hitIds.length > 0) {
+      let ok = true;
+      for (let page = 0; page < 50; page++) {
+        const { data, error } = await supabase
+          .from("player_game_logs")
+          .select("player_id, actual_total_bases")
+          .in("player_id", hitIds)
+          .range(page * 1000, page * 1000 + 999);
+        if (error) {
+          console.log(
+            `[home-diag] hitter min-sample gate disabled — graded-count fetch failed (${String(error)})`,
+          );
+          ok = false;
+          break;
+        }
+        const batch = (data ?? []) as Array<{ player_id: number; actual_total_bases: number | null }>;
+        for (const r of batch) {
+          if (r.actual_total_bases !== null && r.actual_total_bases !== undefined) {
+            hitterGradedByPlayer.set(r.player_id, (hitterGradedByPlayer.get(r.player_id) ?? 0) + 1);
+          }
+        }
+        if (batch.length < 1000) break;
+      }
+      hitterGateAvailable = ok;
+    }
+  }
+  const hittingPlays = (
+    hitterGateAvailable
+      ? hittingCandidates.filter(
+          (p) => (hitterGradedByPlayer.get(p.playerId) ?? 0) >= HITTER_MIN_GAMES_TRACKED,
+        )
+      : hittingCandidates
+  ).slice(0, 3);
 
   // ── Section 3: HR MATCHUPS (matchup-ranked, not edge-based) ──────────────
   // Rank tonight's projected hitters by park-adjusted HR projection:
