@@ -3472,6 +3472,24 @@ Hit-rate trends panel (props.cash-style) — focused card only (this session):
   must pass the calibration scorecard before/after). Pitcher props are already
   ~calibrated; hitter over-bias was the old pre-Poisson math, already fixed.
 
+De-vig display (roadmap #1) — Fair% vs Book% on the focused card (this session):
+- Surfaces the de-vigged fair over-probability the engine ALREADY computes
+  (edges.fair_over_prob) next to the book's raw implied % (with vig), as a quiet
+  text-[10px] sub-line under the existing edge line in the FOCUSED single-prop
+  card ONLY (congestion: the all-props scan grid is untouched; no new card lines
+  beyond the one sub-line). Fair↔Book gap = the vig; the edge arrow above = model
+  vs Fair. Pure display — no engine/model/FEATURE_COLS (11) change.
+- web/app/PropBoard.tsx only: new americanToImplied(price) helper; EdgeDetail's
+  two-sided-edge branch returns a fragment with the edge div + the Fair/Book line.
+  Fair shown whenever fair_over_prob exists (real OR consensus edges); Book only
+  when over_price exists (consensus edges carry no price).
+- VERIFIED vs live pinnacle edges: Fair sits ~4 pts below Book (the juice), e.g.
+  over −143 -> Book 59% / Fair 55%; Fair→Model reproduces the stored edge exactly
+  (74−55 = +0.19). tsc clean; npm run build passes (/ 13.4 kB). Committed f96f26d.
+- Roadmap remaining (researched): multi-book line-shopping row, DVP opp-pitcher
+  tag, Statcast quality display (barrel/hard-hit/xwOBA), Shin de-vig (gated on
+  the calibration scorecard).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count).
