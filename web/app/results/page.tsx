@@ -161,6 +161,11 @@ async function getResults(): Promise<{
     supabase
       .from("player_game_logs")
       .select("game_date")
+      // EXCLUDE season-backfill rows: /results grades engine projections vs lines
+      // vs ENGINE-graded actuals. Backfilled rows (historical, no projections/
+      // lines) would otherwise collide in the (player, game_date) lookup and
+      // crowd out the genuinely-graded actuals, shrinking the result counts.
+      .or("backfilled.is.null,backfilled.eq.false")
       .order("game_date", { ascending: false })
       .limit(1),
     supabase
@@ -251,6 +256,7 @@ async function getResults(): Promise<{
         supabase
           .from("player_game_logs")
           .select(logSelect)
+          .or("backfilled.is.null,backfilled.eq.false")   // graded rows only (see anchor note)
           .gte("game_date", startDate)
           .lte("game_date", endDate)
           .range(from, to) as unknown as PromiseLike<{
@@ -597,6 +603,7 @@ async function getResults(): Promise<{
         supabase
           .from("player_game_logs")
           .select(logSelect)
+          .or("backfilled.is.null,backfilled.eq.false")   // graded rows only (weekly trend)
           .gte("game_date", trendStart)
           .lte("game_date", endDate)
           .range(from, to) as unknown as PromiseLike<{
