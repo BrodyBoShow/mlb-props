@@ -69,6 +69,12 @@ const HITTER_PROP_KEYS: PropType[] = PROPS.filter((p) => HITTER_PROPS.has(p.key)
 // and the results-page grading agree on what counts as "~Even".
 const LINE_LEAN_THRESHOLD = 0.1;
 
+// Under All Props, an expanded game shows its edge-hitters by default and folds
+// the rest behind "Show N more". When NO hitter has a qualifying edge, we still
+// surface this many so the hitting lineup is never fully hidden (the lineup must
+// be visible in the card, not one click away). The rest stay behind the expander.
+const DEFAULT_HITTER_COUNT = 3;
+
 // Compact numeric formatter: integers stay integer (live actuals, "16"), else
 // one decimal ("6.4").
 function fmt(n: number): string {
@@ -1097,8 +1103,13 @@ function GameCard({
   const parkShown = !!homeTeam && getParkProfile(homeTeam).direction !== "neutral";
 
   const edgeHitters = gv.hitters.filter(playerHasEdge);
-  const hittersToShow = showAllHitters ? gv.hitters : edgeHitters;
-  const moreHitters = gv.hitters.length - edgeHitters.length;
+  // Default-visible hitters: those with a real edge, or (if none) the top few so
+  // the lineup is never an empty section. `gv.hitters` is already sorted
+  // strongest-edge-first. The rest fold behind the "Show N more" expander.
+  const defaultHitters =
+    edgeHitters.length > 0 ? edgeHitters : gv.hitters.slice(0, DEFAULT_HITTER_COUNT);
+  const hittersToShow = showAllHitters ? gv.hitters : defaultHitters;
+  const moreHitters = gv.hitters.length - defaultHitters.length;
 
   const isHitterFocus = focus !== "all" && HITTER_PROPS.has(focus);
   const focusedPlayers =
@@ -1204,9 +1215,7 @@ function GameCard({
                   >
                     {showAllHitters
                       ? "Show fewer hitters"
-                      : edgeHitters.length === 0
-                        ? `Show all ${gv.hitters.length} hitters`
-                        : `Show ${moreHitters} more hitter${moreHitters === 1 ? "" : "s"}`}
+                      : `Show ${moreHitters} more hitter${moreHitters === 1 ? "" : "s"}`}
                   </button>
                 )}
               </>

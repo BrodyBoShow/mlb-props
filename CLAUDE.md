@@ -3234,6 +3234,31 @@ HFS (hitter fantasy score) collection — fixed going forward (confirmed):
   from a correctly-dated slate forward, HFS collects and grades normally; the
   one-time June 2 hitter data is lost (acceptable, not backfilled).
 
+All-Props game cards show pitchers + hitters (already built; lineup-visibility
+fix) (this session):
+- STEP 0 confirmed the game-first redesign ALREADY renders both a Pitchers
+  section AND a Hitters section in the SAME GameCard under the "All props"
+  filter (focus === "all"), both folded into the card's smart expand/collapse,
+  both using the same PlayerChipsRow/PropChip (H/TB/HRR/RBI/R/HR/FP chips), with
+  the existing "Show N more hitters" expander and governed by Expand/Collapse
+  all. The earlier "only pitchers" screenshot was the June 2 slate (zero hitter
+  projections — the timezone-bug data gap), NOT a rendering gap; June 3 has full
+  hitter data (incl. 54 HRR rows) so both sections render.
+- The one genuine gap closed: when an expanded game had hitters but NONE with a
+  qualifying real-book edge, the hitters section rendered EMPTY (just a "Show all
+  N hitters" button) — the lineup was fully hidden until a click. PropBoard.tsx
+  now shows DEFAULT_HITTER_COUNT=3 hitters by default in that case (gv.hitters is
+  already sorted strongest-edge-first), with the rest behind the existing "Show N
+  more" expander. Common games (with TB edges) are UNCHANGED — defaultHitters =
+  edgeHitters there. Collapsed cards are untouched (still header + one-line
+  CollapsedSummary), so a 15-game slate stays compact when collapsed; the top-3
+  hitters only render when a card is EXPANDED.
+- Single-prop focus unchanged: a pitcher prop shows only pitchers, a hitter prop
+  shows only hitters (FocusedPlayerCard path). Scope: PropBoard.tsx presentation
+  only — no edge math, selection, Featured Plays, HR composite, /results,
+  live-overlay, or engine touched; FEATURE_COLS still 11. tsc clean; npm run
+  build passes (/ 13 kB).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV scorecards + self-heal count).
 
