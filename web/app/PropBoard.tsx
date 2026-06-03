@@ -549,17 +549,6 @@ function summarizeGame(g: GameGroup): GameSummary {
   return { bestPlay, qualifyingCount, hasAnyLine, topMagnitude };
 }
 
-// Sort rank by game state: scheduled/upcoming (bettable) first, then live, then
-// final. Within a rank, games sort by their strongest edge (descending), so the
-// juiciest BETTABLE matchups float to the top — the fix for "good plays buried
-// at the bottom of the slate".
-function stateRank(s: GameStatus | undefined): number {
-  if (!s) return 0;
-  if (s.state === "final") return 2;
-  if (s.state === "live") return 1;
-  return 0;
-}
-
 // Default open/closed: a game with a qualifying edge starts EXPANDED (its plays
 // are why you opened the app); an all-even game collapses to a thin row; final
 // games collapse (they're results — /results covers that view).
@@ -821,13 +810,8 @@ export default function PropBoard({
       status: liveStatus.get(g.game_id),
     }))
     .sort((a, b) => {
-      const ra = stateRank(a.status);
-      const rb = stateRank(b.status);
-      if (ra !== rb) return ra - rb;
-      if (b.summary.topMagnitude !== a.summary.topMagnitude) {
-        return b.summary.topMagnitude - a.summary.topMagnitude;
-      }
-      // tiebreak: earliest first pitch (TBD start times sink to the end).
+      // Chronological by first pitch (the user's preferred order). Games with no
+      // start time (TBD) sink to the end; live games keep their slot in time.
       const ta = a.g.startTime ? Date.parse(a.g.startTime) : Number.POSITIVE_INFINITY;
       const tb = b.g.startTime ? Date.parse(b.g.startTime) : Number.POSITIVE_INFINITY;
       return ta - tb;
@@ -891,7 +875,7 @@ export default function PropBoard({
         <>
           <div className="mb-3 flex items-center justify-between gap-3">
             <p className="text-xs text-slate-500">
-              Games sorted by strongest edge · tap a game to expand
+              Games in start-time order · tap a game to expand
             </p>
             <button
               type="button"

@@ -2778,6 +2778,24 @@ Condensed, best-edge-first, collapsible per-game board (this session):
   edge games auto-expanded, Expand/Collapse-all toggles the whole slate; park/
   wind tags + live-status line preserved on the header. Frontend-only.
 
+Board sort reverted to chronological (same session, user follow-up):
+- User: "i want them to still be sorted by date and chronologically by the time
+  they start." Reverted the best-edge-first sort to start-time ascending (TBD
+  start times sink to the end; live games keep their chronological slot).
+  Removed stateRank(); label "Games sorted by strongest edge" → "Games in
+  start-time order". The condensing/collapsible cards + collapsed best-play
+  summary + smart auto-expand + Expand/Collapse-all are KEPT — only the game
+  ORDER changed. summarizeGame still computes topMagnitude (now unused by the
+  sort, retained for the collapsed summary + any future re-sort). tsc clean;
+  build passes.
+- OPEN (bigger ask, not yet built): user feels the prop-FIRST navigation ("pick
+  a prop → see every game's slice of that one prop") is disorganized — the data's
+  natural unit is a PLAYER-IN-A-GAME (carries ~6 projections) but the top-level
+  axis is the metric (12 prop tabs), so a game/player is never shown whole. Next
+  step is to choose an organizing model (game-first with prop as a filter /
+  player-first cards / flat best-bets edge list) and redesign the board around
+  it. Chronological game order is a hard constraint on whatever we pick.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 
