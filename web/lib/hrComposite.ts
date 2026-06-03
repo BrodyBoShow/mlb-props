@@ -29,6 +29,7 @@ export type HrCompositeInput = {
   avgExitVelo: number | null;
   hitterBats: string | null; // "L" | "R" | "S"
   oppPitcherThrows: string | null; // "L" | "R"
+  oppSpHr9: number | null; // opposing starter HR/9, last 5 starts
 };
 
 export type HrCompositeResult = {
@@ -38,10 +39,12 @@ export type HrCompositeResult = {
   windAdjPark: number;
   powerFactor: number;
   platoonFactor: number;
+  hr9Factor: number;
   // term availability — for auditing which terms were live vs degraded-to-neutral
   windAvailable: boolean;
   powerAvailable: boolean;
   platoonAvailable: boolean;
+  hr9Available: boolean;
 };
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
@@ -95,15 +98,31 @@ export function hrComposite(i: HrCompositeInput): HrCompositeResult {
     platoonAvailable = true;
   }
 
+  // ── opposing-starter HR/9 (last 5 starts) ──
+  // Higher opp HR/9 = the hitter faces a homer-prone arm → boost; lower = a
+  // stingy arm → suppression. Normalized floor→elite, bounded ±HR9_WEIGHT.
+  let hr9Factor = 1;
+  let hr9Available = false;
+  if (i.oppSpHr9 != null) {
+    const h = clamp01(
+      (i.oppSpHr9 - HR_COMPOSITE.HR9_FLOOR) /
+        (HR_COMPOSITE.HR9_ELITE - HR_COMPOSITE.HR9_FLOOR),
+    );
+    hr9Factor = 1 + HR_COMPOSITE.HR9_WEIGHT * (2 * h - 1);
+    hr9Available = true;
+  }
+
   return {
-    score: i.projection * windAdjPark * powerFactor * platoonFactor,
+    score: i.projection * windAdjPark * powerFactor * platoonFactor * hr9Factor,
     base: i.projection,
     parkFactor,
     windAdjPark,
     powerFactor,
     platoonFactor,
+    hr9Factor,
     windAvailable,
     powerAvailable,
     platoonAvailable,
+    hr9Available,
   };
 }

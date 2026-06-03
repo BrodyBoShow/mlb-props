@@ -170,6 +170,9 @@ create table if not exists projections (
     -- a model input. NULL on every other prop and on thin samples (< 5 BBE).
     sweet_spot_pct   numeric,            -- fraction (0..1) of BBE with launch angle 8–32°
     avg_exit_velo    numeric,            -- mean exit velocity (mph) over the 7-day BBE
+    -- Opposing starter's HR/9 (last 5 starts), set ONLY on hitter_home_runs rows
+    -- (db/migrations/add_opp_sp_hr9.sql). HR-composite 4th term; NOT a model input.
+    opp_sp_hr9       numeric,
     updated_at       timestamptz default now(),
     primary key (game_id, player_id, prop_type, projection_date)
 );

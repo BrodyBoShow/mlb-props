@@ -489,7 +489,8 @@ def get_game_logs(since_date: str | None = None) -> list[dict] | None:
 #   - opp_k_rate          : add_opp_k_rate.sql (strikeouts rows)
 #   - sweet_spot_pct      : add_sweet_spot.sql (hitter_home_runs rows, display)
 #   - avg_exit_velo       : add_sweet_spot.sql (hitter_home_runs rows, display)
-_PROJECTION_OPTIONAL_COLS = ("opp_k_rate", "sweet_spot_pct", "avg_exit_velo")
+#   - opp_sp_hr9          : add_opp_sp_hr9.sql (hitter_home_runs rows, composite term)
+_PROJECTION_OPTIONAL_COLS = ("opp_k_rate", "sweet_spot_pct", "avg_exit_velo", "opp_sp_hr9")
 
 
 def upsert_projections(rows: "list[ProjectionRow] | list[dict]") -> int:
@@ -497,38 +498,42 @@ def upsert_projections(rows: "list[ProjectionRow] | list[dict]") -> int:
 
     (game_id, player_id, prop_type, projection_date) — re-runs update in place.
 
-    Defensive: opp_k_rate (feature 4 / Option A) is only on strikeouts rows
-    and only exists after db/migrations/add_opp_k_rate.sql is applied. If the
-    column is missing PostgREST returns PGRST204; we strip the optional
-    columns and retry once so grading/projection still persists.
+    Defensive: the optional columns (opp_k_rate, sweet_spot_pct, avg_exit_velo,
+    opp_sp_hr9) only exist after their migrations are applied. On PGRST204 we
+    strip ONLY the specific column PostgREST names and retry — GRANULAR, not
+    all-or-nothing — so a missing column (e.g. opp_sp_hr9 pre-migration) never
+    drops a sibling that DOES exist (e.g. sweet_spot_pct on the same row). Loops
+    until the upsert succeeds or a non-optional error surfaces.
     """
     if not rows:
         return 0
     client = _client()
-    try:
-        client.table("projections").upsert(
-            rows, on_conflict="game_id,player_id,prop_type,projection_date"
-        ).execute()
-        return len(rows)
-    except Exception as exc:
-        msg = str(exc)
-        mentions_optional = any(col in msg for col in _PROJECTION_OPTIONAL_COLS)
-        is_pgrst204 = "PGRST204" in msg or "Could not find" in msg
-        if mentions_optional and is_pgrst204:
-            stripped = [
-                {k: v for k, v in r.items() if k not in _PROJECTION_OPTIONAL_COLS}
-                for r in rows
-            ]
+    payload: list[dict] = [dict(r) for r in rows]
+    dropped: list[str] = []
+    for _attempt in range(len(_PROJECTION_OPTIONAL_COLS) + 1):
+        try:
             client.table("projections").upsert(
-                stripped, on_conflict="game_id,player_id,prop_type,projection_date"
+                payload, on_conflict="game_id,player_id,prop_type,projection_date"
             ).execute()
-            print(
-                "  WARNING: projections missing an optional column "
-                f"({', '.join(_PROJECTION_OPTIONAL_COLS)}) -- upserted without "
-                "it. Run db/migrations/add_opp_k_rate.sql + add_sweet_spot.sql."
-            )
+            if dropped:
+                print(
+                    f"  WARNING: projections missing column(s) {dropped} -- upserted "
+                    f"without them. Run the matching db/migrations/*.sql."
+                )
             return len(rows)
-        raise
+        except Exception as exc:
+            msg = str(exc)
+            is_pgrst204 = "PGRST204" in msg or "Could not find" in msg
+            missing = next(
+                (c for c in _PROJECTION_OPTIONAL_COLS if c in msg and c not in dropped),
+                None,
+            )
+            if is_pgrst204 and missing:
+                dropped.append(missing)
+                payload = [{k: v for k, v in r.items() if k != missing} for r in payload]
+                continue
+            raise
+    raise RuntimeError("upsert_projections: exhausted optional-column strips")
 
 
 def update_matchup_expected_k(updates: list[dict]) -> int:

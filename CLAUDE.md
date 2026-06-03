@@ -2621,6 +2621,52 @@ AI insight K-rate mis-attributed to the pitcher's own team — fixed (this sessi
   untouched. (The board's OppContextLine "Facing a X% K lineup" was already
   correct — it never named a team.)
 
+HR composite 4th term — opposing-starter HR/9 (this session):
+- STEP 0 finding: the existing opp-SP metrics (opp_sp_k_rate_last5 / era_last5 /
+  whip_last5 / hand) are computed in grade.py::_opp_sp_recent_stats at GRADE time
+  and persisted to player_game_logs — NOT on projection rows. The HR composite
+  reads PROJECTION rows, so opp_sp_hr9 can't "ride the same path"; it needed a NEW
+  projection-time computation (like sweet_spot). The DATA SOURCE
+  (stats.get_pitcher_starts) is reusable — it just wasn't exposing HR.
+- STEP 1 (compute + persist):
+  * stats.get_pitcher_starts now also returns home_runs (HR allowed) — same fetch,
+    additive. New stats.get_pitcher_hr9_last5(sp_id, lookback, ref_date) → HR/9
+    over the last 5 starts (HR*27/total_outs), None on no-starts/zero-outs.
+  * main._build_and_upsert_hitters gained a `starters` param (threaded
+    main → _run_hitter_pipeline → here). For each lineup hitter it finds the
+    OPPOSING starter (the OTHER side's probable pitcher via starters' game_id/
+    home_away), computes that SP's HR/9 (cached per SP), and attaches opp_sp_hr9
+    to the hitter_home_runs rows. NULL when the opp starter is unknown / no recent
+    starts. NOT a model input (FEATURE_COLS stays 11 — verified).
+  * schemas.ProjectionRow + db/schema.sql + db/migrations/add_opp_sp_hr9.sql
+    (projections.opp_sp_hr9 numeric). ACTION REQUIRED: run that migration.
+  * db.upsert_projections PGRST204 strip made GRANULAR (was all-or-nothing): it now
+    strips ONLY the specific missing column PostgREST names and retries in a loop,
+    so opp_sp_hr9 being absent pre-migration no longer drops sweet_spot_pct on the
+    same row. VERIFIED: pre-migration run stripped only ['opp_sp_hr9'] and
+    sweet-spot coverage stayed 254 (unchanged).
+- STEP 2 (composite, ranking only): web/lib/hrComposite.ts gains the 4th term —
+  score = projection × windAdjPark × powerFactor × platoonFactor × hr9Factor.
+  Higher opp HR/9 = boost (homer-prone arm), lower = suppression; bounded
+  ±HR9_WEIGHT, normalized HR9_FLOOR 0.8 → HR9_ELITE 1.8 (named in HR_COMPOSITE).
+  Missing → 1.0 (neutral). page.tsx adds an ISOLATED, failure-tolerant opp_sp_hr9
+  query (separate from sweet-spot so a missing column can't blank the footer) →
+  oppHr9ByPlayer → passed to hrComposite. Display HR projection unchanged; AI
+  insight untouched (no probability/edge implied).
+- STEP 3 (populate-path): opp_sp_hr9 is computed in _build_and_upsert_hitters —
+  the SAME lineups-posted hitter build that populates sweet-spot, with NO bulk_df
+  / full-pitcher-run dependency (just `starters`, always available). So it self-
+  heals each fresh slate exactly like sweet-spot now does; no gating gap. Verified
+  it ran on the refresh-path build (computed for 261/270 hitters).
+- VERIFIED: FEATURE_COLS 11; model byte-identical; tsc --noEmit clean; npm run
+  build passes; engine imports clean. Spot-check exact (Steven Matz last-5 HR=3 /
+  44 outs → get_pitcher_hr9_last5 1.841 = 3×27/44). Composite audit (HR/9 computed
+  fresh, since the DB column lands post-migration): term NON-neutral for 178/186;
+  reorders sensibly — Soto #1 (faces a 2.08 HR/9 arm, boost) over Acuña (faces a
+  0.36 HR/9 stingy arm, suppress). Neutral-degrade confirmed (None → factor 1.0 →
+  3-term ranking unchanged). Pre-migration the frontend query 400s → term degrades
+  to neutral, so the live board is unchanged until the migration + next build.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

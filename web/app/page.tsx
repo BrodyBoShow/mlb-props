@@ -538,6 +538,35 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
   }
 
+  // ── HR-composite opp-SP HR/9 (ranking-only) ─────────────────────────────
+  // Opposing starter's HR/9 (last 5 starts), set ONLY on hitter_home_runs rows
+  // by the engine. ISOLATED + failure-tolerant (a SEPARATE query from sweet-spot
+  // so a missing column pre-migration can't blank the footer too). Empty map →
+  // the composite degrades that term to neutral.
+  const oppHr9ByPlayer = new Map<number, number>();
+  {
+    const { data: hr9Rows, error: hr9Err } = await supabase
+      .from("projections")
+      .select("player_id, opp_sp_hr9")
+      .eq("projection_date", selectedDate)
+      .eq("prop_type", "hitter_home_runs");
+    if (hr9Err) {
+      console.log(
+        `[home-diag] opp-SP HR/9 fetch skipped (${String(hr9Err)}) — ` +
+          `apply db/migrations/add_opp_sp_hr9.sql to enable the composite term`,
+      );
+    } else {
+      for (const r of (hr9Rows ?? []) as Array<{
+        player_id: number;
+        opp_sp_hr9: number | null;
+      }>) {
+        if (r.opp_sp_hr9 !== null && r.opp_sp_hr9 !== undefined) {
+          oppHr9ByPlayer.set(r.player_id, r.opp_sp_hr9);
+        }
+      }
+    }
+  }
+
   // ── sharp-money agreement (feature 5) ───────────────────────────────────
   // The frontend's main reads only fetch the EDGES baseline line (one book
   // per prop) — not per-book lines. So we add ONE isolated, paginated query
@@ -902,6 +931,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         avgExitVelo: sweet?.avgExitVelo ?? null,
         hitterBats: hitter?.bats ?? null,
         oppPitcherThrows: oppThrows,
+        oppSpHr9: oppHr9ByPlayer.get(h.player_id) ?? null,
       });
 
       hrPlays.push({

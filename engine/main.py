@@ -356,6 +356,7 @@ def _run_pitcher_pipeline(
 def _run_hitter_pipeline(
     name_to_id: dict[str, int],
     bulk_df: object = None,
+    starters: list[dict] | None = None,
 ) -> tuple[list[dict], int]:
     """Build + upsert hitter prop projections IF lineups have posted.
 
@@ -366,7 +367,9 @@ def _run_hitter_pipeline(
 
     bulk_df (from the pitcher pipeline) is threaded to _build_and_upsert_hitters
     so the hitter_home_runs rows carry the display-only sweet-spot footer. None
-    on refresh runs → sweet-spot is simply skipped for that run.
+    on refresh runs → sweet-spot is simply skipped for that run. starters (the
+    probable pitchers) is threaded too, so the hitter_home_runs rows can carry
+    the opposing-starter HR/9 (HR-composite 4th term).
     """
     print("Fetching lineup players...")
     lineup_players = fetch.fetch_lineups()
@@ -425,7 +428,7 @@ def _run_hitter_pipeline(
                     f"but {len(missing)} lineup players across {len(missing_games)} "
                     f"game(s) have no hitter projections — filling those in"
                 )
-                _build_and_upsert_hitters(missing, bulk_df=bulk_df)
+                _build_and_upsert_hitters(missing, bulk_df=bulk_df, starters=starters)
             else:
                 print(
                     f"  {existing_hitter} hitter_hits projections already exist for "
@@ -446,7 +449,7 @@ def _run_hitter_pipeline(
         db.delete_projections_for_date_props(today_str, db._HITTER_PROP_TYPES)
 
     hitter_projections, hitter_hit_rows = _build_and_upsert_hitters(
-        lineup_players, bulk_df=bulk_df
+        lineup_players, bulk_df=bulk_df, starters=starters
     )
 
     # Sanity check: a full slate of confirmed lineups yields 200+ hitter
@@ -466,6 +469,7 @@ def _run_hitter_pipeline(
 def _build_and_upsert_hitters(
     players: list[dict],
     bulk_df: object = None,
+    starters: list[dict] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Run all six hitter prop builders over `players` and upsert each.
 
@@ -473,6 +477,10 @@ def _build_and_upsert_hitters(
     of lineup players whose games posted late). Returns
     (all_hitter_projections, hitter_hits_rows) — the latter feeds the
     full-path sanity check.
+
+    starters (the probable pitchers, with game_id/home_away) lets each hitter's
+    OPPOSING starter HR/9 be attached to the hitter_home_runs rows (HR-composite
+    4th term, opp_sp_hr9). Display/ranking-only — never a model input.
 
     bulk_df (whole-window Statcast) drives the DISPLAY-ONLY sweet-spot footer:
     a rolling 7-day sweet-spot% + avg exit velo per hitter, attached to the
@@ -528,6 +536,40 @@ def _build_and_upsert_hitters(
             print(f"  sweet-spot computation skipped ({exc})")
             sweet = {}
 
+    # Opposing-starter HR/9 for the HR-composite 4th term. Each hitter's opposing
+    # SP is the OTHER side's probable pitcher; HR/9 is over their last 5 starts
+    # (same get_pitcher_starts source as the pitcher props — no Statcast). Computed
+    # once per opposing starter (cached), attached to hitter_home_runs rows. NULL
+    # when the opp starter is unknown or has no recent starts → composite degrades
+    # that term to neutral. NOT a model input.
+    opp_hr9: dict[int, float] = {}
+    if starters:
+        sp_by_game_side = {
+            (s["game_id"], s["home_away"]): s["player_id"]
+            for s in starters
+            if s.get("game_id") is not None and s.get("home_away") and s.get("player_id")
+        }
+        hr9_cache: dict[int, float | None] = {}
+        for p in players:
+            gid, ha, pid = p.get("game_id"), p.get("home_away"), p.get("player_id")
+            if gid is None or not ha or pid is None:
+                continue
+            opp_sp_id = sp_by_game_side.get((gid, "away" if ha == "home" else "home"))
+            if opp_sp_id is None:
+                continue
+            if opp_sp_id not in hr9_cache:
+                try:
+                    hr9_cache[opp_sp_id] = stats.get_pitcher_hr9_last5(
+                        opp_sp_id, LOOKBACK_DAYS, today
+                    )
+                except Exception:
+                    hr9_cache[opp_sp_id] = None
+            v = hr9_cache[opp_sp_id]
+            if v is not None:
+                opp_hr9[pid] = v
+        if opp_hr9:
+            print(f"  opp-SP HR/9: computed for {len(opp_hr9)} hitters (HR composite)")
+
     hitter_projections: list[dict] = []
     hitter_hit_rows: list[dict] = []
     for builder, label in [
@@ -542,13 +584,16 @@ def _build_and_upsert_hitters(
         rows = builder(players)
         if label == "hitter_hits":
             hitter_hit_rows = rows
-        # Attach sweet-spot context to the HR rows only (display-only columns).
-        if label == "hitter_home_runs" and sweet:
+        # Attach display/ranking context to the HR rows only (never to the model).
+        if label == "hitter_home_runs":
             for r in rows:
                 s = sweet.get(r.get("player_id"))
                 if s:
                     r["sweet_spot_pct"] = s["sweet_spot_pct"]
                     r["avg_exit_velo"] = s["avg_exit_velo"]
+                h9 = opp_hr9.get(r.get("player_id"))
+                if h9 is not None:
+                    r["opp_sp_hr9"] = h9
         hitter_projections.extend(rows)
         n = db.upsert_projections(rows)
         print(f"  upserted {n} {label} projections")
@@ -826,9 +871,9 @@ def main() -> None:
         pitcher_projections, name_to_id, n_strikeout, bulk_df = _run_pitcher_pipeline(
             starters, games, lineup_lhh_by_pid=lineup_lhh_by_pid
         )
-        # bulk_df is threaded into the hitter pipeline for the sweet-spot footer.
+        # bulk_df → sweet-spot footer; starters → opposing-SP HR/9 (composite term).
         hitter_projections, lineup_count = _run_hitter_pipeline(
-            name_to_id, bulk_df=bulk_df
+            name_to_id, bulk_df=bulk_df, starters=starters
         )
         all_projections = pitcher_projections + hitter_projections
 

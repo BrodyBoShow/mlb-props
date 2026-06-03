@@ -237,6 +237,7 @@ def get_pitcher_starts(
         walks           int
         earned_runs     int
         outs_recorded   int   (inningsPitched converted to outs)
+        home_runs       int   (HR allowed; feeds opp-SP HR/9)
     """
     start_date = end_date - timedelta(days=lookback_days)
     season = end_date.year
@@ -278,12 +279,34 @@ def get_pitcher_starts(
                 "walks": int(st.get("baseOnBalls", 0)),
                 "earned_runs": int(st.get("earnedRuns", 0)),
                 "outs_recorded": _parse_innings(st.get("inningsPitched", "0.0")),
+                "home_runs": int(st.get("homeRuns", 0)),
             }
         )
 
     # Newest first so callers can slice [:5] for "last 5 starts"
     results.sort(key=lambda r: r["game_date"], reverse=True)
     return results
+
+
+def get_pitcher_hr9_last5(
+    player_id: int,
+    lookback_days: int,
+    end_date: date,
+) -> float | None:
+    """HR allowed per 9 IP over a pitcher's last 5 starts (newest within the
+    window). Same data source as _opp_sp_recent_stats / the pitcher props
+    (get_pitcher_starts — no new fetch). Returns None when there are no recent
+    starts on file or zero innings (rookie / call-up / data gap) so the caller
+    leaves opp_sp_hr9 NULL and the composite degrades the term to neutral.
+
+    HR/9 = HR * 9 / IP = HR * 27 / total_outs.
+    """
+    recent = (get_pitcher_starts(player_id, lookback_days, end_date) or [])[:5]
+    total_outs = sum(s.get("outs_recorded", 0) for s in recent)
+    if not recent or total_outs <= 0:
+        return None
+    hr = sum(s.get("home_runs", 0) for s in recent)
+    return round(hr * 27.0 / total_outs, 3)
 
 
 @lru_cache(maxsize=512)

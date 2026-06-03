@@ -267,6 +267,11 @@ export const HR_COMPOSITE = {
   POWER_EV_ELITE: 94,
   // Platoon: ± this fraction for a favorable / unfavorable hand matchup.
   PLATOON_WEIGHT: 0.12,
+  // Opposing-starter HR/9 (last 5 starts): ± this fraction, normalized floor→elite.
+  // Higher opp HR/9 = boost (hitter faces a homer-prone arm); lower = suppression.
+  HR9_WEIGHT: 0.12,
+  HR9_FLOOR: 0.8, // stingy arm (low HR/9) → suppress
+  HR9_ELITE: 1.8, // homer-prone arm (high HR/9) → boost
 } as const;
 
 // Minimum graded games a hitter needs to be ELIGIBLE for the HR-section top-3.

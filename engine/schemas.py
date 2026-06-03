@@ -215,6 +215,12 @@ class ProjectionRow(TypedDict, total=False):
     # hitter has < 5 batted balls in the window or there's no Statcast frame.
     sweet_spot_pct: Optional[float]   # fraction (0..1) of BBE with launch angle 8–32°
     avg_exit_velo: Optional[float]    # mean exit velocity (mph) over the window's BBE
+    # Opposing starter's HR allowed per 9 IP over their last 5 starts — HR-composite
+    # 4th term, set ONLY on hitter_home_runs rows (main._build_and_upsert_hitters).
+    # NOT a model input. Requires add_opp_sp_hr9.sql; db.upsert_projections strips
+    # it via the PGRST204 retry until the column exists. None when the opposing
+    # starter is unknown or has no recent starts.
+    opp_sp_hr9: Optional[float]
 
 
 class ProjectionContextRow(TypedDict, total=False):
