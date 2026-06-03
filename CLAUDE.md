@@ -3490,6 +3490,28 @@ De-vig display (roadmap #1) — Fair% vs Book% on the focused card (this session
   tag, Statcast quality display (barrel/hard-hit/xwOBA), Shin de-vig (gated on
   the calibration scorecard).
 
+Inline detail-on-demand — the All-props UX fix (this session):
+- USER felt the detail (Fair/Book, edge, trends, confidence) being only on the
+  per-prop FOCUSED tab (not All-props) was suboptimal; wanted "the cleanest UI +
+  most useful extensive data." Root friction: tapping an All-props chip SWITCHED
+  the whole board to that prop's focused view (lost the overview).
+- FIX (PropBoard.tsx only, pure display): tapping a chip now opens that play's
+  full detail INLINE directly under the player's chip row (props.cash-style
+  detail-on-demand) — you keep the All-props overview AND get depth. New
+  InlinePropDetail composes the SAME leaf components the focused card uses
+  (EdgeDetail w/ Fair/Book, ConfidenceBar, TrendRow, OppContextLine/WindCardLine,
+  SharpBadge, ProjectionBadge) — no logic duplication — plus an "all <prop> ->"
+  link to the cross-game focused view.
+- CONGESTION CONTROL (user's hard constraint): board-wide single openDetail state
+  (`${playerId}|${prop}`) -> only ONE panel open anywhere at a time; tapping the
+  open chip or another closes/replaces it; open chip gets an emerald ring.
+  Switching prop TABS clears the open panel (selectFocus). The prop tabs still
+  drive cross-game single-prop focus; chip tap is now "peek detail in place".
+- PropChip: onFocus(prop) -> onTap() + active ring; title "tap for detail/close".
+  PlayerChipsRow + GameCard thread openDetail/onToggleDetail/onViewAll + homeTeam
+  /wind. No engine/model/FEATURE_COLS (11) change. tsc clean; npm run build passes
+  (/ 13.9 kB). Committed 0b6cafb.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count).
