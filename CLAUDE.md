@@ -2832,6 +2832,42 @@ Game-first board redesign — prop becomes a filter, not the entry point (same s
   Pitcher Strikeouts and renders the full rich cards (Schlittler ◆5/5 OVER Line
   6.5 ▲+0.19 + "Facing a 20.3% K lineup"; Abbott ◆5/5 UNDER −0.53). Frontend-only.
 
+Game-first board — edge classification fix (same session, from user screenshots):
+- BUG the user could see: every collapsed game headlined a FANTASY play
+  ("Aaron Nola FP 29.5 ▼ Under · +47 more") and the hitter list showed the whole
+  lineup. Cause: the cross-prop "best play" / ordering / hitters-with-edges all
+  compared evalRow magnitudes, but DFS fantasy leans are |proj−line| in POINTS
+  (can be ~25) and consensus hitter edges are de-vigged vs a SYNTHETIC line (a
+  HR can read +0.85) — both dwarf real-book edge probabilities (~0.1–0.5).
+- FIX (PropBoard.tsx evalRow + chip): a row now classifies into three tiers,
+  mirroring how Featured Plays already defines a trustworthy edge:
+  * qualifiesEdge  = REAL two-sided book (REAL_BOOKS = pinnacle/draftkings/
+    fanduel/bet365/caesars) AND |edge| > EDGE_THRESHOLD. ONLY this drives the
+    collapsed best-play, the "+N more" count, edge-first ordering, and the
+    "hitters with edges" filter. Chip = colored (emerald/red) tint + signed #.
+  * qualifiesConsensus = de-vigged edge vs a `consensus` synthetic line. Chip
+    shows the number but MUTED (slate, no tint); never structural.
+  * qualifiesLean = DFS fantasy proj-vs-line. Chip shows a muted ARROW only;
+    never structural.
+  evalRow gained isRealBook (row.bookmaker ∈ REAL_BOOKS — bookmaker is already
+  on the row from page.tsx) + qualifiesConsensus; consumers (summarizeGameView,
+  playerHasEdge, playerBestMag) switched from .qualifies to .qualifiesEdge. Chip
+  title now names the book.
+- VERIFIED (dev server, 2026-06-02): headlines became real-book edges (Harper HR
+  0.5 ▲+0.55 pinnacle, Alonso TB 1.5 ▲+0.50 pinnacle); "+N more" dropped (+35→+24
+  as consensus rows stopped counting); hitter_hits chips (all `consensus`) render
+  muted slate "H 1 ▲+0.27" with NO colored tint while pinnacle TB/HR chips stay
+  colored. tsc clean; build passes. Frontend-only; engine + FEATURE_COLS (11)
+  untouched.
+- OBSERVATION (engine, NOT fixed here — flagged for the user): the largest
+  real-book edges are now hitter HR/TB pinnacle at +0.4..+0.85. Those magnitudes
+  look inflated — almost certainly the crude model_over_prob normal approximation
+  (std = proj×0.35) overstating P(over) for low-mean count props (HR especially)
+  and thin-history baseline-floored ~1.0 HR projections. Same root cause as the
+  HR min-sample / floor notes above; affects Featured Plays + the HR tab too. A
+  proper Poisson/empirical over-prob (or calibrated confidence) is the real fix —
+  separate engine task, out of scope for the board display.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines.
 

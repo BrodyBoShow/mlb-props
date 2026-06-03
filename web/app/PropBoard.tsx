@@ -19,7 +19,7 @@ import type {
   PropType,
   StatLine,
 } from "@/lib/types";
-import { EDGE_THRESHOLD, HITTER_PROPS } from "@/lib/constants";
+import { EDGE_THRESHOLD, HITTER_PROPS, REAL_BOOKS } from "@/lib/constants";
 import {
   hitterFantasyScore,
   isQualityStart,
@@ -517,37 +517,77 @@ type GameView = {
 
 // Classify one player+prop row's edge/lean — the single source the chips, the
 // collapsed summary, the "has edge" filter, and the hitter ordering all share.
-// Same thresholds EdgeDetail uses, so the matrix and the focused card agree.
+//
+// IMPORTANT: only a REAL two-sided book edge (pinnacle/draftkings/fanduel/
+// bet365/caesars — the REAL_BOOKS set, same standard Featured Plays uses) counts
+// as an "edge" (qualifiesEdge) for the structural decisions (best-play, ordering,
+// hitters-with-edges). Two weaker signals are SHOWN on the chip but never drive
+// those decisions:
+//   * CONSENSUS edges (qualifiesConsensus) — de-vigged against a synthetic
+//     consensus line, not a real book. These inflate (a hitter HR can read
+//     +0.85) and would dominate the headline if counted.
+//   * DFS fantasy LEANS (qualifiesLean) — proj-vs-line in fantasy POINTS
+//     (|proj−line| can be ~25), not comparable to an edge probability (~0–0.6).
+// Letting either in made every game's headline a fantasy/consensus play with
+// absurd "+50 more" counts.
 type RowEval = {
-  magnitude: number;
-  qualifies: boolean;
-  direction: "over" | "under" | "even";
+  hasLine: boolean;
+  isEdge: boolean; // a de-vigged edge number exists (real OR consensus)
+  isRealBook: boolean; // the edge's baseline book is in REAL_BOOKS
   edge?: number;
+  magnitude: number; // |edge| for edges — the only cross-prop-comparable signal
+  direction: "over" | "under" | "even";
+  qualifiesEdge: boolean; // real-book edge over threshold — the structural "edge"
+  qualifiesConsensus: boolean; // consensus edge over threshold — chip number only (muted)
+  qualifiesLean: boolean; // DFS lean over threshold — chip arrow only
 };
 function evalRow(row: Pitcher): RowEval {
-  if (row.line === undefined) return { magnitude: 0, qualifies: false, direction: "even" };
+  if (row.line === undefined) {
+    return {
+      hasLine: false,
+      isEdge: false,
+      isRealBook: false,
+      magnitude: 0,
+      direction: "even",
+      qualifiesEdge: false,
+      qualifiesConsensus: false,
+      qualifiesLean: false,
+    };
+  }
   if (row.edge !== undefined) {
     const mag = Math.abs(row.edge);
+    const isRealBook = !!row.bookmaker && REAL_BOOKS.includes(row.bookmaker);
+    const overThresh = mag > EDGE_THRESHOLD;
     return {
-      magnitude: mag,
-      qualifies: mag > EDGE_THRESHOLD,
-      direction: row.edge > EDGE_THRESHOLD ? "over" : row.edge < -EDGE_THRESHOLD ? "under" : "even",
+      hasLine: true,
+      isEdge: true,
+      isRealBook,
       edge: row.edge,
+      magnitude: mag,
+      direction: row.edge > EDGE_THRESHOLD ? "over" : row.edge < -EDGE_THRESHOLD ? "under" : "even",
+      qualifiesEdge: overThresh && isRealBook,
+      qualifiesConsensus: overThresh && !isRealBook,
+      qualifiesLean: false,
     };
   }
   const diff = row.projection - row.line;
   const mag = Math.abs(diff);
   return {
+    hasLine: true,
+    isEdge: false,
+    isRealBook: false,
     magnitude: mag,
-    qualifies: mag > LINE_LEAN_THRESHOLD,
     direction: diff > LINE_LEAN_THRESHOLD ? "over" : diff < -LINE_LEAN_THRESHOLD ? "under" : "even",
+    qualifiesEdge: false,
+    qualifiesConsensus: false,
+    qualifiesLean: mag > LINE_LEAN_THRESHOLD,
   };
 }
 
 function playerHasEdge(pl: PlayerRow): boolean {
   return PROPS.some((p) => {
     const r = pl.props[p.key];
-    return !!r && evalRow(r).qualifies;
+    return !!r && evalRow(r).qualifiesEdge;
   });
 }
 
@@ -557,7 +597,7 @@ function playerBestMag(pl: PlayerRow): number {
     const r = pl.props[p.key];
     if (r) {
       const e = evalRow(r);
-      if (e.qualifies && e.magnitude > m) m = e.magnitude;
+      if (e.qualifiesEdge && e.magnitude > m) m = e.magnitude;
     }
   }
   return m;
@@ -638,7 +678,7 @@ function summarizeGameView(gv: GameView, focus: PropType | "all"): GameSummary {
     if (row.line === undefined) return;
     hasAnyLine = true;
     const e = evalRow(row);
-    if (e.qualifies) {
+    if (e.qualifiesEdge) {
       qualifyingCount += 1;
       if (e.magnitude > bestMag) {
         bestMag = e.magnitude;
@@ -769,26 +809,32 @@ function PropChip({
 
   let badge: JSX.Element | null = null;
   let tint = "border-slate-700/70 bg-slate-800/40";
-  if (row.line !== undefined) {
-    if (e.edge !== undefined && e.qualifies) {
-      const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
-      if (e.direction === "over") {
-        badge = <span className="text-emerald-400">▲{signed}</span>;
-        tint = "border-emerald-500/40 bg-emerald-500/10";
-      } else if (e.direction === "under") {
-        badge = <span className="text-red-400">▼{signed}</span>;
-        tint = "border-red-500/40 bg-red-500/10";
-      }
-    } else if (e.edge === undefined && e.qualifies) {
-      // DFS (PrizePicks fantasy) lean — direction only, no de-vigged number.
-      if (e.direction === "over") {
-        badge = <span className="text-emerald-400">▲</span>;
-        tint = "border-emerald-500/30 bg-emerald-500/[0.07]";
-      } else if (e.direction === "under") {
-        badge = <span className="text-red-400">▼</span>;
-        tint = "border-red-500/30 bg-red-500/[0.07]";
-      }
+  if (e.qualifiesEdge && e.edge !== undefined) {
+    // Real-book de-vigged edge — colored chip + signed number (the eye-catcher).
+    const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
+    if (e.direction === "over") {
+      badge = <span className="text-emerald-400">▲{signed}</span>;
+      tint = "border-emerald-500/40 bg-emerald-500/10";
+    } else if (e.direction === "under") {
+      badge = <span className="text-red-400">▼{signed}</span>;
+      tint = "border-red-500/40 bg-red-500/10";
     }
+  } else if (e.qualifiesConsensus && e.edge !== undefined) {
+    // Consensus (synthetic-line) edge — show the number but MUTED, no tint, so
+    // real-book edges stand out and a big consensus number can't masquerade as
+    // a top play.
+    const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
+    badge = (
+      <span className="text-slate-400">
+        {e.direction === "over" ? "▲" : e.direction === "under" ? "▼" : ""}
+        {signed}
+      </span>
+    );
+  } else if (e.qualifiesLean) {
+    // DFS (PrizePicks fantasy) lean — softest signal: muted ARROW only, no
+    // number and no tint, so it reads as a lean, not a de-vigged edge.
+    if (e.direction === "over") badge = <span className="text-emerald-400/70">▲</span>;
+    else if (e.direction === "under") badge = <span className="text-red-400/70">▼</span>;
   }
 
   const valueText = live !== undefined ? fmt(live) : fmt(row.projection);
@@ -796,6 +842,7 @@ function PropChip({
   const title =
     `${meta.label}` +
     `${row.line !== undefined ? ` · line ${row.line}` : " · no line"}` +
+    `${row.edge !== undefined && row.bookmaker ? ` · ${row.bookmaker}` : ""}` +
     `${live !== undefined ? ` · live ${fmt(live)}` : ""}` +
     ` — tap to focus`;
 
@@ -1038,7 +1085,9 @@ function GameCard({
             {gv.hitters.length > 0 && (
               <>
                 <SectionLabel>
-                  {showAllHitters || moreHitters === 0 ? "Hitters" : "Hitters with edges"}
+                  {!showAllHitters && moreHitters > 0 && edgeHitters.length > 0
+                    ? "Hitters with edges"
+                    : "Hitters"}
                 </SectionLabel>
                 {hittersToShow.length > 0 && (
                   <ul className="divide-y divide-slate-800/60">
