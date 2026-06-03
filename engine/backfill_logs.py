@@ -63,12 +63,26 @@ def _distinct_player_ids(prop_type: str) -> list[int]:
     return sorted(ids)
 
 
-def _pitcher_rows(pid: int, ref) -> list[dict]:
+def _add_game(games_acc: dict, gid: int, g: dict) -> None:
+    """Record minimal games-table metadata for a historical game (for the FK)."""
+    ht, at = g.get("home_team"), g.get("away_team")
+    if ht and at and gid not in games_acc:
+        games_acc[gid] = {
+            "game_id": gid,
+            "game_date": g["game_date"],
+            "home_team": ht,
+            "away_team": at,
+        }
+
+
+def _pitcher_rows(pid: int, ref, games_acc: dict) -> list[dict]:
     rows: list[dict] = []
     for g in stats.get_pitcher_starts(pid, LOOKBACK_DAYS, ref):
         gid = g.get("game_id")
         if gid is None:
             continue
+        gid = int(gid)
+        _add_game(games_acc, gid, g)
         outs = int(g.get("outs_recorded") or 0)
         k = int(g.get("strikeouts") or 0)
         er = int(g.get("earned_runs") or 0)
@@ -94,12 +108,14 @@ def _pitcher_rows(pid: int, ref) -> list[dict]:
     return rows
 
 
-def _hitter_rows(pid: int, ref) -> list[dict]:
+def _hitter_rows(pid: int, ref, games_acc: dict) -> list[dict]:
     rows: list[dict] = []
     for g in stats.get_hitter_games(pid, LOOKBACK_DAYS, ref):
         gid = g.get("game_id")
         if gid is None:
             continue
+        gid = int(gid)
+        _add_game(games_acc, gid, g)
         hits = int(g.get("hits") or 0)
         doubles = int(g.get("doubles") or 0)
         triples = int(g.get("triples") or 0)
@@ -134,18 +150,21 @@ def _hitter_rows(pid: int, ref) -> list[dict]:
     return rows
 
 
-def build_rows(dry_run_player: int | None = None) -> list[dict]:
-    """Build all backfill rows (no DB writes). With dry_run_player set, builds
-    only that one player's rows — used to eyeball the shape before inserting."""
+def build_rows(dry_run_player: int | None = None) -> tuple[list[dict], list[dict]]:
+    """Build (log_rows, game_rows) — no DB writes. With dry_run_player set, builds
+    only that one player's rows, to eyeball the shape before inserting."""
     ref = et_today()
-    if dry_run_player is not None:
-        return _pitcher_rows(dry_run_player, ref) + _hitter_rows(dry_run_player, ref)
+    games_acc: dict = {}
     rows: list[dict] = []
-    for pid in _distinct_player_ids("strikeouts"):
-        rows += _pitcher_rows(pid, ref)
-    for pid in _distinct_player_ids("hitter_hits"):
-        rows += _hitter_rows(pid, ref)
-    return rows
+    if dry_run_player is not None:
+        rows += _pitcher_rows(dry_run_player, ref, games_acc)
+        rows += _hitter_rows(dry_run_player, ref, games_acc)
+    else:
+        for pid in _distinct_player_ids("strikeouts"):
+            rows += _pitcher_rows(pid, ref, games_acc)
+        for pid in _distinct_player_ids("hitter_hits"):
+            rows += _hitter_rows(pid, ref, games_acc)
+    return rows, list(games_acc.values())
 
 
 def main() -> None:
@@ -157,31 +176,36 @@ def main() -> None:
         f"(lookback {LOOKBACK_DAYS}d, ref {ref})"
     )
 
-    buf: list[dict] = []
-    submitted = 0
-
-    def flush() -> None:
-        nonlocal buf, submitted
-        if buf:
-            submitted += db.insert_backfill_game_logs(buf)
-            buf = []
-
+    # Build everything in memory: log rows + the set of historical games they
+    # reference (the games FK must be satisfied, so games go in FIRST).
+    log_rows: list[dict] = []
+    games_acc: dict = {}
     for i, pid in enumerate(pitchers, 1):
-        buf += _pitcher_rows(pid, ref)
-        if len(buf) >= BATCH:
-            flush()
-        if i % 25 == 0:
-            print(f"  pitchers {i}/{len(pitchers)} ...")
+        log_rows += _pitcher_rows(pid, ref, games_acc)
+        if i % 50 == 0:
+            print(f"  fetched pitchers {i}/{len(pitchers)} ...")
     for i, pid in enumerate(hitters, 1):
-        buf += _hitter_rows(pid, ref)
-        if len(buf) >= BATCH:
-            flush()
-        if i % 25 == 0:
-            print(f"  hitters {i}/{len(hitters)} ...")
-    flush()
+        log_rows += _hitter_rows(pid, ref, games_acc)
+        if i % 50 == 0:
+            print(f"  fetched hitters {i}/{len(hitters)} ...")
+
+    games = list(games_acc.values())
+    print(f"  built {len(log_rows)} log rows across {len(games)} distinct games")
+
+    # 1) INSERT-ONLY the historical games (never overwrites an existing row) so
+    #    the player_game_logs.game_id FK is satisfied.
+    g_sub = 0
+    for j in range(0, len(games), BATCH):
+        g_sub += db.insert_backfill_games(games[j : j + BATCH])
+    print(f"  games: submitted {g_sub} (existing games skipped)")
+
+    # 2) INSERT-ONLY the flagged log rows.
+    l_sub = 0
+    for j in range(0, len(log_rows), BATCH):
+        l_sub += db.insert_backfill_game_logs(log_rows[j : j + BATCH])
     print(
-        f"Done. submitted {submitted} backfill rows "
-        f"(already-present games are skipped by ON CONFLICT DO NOTHING)."
+        f"Done. submitted {l_sub} backfill log rows "
+        f"(already-present games skipped by ON CONFLICT DO NOTHING)."
     )
 
 

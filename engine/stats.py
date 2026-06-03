@@ -277,14 +277,20 @@ def get_pitcher_starts(
             continue
 
         st = sp.get("stat", {})
+        _home = bool(sp.get("isHome"))
+        _team = (sp.get("team") or {}).get("name")
+        _opp = (sp.get("opponent") or {}).get("name")
         results.append(
             {
                 "game_date": sp["date"],
-                # game_id (MLB gamePk) + home_away come straight off the gameLog
-                # split — used by the season backfill (player_game_logs PK is
-                # (player_id, game_id)); existing callers ignore these keys.
+                # game_id (MLB gamePk) + home_away + team names come straight off
+                # the gameLog split — used by the season backfill (PK is
+                # (player_id, game_id); games FK needs the home/away names).
+                # Existing baseline/form callers ignore these keys.
                 "game_id": (sp.get("game") or {}).get("gamePk"),
-                "home_away": "home" if sp.get("isHome") else "away",
+                "home_away": "home" if _home else "away",
+                "home_team": _team if _home else _opp,
+                "away_team": _opp if _home else _team,
                 "strikeouts": int(st.get("strikeOuts", 0)),
                 "hits_allowed": int(st.get("hits", 0)),
                 "walks": int(st.get("baseOnBalls", 0)),
@@ -388,13 +394,18 @@ def get_hitter_games(
         # sometimes 'hitByPitches'. Coalesce so the fantasy-score baseline
         # gets the right number regardless.
         hbp = int(st.get("hitByPitch", st.get("hitByPitches", 0)) or 0)
+        _home = bool(sp.get("isHome"))
+        _team = (sp.get("team") or {}).get("name")
+        _opp = (sp.get("opponent") or {}).get("name")
         results.append(
             {
                 "game_date":    sp["date"],
-                # game_id + home_away off the gameLog split (for the season
-                # backfill); existing baseline/form callers ignore these keys.
+                # game_id + home_away + team names off the gameLog split (for the
+                # season backfill, incl. the games FK); existing callers ignore.
                 "game_id":      (sp.get("game") or {}).get("gamePk"),
-                "home_away":    "home" if sp.get("isHome") else "away",
+                "home_away":    "home" if _home else "away",
+                "home_team":    _team if _home else _opp,
+                "away_team":    _opp if _home else _team,
                 "hits":         int(st.get("hits", 0)),
                 "total_bases":  int(st.get("totalBases", 0)),
                 "rbis":         int(st.get("rbi", 0)),

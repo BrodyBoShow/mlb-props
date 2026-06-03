@@ -270,6 +270,29 @@ def upsert_game_logs(
         raise
 
 
+def insert_backfill_games(rows: "list[dict]") -> int:
+    """INSERT-ONLY minimal games rows (game_id, game_date, home_team, away_team)
+    for historical backfill games, so player_game_logs' game_id FK is satisfied.
+    ON CONFLICT DO NOTHING on the game_id PK -> an existing (richer) games row —
+    with start_time, starters, weather — is NEVER overwritten. Returns the count
+    submitted. De-dupes within the batch first (multiple players share a game)."""
+    if not rows:
+        return 0
+    seen: set[int] = set()
+    deduped: list[dict] = []
+    for r in rows:
+        gid = r.get("game_id")
+        if gid is not None and gid not in seen:
+            seen.add(gid)
+            deduped.append(r)
+    if not deduped:
+        return 0
+    _client().table("games").upsert(
+        deduped, on_conflict="game_id", ignore_duplicates=True
+    ).execute()
+    return len(deduped)
+
+
 def insert_backfill_game_logs(rows: "list[dict]") -> int:
     """INSERT-ONLY season-backfill rows into player_game_logs (ON CONFLICT DO
     NOTHING on the (player_id, game_id) PK) so a genuinely-graded row — which has
