@@ -3320,8 +3320,48 @@ Featured Plays diagnosis + hitter min-history gate (this session):
   change deferred). tsc clean; npm run build passes (/ 13 kB). Scope: page.tsx +
   constants.ts only; no engine, no /results, no FEATURE_COLS change (still 11).
 
+Calibration scorecard — measure before correcting (this session):
+- Calibration plan agreed: (1) MEASURE first, (2) fix upstream projection bias,
+  (3) pooled per-prop probability calibration, (4) per-prop isotonic/Platt once
+  data is deep. Isotonic now would overfit thin early-season data — deferred.
+- BUILT step 1: engine/calibration_scorecard.py — daily LOG-ONLY, READ-ONLY,
+  mirrors the CLV/matchup-K scorecards (full-run only, in the `not is_refresh`
+  block in main.py). Joins edges.model_over_prob to the graded actual (one
+  sharpest-book pair per player/prop/day, via calibrate._ACTUAL_COL on
+  player_game_logs), drops pushes, and logs per prop: Brier, the base-rate Brier
+  (p̄(1-p̄) = always-predict-base-rate reference), calibration-in-the-large
+  (mean predicted vs mean over = the bias gap), and a coarse reliability table.
+  NEVER touches projections/edges. _LOOKBACK_DAYS=180; _MIN_PAIRS=12 below which
+  a prop reads "thin sample"; _BIAS_GAP=0.05.
+- FIRST FINDING (1535 graded pairs, live DB) — big + actionable:
+  * POOLED pred 0.70 vs actual 0.41 (gap +0.29), Brier 0.357 > base 0.242 —
+    i.e. the probabilities are currently ANTI-informative in aggregate, driven
+    entirely by a severe hitter OVER-bias.
+  * WELL-CALIBRATED: strikeouts (pred 0.59 / act 0.60) and earned_runs (0.60 /
+    0.62) — the props with good projections. hits_allowed (+0.10) / outs (+0.05)
+    are mild. strikeouts being clean VALIDATES the scorecard itself.
+  * HEAVILY OVER-BIASED (predict the over far too often): hitter_rbis +0.44,
+    hitter_home_runs +0.44, hitter_runs +0.34, hitter_hits +0.31, hitter_total_
+    bases +0.28, walks +0.22. hitter_hits reliability is damning: 384/474 pairs
+    sit in the top bucket at pred 0.92 vs act 0.55 — the model slams "over" with
+    huge confidence and it's a coin flip.
+  * KEY: hitter_total_bases uses REAL pinnacle two-sided lines (not just the
+    consensus synthetic line) and STILL shows +0.28 — so the hitter over-bias is
+    a genuine PROJECTION-centering problem, not merely a consensus-de-vig
+    artifact. This is the root cause of the inflated hitter edges + the 75%-over
+    lean splits + the Torres-type fake plays.
+  * NUANCE: strikeouts is unbiased in-the-large but its reliability curve is
+    nearly FLAT (act ~0.57-0.62 across all predicted buckets) -> "Brier ~= base
+    rate" verdict fires: unbiased but not yet DISCRIMINATIVE. Honest.
+- NEXT (step 2, not yet built): center/regress the hitter projections (the
+  mean->median lesson generalized + thin-history regression-to-mean) to drive
+  the hitter gap toward 0; re-read the scorecard's Brier/gap to confirm. The
+  pitcher props are already ~calibrated. Verified: py_compile OK; scorecard runs
+  read-only end-to-end; FEATURE_COLS still 11; no projection/edge math touched.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
-WARNING lines (incl. the daily matchup-K + CLV scorecards + self-heal count).
+WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
+self-heal count).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
