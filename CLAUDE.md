@@ -3640,10 +3640,22 @@ STAGE 2 DONE — backfill validated + flipped into training (this session):
     rows lack it (is_home=0 on them). The harness shows the gain WITHOUT it, so
     not required; a backfill re-run (delete backfilled + re-run backfill_logs.py)
     would populate home_away and improve is_home further.
-  * STAGE 2b (heavier, gated): grader-replay over opening-day->May-29 to compute
-    the REAL context features (whiff/CSW/opp-K/platoon, strict-prior) INTO the
-    backfilled rows, replacing the imputed defaults; re-validate; bigger gain
-    expected. Edges/CLV stay forward-only (no historical odds).
+  * STAGE 2b — DONE (this session). engine/backfill_features.py replayed REAL
+    strict-prior context features (whiff%/CSW%/k-vs-LHH/RHH/avg-velo over the 30d
+    BEFORE each start, from ONE statcast_pitcher call per pitcher; + opp_k_rate /
+    park_factor_k / days_rest from cheap lookups) and UPDATEd the backfill PITCHER
+    rows. lineup_lhh_pct left imputed (weak; per-game boxscore too costly). Safe —
+    only UPDATEs backfilled=true rows. Coverage: 1329/1358 real whiff% (29 are
+    early-season starts whose 30d-prior window predates opening day), 1358/1358
+    real opp_k_rate. Math copied verbatim from grade._pitcher_platoon_30d.
+  * RESULT (validate_backfill, full 2b): RMSE A(graded-only) 2.671 -> B(+backfill
+    imputed) 2.326 -> B(+backfill REAL 2b) 2.236, MAE 1.81. So real features gave
+    another ~0.09 RMSE; end-to-end 2.671 -> 2.236 (~16%). The live train() reads
+    the exact columns 2b wrote, so the next FULL cron run trains the improved
+    model automatically. Home_away re-run also done (is_home now real on backfill;
+    100% coverage). HOME_AWAY + 2b both committed.
+  * home_away re-run DONE: deleted backfilled rows + re-ran backfill_logs.py (now
+    carries home_away); graded 859 untouched; 16667/16667 backfill rows have it.
 
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
