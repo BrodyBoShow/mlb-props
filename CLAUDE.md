@@ -3976,6 +3976,58 @@ Behavior-preserving cleanup audit (this session) — Phase 2 applied:
   (not real dups); E402 import-order in main/backfill/validate (intentional —
   load_dotenv must precede engine imports).
 
+1st-inning pitches line SOURCE FOUND + wired — PrizePicks MLBLIVE (this session):
+- USER asked for a working line source for "1st Inning Pitches Thrown" (the prop
+  was fully built — projection/grade/board/results — but had NO line: no
+  sportsbook and no ParlayAPI book posts it; ParlayAPI has only 1st-inning
+  STRIKEOUTS). Screenshot confirmed it's featured in the MLBLIVE section of the
+  REGULAR PrizePicks DFS app (app.prizepicks.com), NOT Pick6.
+- ROOT CAUSE of the prior "no source" conclusion: the PrizePicks-direct fetch only
+  queried league_id=2 (standard MLB board = full-game fantasy props). "1st Inning
+  Pitches Thrown" lives on a DIFFERENT league. Found via api.prizepicks.com/leagues:
+  MLBLIVE = league_id 231 (also MLBSZN 190, MLBSZN2 261). league 231 carries the
+  inning props (1st Inning Pitches Thrown / Hits Allowed / Pitcher Strikeouts /
+  HRR / Fantasy, + 4th-inning variants) with the goblin/standard/demon ladder.
+- FIX (engine/lines.py): _fetch_prizepicks_standard_fantasy renamed
+  _fetch_prizepicks_standard; now loops _PP_LEAGUE_IDS=(2, 231) (was a single
+  league_id=2 URL). EVERYTHING ELSE ALREADY WORKED: the odds_type=='standard'
+  filter picks the real rung (NOT goblin/demon alts) and _pp_prop_for_stat already
+  maps "1st Inning Pitches Thrown" -> pitcher_first_inning_pitches (its "1st inning"
+  +"pitch", not run/strikeout, flexible match). The two leagues don't overlap on
+  the stat_types we keep (full-game fantasy on 2; 1st-inning pitch count on 231;
+  league 231's "1st Inning Hitter Fantasy Score" does NOT match the exact full-game
+  _PP_STAT_TO_PROP map, and 4th-inning variants fail the "1st inning" check).
+- DB PATH (already clean, no change): the row is appended as a prizepicks row with
+  observed_lines=str(line) in the existing PrizePicks-direct override loop in
+  fetch_prop_lines, then upsert_lines stores it verbatim — _FANTASY_LADDER_PROPS is
+  ONLY {pitcher_fantasy_score, hitter_fantasy_score}, so pitcher_first_inning_pitches
+  BYPASSES the median merge (authoritative single value, idempotent on the 4-key).
+- BOARD (web/app/page.tsx): ppLineByKey query extended to also fetch
+  pitcher_first_inning_pitches (was the 2 fantasy props only). It's a DFS prop with
+  no de-vig edge (edge.py excludes DFS books), so the board shows "Line X · lean"
+  exactly like the fantasy tabs — evalRow already classifies a line-only prop
+  generically (line present, no edge -> qualifiesLean, muted arrow; never a
+  structural edge). The row's line falls back to ppLineByKey via the existing
+  `e?.line ?? ppLineByKey.get(...)`.
+- /results: ALREADY wired (pitcher_first_inning_pitches in ACTUAL_COLUMN +
+  BETTING_PITCHER_PROPS + MIN_LINE 8.5 + DIAG_PROPS; BOOK_PREFERENCE includes
+  prizepicks). Grades lean-vs-line once games complete + actual_first_inning_pitches
+  populates (needs add_first_inning.sql — applied).
+- CI CAVEAT (unchanged): PrizePicks-direct 403s from datacenter IPs (Cloudflare), so
+  in GitHub Actions the 1st-inning-pitches line (like the fantasy lines) only flows
+  when PRIZEPICKS_PROXY_URL is a working RESIDENTIAL proxy. From the user's local/
+  residential IP it works direct (verified this session).
+- VERIFIED end-to-end (live board, 2026-06-04): _fetch_prizepicks_standard returned
+  10 standard 1st-inn-pitches lines matching the screenshot EXACTLY (Sale 14.5,
+  Lugo 14.5, Fluharty 15.5, Nelson 15.5, Imanaga 15.5; J.T. Ginn's 11.5 goblin
+  correctly IGNORED for the 14.5 standard). Manually upserted them for the slate
+  (mirrors the prior fantasy manual-populate): 10 rows in `lines`, observed_lines
+  authoritative single value (NO median merge), 9/10 have projections so line+lean
+  renders now (Fluharty gets his on the next pitcher pipeline run). FEATURE_COLS
+  unchanged (11); py_compile + ruff F clean; tsc + npm run build pass. Committed +
+  pushed (d9dd399). Goes live on every slate via the next cron (subject to the proxy
+  caveat in CI).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains
