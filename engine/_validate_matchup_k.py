@@ -145,7 +145,7 @@ def main() -> None:
         won_m += 1 if (lm == "over") == actual_over else 0
         won_b += 1 if (lb == "over") == actual_over else 0
     print(f"  realized edge on divergences: {disagree} starts where matchup-K and")
-    print(f"    baseline leaned opposite the line.")
+    print("    baseline leaned opposite the line.")
     if disagree:
         print(f"    matchup-K side won {won_m}/{disagree} ({won_m/disagree:.0%}); "
               f"baseline side won {won_b}/{disagree} ({won_b/disagree:.0%}).")

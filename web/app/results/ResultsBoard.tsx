@@ -623,7 +623,6 @@ function TrackerByProp({ results }: { results: TrackerResult[] }) {
     <div className="space-y-4">
       {byProp.map(([propType, rows]) => {
         const over = rows.filter((r) => r.direction === "over").length;
-        const under = rows.length - over;
         const overPct = Math.round((over / rows.length) * 100);
         const underPct = 100 - overPct;
         return (

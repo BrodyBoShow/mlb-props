@@ -27,7 +27,7 @@ def main() -> None:
 
     df = pd.DataFrame(rows)
     print(f"Step 0  columns: {sorted(df.columns)}")
-    print(f"Step 0  null counts per column:")
+    print("Step 0  null counts per column:")
     for c in sorted(df.columns):
         print(f"          {c:24s} nulls={int(df[c].isna().sum())}  dtype={df[c].dtype}")
 
@@ -63,7 +63,7 @@ def main() -> None:
         df.groupby("player_id")["actual_strikeouts"]
         .transform(lambda x: x.shift(1).rolling(30, min_periods=1).mean())
     )
-    print(f"\nStep 2  after shift+rolling, NaN counts:")
+    print("\nStep 2  after shift+rolling, NaN counts:")
     for c in ["last5_k_rate", "last30_k_rate", "is_home"]:
         print(f"          {c:18s} nulls={int(df[c].isna().sum())}")
 
@@ -79,7 +79,7 @@ def main() -> None:
         df["days_rest"] = 5
     df["days_rest"] = pd.to_numeric(df["days_rest"], errors="coerce").fillna(5)
 
-    print(f"Step 3  NaN counts AFTER imputation:")
+    print("Step 3  NaN counts AFTER imputation:")
     for c in FEATURE_COLS + ["actual_strikeouts"]:
         print(f"          {c:18s} nulls={int(df[c].isna().sum())}")
 
