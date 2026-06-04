@@ -3619,10 +3619,37 @@ Backfill regression on /results — FIXED + a deeper thread to chase (this sessi
   in the trend bucket + understanding the game_id mismatch. Symptom (the reported
   /results drop) is resolved; this is cleanup.
 
+STAGE 2 DONE — backfill validated + flipped into training (this session):
+- STEP A (engine/validate_backfill.py, read-only harness): time-based holdout,
+  ~25% most-recent graded pitcher starts as TEST; Model A (graded only) vs Model
+  B (graded + backfill), replicating train()'s EXACT feature engineering + XGB
+  params. RESULT: RMSE baseline(mean) 2.511; A (78 train rows) 2.671 — WORSE than
+  the mean (data-starved!); B (1435 train rows) 2.326, MAE 2.17->1.83. Backfill
+  clearly HELPS.
+- STEP B FLIP (validated, reversible): model.train() now INCLUDES backfilled rows
+  (removed the exclusion guard; logs the count; revert = restore
+  `df = df[~df["backfilled"].fillna(False)]`). Verified live: trains on 1465
+  pitcher rows (was 78), 0 NaN after imputation, FEATURE_COLS still 11. Goes live
+  on the next FULL cron run (the model retrains). The calibration scorecard +
+  /results monitor it forward; revert if it regresses.
+- LATENT BUG FIXED (backfill exposed it): db.get_game_logs() was UN-paginated and
+  silently capped at 1000 of ~17.5k rows — starving train() + confidence. Now
+  paginates.
+- REMAINING REFINEMENTS (optional, not blocking):
+  * home_away on backfill rows: the builder now carries it but EXISTING backfill
+    rows lack it (is_home=0 on them). The harness shows the gain WITHOUT it, so
+    not required; a backfill re-run (delete backfilled + re-run backfill_logs.py)
+    would populate home_away and improve is_home further.
+  * STAGE 2b (heavier, gated): grader-replay over opening-day->May-29 to compute
+    the REAL context features (whiff/CSW/opp-K/platoon, strict-prior) INTO the
+    backfilled rows, replacing the imputed defaults; re-validate; bigger gain
+    expected. Edges/CLV stay forward-only (no historical odds).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
-self-heal count + lined-hitter coverage count). PAUSED MID-STAGE-2: resume with
-"continue Stage 2" -> start at STEP A (engine/validate_backfill.py).
+self-heal count + lined-hitter coverage count). The strikeouts model now trains
+on the full backfilled season (Stage-2 flip) — watch the calibration scorecard
+for strikeouts to confirm it holds.
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
