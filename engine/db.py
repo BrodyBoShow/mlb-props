@@ -663,11 +663,23 @@ def get_game_logs(since_date: str | None = None) -> list[dict] | None:
     so callers should pass a recent floor to keep the round-trip small.
     """
     try:
-        query = _client().table("player_game_logs").select("*")
-        if since_date:
-            query = query.gte("game_date", since_date)
-        resp = query.execute()
-        return resp.data or []
+        # PAGINATE: PostgREST caps every response at 1000 rows. Before the season
+        # backfill player_game_logs was < 1000, so this was fine; now it's ~17k,
+        # so an un-paginated read silently truncates — starving train() and the
+        # confidence calc. Walk the Range header in 1000-row chunks.
+        out: list[dict] = []
+        page = 0
+        while page < 200:
+            frm = page * 1000
+            q = _client().table("player_game_logs").select("*")
+            if since_date:
+                q = q.gte("game_date", since_date)
+            batch = q.range(frm, frm + 999).execute().data or []
+            out += batch
+            if len(batch) < 1000:
+                break
+            page += 1
+        return out
     except Exception as exc:
         print(f"  player_game_logs not accessible ({exc}) — skipping training")
         return None

@@ -93,6 +93,9 @@ def _pitcher_rows(pid: int, ref, games_acc: dict) -> list[dict]:
                 "game_date": g["game_date"],
                 "player_type": "pitcher",
                 "backfilled": True,
+                # home_away -> is_home feature once train() includes backfill
+                # (Stage-2 flip). Existing rows lack it until a re-run.
+                "home_away": g.get("home_away"),
                 "actual_strikeouts": k,
                 "actual_hits_allowed": g.get("hits_allowed"),
                 "actual_walks": g.get("walks"),
@@ -132,6 +135,7 @@ def _hitter_rows(pid: int, ref, games_acc: dict) -> list[dict]:
                 "game_date": g["game_date"],
                 "player_type": "hitter",
                 "backfilled": True,
+                "home_away": g.get("home_away"),
                 "actual_hits": hits,
                 "actual_total_bases": g.get("total_bases"),
                 "actual_hits_runs_rbis": g.get("hits_runs_rbis"),
