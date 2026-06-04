@@ -21,6 +21,7 @@ import type {
   TrendWindow,
 } from "@/lib/types";
 import { EDGE_THRESHOLD, HITTER_PROPS, REAL_BOOKS } from "@/lib/constants";
+import { fmt, formatShortDate } from "@/lib/format";
 import {
   hitterFantasyScore,
   isQualityStart,
@@ -77,12 +78,6 @@ const LINE_LEAN_THRESHOLD = 0.1;
 // surface this many so the hitting lineup is never fully hidden (the lineup must
 // be visible in the card, not one click away). The rest stay behind the expander.
 const DEFAULT_HITTER_COUNT = 3;
-
-// Compact numeric formatter: integers stay integer (live actuals, "16"), else
-// one decimal ("6.4").
-function fmt(n: number): string {
-  return Number.isInteger(n) ? String(n) : n.toFixed(1);
-}
 
 // Grade the PROJECTION'S LEAN against the line vs the actual — i.e. if you'd
 // bet the side the projection points to (over if proj > line, under if proj <
@@ -535,14 +530,6 @@ function WindCardLine({
 }
 
 // ── game header bits ─────────────────────────────────────────────────────────
-
-function formatShortDate(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 function LiveDot() {
   // Tailwind's animate-ping gives a built-in expanding-ring pulse.

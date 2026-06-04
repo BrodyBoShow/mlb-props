@@ -9,6 +9,7 @@ import type {
   WeeklyBucket,
 } from "@/lib/types";
 import { PROP_LABELS } from "@/lib/constants";
+import { fmt, formatShortDate } from "@/lib/format";
 import ResultsTrendChart from "./ResultsTrendChart";
 
 // Re-export types/labels so callers `import { ..., type PropType } from
@@ -55,23 +56,11 @@ function rateColor(num: number, den: number): string {
   return "text-red-400";
 }
 
-function formatShortDate(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 function formatTrackedFrom(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
   });
-}
-
-function fmt(n: number): string {
-  return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
 function avg(xs: number[]): number {

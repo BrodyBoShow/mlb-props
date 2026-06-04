@@ -2,6 +2,7 @@
 
 import DateNav from "./DateNav";
 import ParkTag from "./ParkTag";
+import { formatShortDate } from "@/lib/format";
 
 // One game card on a future date. Populated by engine/main._run_future_previews
 // (no projections yet, but games + probable starters are in the DB ahead of
@@ -15,14 +16,6 @@ export type FutureGame = {
   home_starter: { full_name: string } | null;
   away_starter: { full_name: string } | null;
 };
-
-function formatShortDate(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 function formatStartTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-US", {
