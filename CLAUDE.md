@@ -3847,6 +3847,46 @@ Hitter baseline regression-to-mean — the spiky-projection fix (this session):
   extreme 2-game sample can still approach the cap, which stays as a backstop. The
   TB betting edges become trustworthy as regressed projections build.
 
+1st-inning pitches -> Betting Edge + Total Bases pinned to its main line (session):
+- USER (after the TB move): "total bases is mostly an alternate line ... rather have
+  1-inning pitches thrown instead." Audited the live lines first (the data changed
+  the plan):
+  * TB is NOT mostly alt — 6/3 had 1.5 (main) 53%, 0.5 35%, 2.5+ 12%, with the 1.5
+    posted two-sided by pinnacle/caesars/bet365/DK. But the >= MIN_LINE(1.5) floor
+    let 2.5+ alts leak into grading. So TB stays in Betting Edge but is PINNED.
+  * 1st-inning pitches has ZERO book lines ingested (PrizePicks posts it late; the
+    PrizePicks-direct fetch only pulled the fantasy props). It can't be a lean-vs-
+    line betting prop until its line is captured. User chose "go capture its line"
+    + "tighten TB to the main line" (AskUserQuestion).
+- TOTAL BASES MAIN-LINE PIN (frontend, /results only): constants.ts MAIN_LINE_VALUE
+  { hitter_total_bases: 1.5 } — the fixed main-market value for props that have one
+  (pitcher props vary per-pitcher, so they keep the floor). results/page.tsx: the
+  line SELECTION (linesByKey + trendLineByKey) now prefers the line EQUAL to the
+  main value over a 2.5+ alt before book rank; a new lineQualifies(prop,line,floor)
+  requires line === main for MAIN_LINE_VALUE props (else >= floor), applied at all
+  THREE Betting-Edge grade spots (main join + featured row + weekly trend). Verified
+  on 7 days of TB lines: 844 (player,date) keep the 1.5 main, 140 alt-only dropped,
+  252 0.5-only excluded as before — TB now grades ONLY on its 1.5 main market.
+- 1ST-INNING PITCHES -> BETTING EDGE: lines.py — new _pp_prop_for_stat() adds a
+  FLEXIBLE PrizePicks stat_type match ("1st inning"+"pitch", not runs/strikeouts;
+  the sibling "1st Inning Runs Allowed" IS posted but pitches-thrown isn't yet, so
+  the exact label is unknown — the fetch logs it the first time it's captured to
+  pin the mapping). The existing PrizePicks-direct add-loop already turns the
+  captured {(pid,prop):line} into prizepicks line rows, so no other engine change.
+  Frontend: moved pitcher_first_inning_pitches TRACKER_PROPS -> Betting Edge
+  (constants MIN_LINE 8.5 floor + removed from TRACKER_PROPS; ResultsBoard
+  BETTING_PITCHER_PROPS + removed from local TRACKER_PROPS). Until PrizePicks posts
+  the line, /results shows "1st Inning Pitches ... no lines yet" (verified: lines=0,
+  all 29 drop at noLine) — it auto-populates + grades vs the line once captured.
+  Trade-off the user accepted: it left the Model Tracker (actual-vs-projection) for
+  Betting Edge; the 30 graded actuals stay in the DB, just not shown there now.
+- CAVEAT: PrizePicks posts 1st-inning pitches LATE, so coverage will be spotty
+  (morning runs / some days won't have it). Watch the cron log for "captured
+  1st-inning-pitches lines (PrizePicks label: ...)" to confirm capture + the exact
+  stat_type. If the flexible match misses, pin the real label into
+  lines._PP_STAT_TO_PROP. Verified: py_compile + tsc + build clean; /results renders
+  both (1st-inn-pitches "no lines yet" row; TB pinned with alts dropped).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains

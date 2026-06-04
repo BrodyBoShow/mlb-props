@@ -169,6 +169,24 @@ _PP_STAT_TO_PROP = {
     "Hitter Fantasy Score":  "hitter_fantasy_score",
     "Pitcher Fantasy Score": "pitcher_fantasy_score",
 }
+
+
+def _pp_prop_for_stat(stat_type: str | None) -> str | None:
+    """Map a PrizePicks stat_type to our prop_type.
+
+    Exact map for the fantasy props, plus a FLEXIBLE match for the 1st-inning
+    pitch-count prop: PrizePicks posts it late and we haven't seen its exact
+    label (the sibling 'pitcher allows a 1st-inning run' shows as '1st Inning
+    Runs Allowed'), so we match any '1st inning ... pitch(es)' stat_type that
+    isn't the runs/strikeout variant. The cron log prints the exact label the
+    first time it's captured so the mapping can be pinned if needed.
+    """
+    if stat_type in _PP_STAT_TO_PROP:
+        return _PP_STAT_TO_PROP[stat_type]
+    s = (stat_type or "").lower()
+    if "1st inning" in s and "pitch" in s and "run" not in s and "strikeout" not in s:
+        return "pitcher_first_inning_pitches"
+    return None
 _PP_PROJECTIONS_URL = "https://api.prizepicks.com/projections?league_id=2&per_page=1000"
 
 # Realistic browser headers — a free attempt to defeat a header-based block.
@@ -207,6 +225,7 @@ def _fetch_prizepicks_standard_fantasy(
     CI datacenter IP. When unset, behaves exactly as a direct request.
     """
     out: dict[tuple[int, str], float] = {}
+    seen_inning_stats: set[str] = set()   # exact PrizePicks labels we matched
 
     # Dedicated opener so the proxy (if any) applies ONLY here, never globally.
     proxy_url = os.getenv("PRIZEPICKS_PROXY_URL")
@@ -245,9 +264,11 @@ def _fetch_prizepicks_standard_fantasy(
                 a = d.get("attributes", {}) or {}
                 if a.get("odds_type") != "standard":
                     continue
-                prop_type = _PP_STAT_TO_PROP.get(a.get("stat_type"))
+                prop_type = _pp_prop_for_stat(a.get("stat_type"))
                 if prop_type is None:
                     continue
+                if prop_type == "pitcher_first_inning_pitches":
+                    seen_inning_stats.add(a.get("stat_type") or "")
                 line = a.get("line_score")
                 if line is None:
                     continue
@@ -280,6 +301,9 @@ def _fetch_prizepicks_standard_fantasy(
         return {}
 
     print(f"  PrizePicks-direct standard {via}: {len(out)} lines")
+    if seen_inning_stats:
+        print(f"    captured 1st-inning-pitches lines (PrizePicks label{'s' if len(seen_inning_stats) > 1 else ''}: "
+              f"{', '.join(sorted(seen_inning_stats))})")
     return out
 
 

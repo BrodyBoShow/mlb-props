@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
-import { ALL_PROP_TYPES, FEATURED_MIN_LINE, MIN_LINE, REAL_BOOKS, TRACKER_PROPS } from "@/lib/constants";
+import { ALL_PROP_TYPES, FEATURED_MIN_LINE, MAIN_LINE_VALUE, MIN_LINE, REAL_BOOKS, TRACKER_PROPS } from "@/lib/constants";
 import type {
   EvaluatedResult,
   PropType,
@@ -138,6 +138,14 @@ function classify(projection: number, line: number, actual: number): Verdict {
   }
   // Under lean — correct if actual < line.
   return actual < line ? "correct" : "wrong";
+}
+
+// Whether a selected line counts as a main-market line for Betting Edge grading.
+// Props with a fixed main value (Total Bases 1.5) must match it EXACTLY so 2.5+
+// alternates are dropped; all other props use the per-prop floor (>= MIN_LINE).
+function lineQualifies(propType: PropType, lineVal: number, floor: number): boolean {
+  const main = MAIN_LINE_VALUE[propType];
+  return main !== undefined ? lineVal === main : lineVal >= floor;
 }
 
 // ── data fetch ───────────────────────────────────────────────────────────────
@@ -353,7 +361,18 @@ async function getResults(): Promise<{
   for (const l of lines) {
     const key = `${l.player_id}|${l.prop_type}|${l.game_date}`;
     const existing = linesByKey.get(key);
-    if (!existing || bookRank(l.bookmaker) < bookRank(existing.bookmaker)) {
+    if (!existing) { linesByKey.set(key, l); continue; }
+    // For props with a fixed main-market line (Total Bases 1.5), prefer the line
+    // EQUAL to that value over a 2.5+ alternate before falling back to book rank,
+    // so the main line is selected whenever any book posts it.
+    const main = MAIN_LINE_VALUE[l.prop_type as PropType];
+    if (main !== undefined) {
+      const lMain = l.line === main;
+      const eMain = existing.line === main;
+      if (lMain && !eMain) { linesByKey.set(key, l); continue; }
+      if (!lMain && eMain) continue;
+    }
+    if (bookRank(l.bookmaker) < bookRank(existing.bookmaker)) {
       linesByKey.set(key, l);
     }
   }
@@ -425,7 +444,7 @@ async function getResults(): Promise<{
       `${p.player_id}|${p.prop_type}|${p.projection_date}`
     );
     if (!line) { trackDrop(propType, "noLine"); continue; }
-    if (line.line < minLine) { trackDrop(propType, "belowMin"); continue; }
+    if (!lineQualifies(propType, line.line, minLine)) { trackDrop(propType, "belowMin"); continue; }
 
     const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
     if (!log) { trackDrop(propType, "noLog"); continue; }
@@ -520,7 +539,7 @@ async function getResults(): Promise<{
     // hits 0.5). Combined with the REAL_BOOKS gate on the edge above, this row
     // and the board's buildEdgePlays now apply IDENTICAL Featured criteria.
     const minLine = FEATURED_MIN_LINE[propType];
-    if (minLine === undefined || line.line < minLine) continue;
+    if (minLine === undefined || !lineQualifies(propType, line.line, minLine)) continue;
 
     const edge = edgeByKey.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
     if (edge === undefined || Math.abs(edge) < FEATURED_MIN_EDGE) continue;
@@ -621,7 +640,16 @@ async function getResults(): Promise<{
   for (const l of trendLines) {
     const key = `${l.player_id}|${l.prop_type}|${l.game_date}`;
     const existing = trendLineByKey.get(key);
-    if (!existing || bookRank(l.bookmaker) < bookRank(existing.bookmaker)) {
+    if (!existing) { trendLineByKey.set(key, l); continue; }
+    // Same main-line preference as the 7-day path (so TB grades on 1.5, not alts).
+    const main = MAIN_LINE_VALUE[l.prop_type as PropType];
+    if (main !== undefined) {
+      const lMain = l.line === main;
+      const eMain = existing.line === main;
+      if (lMain && !eMain) { trendLineByKey.set(key, l); continue; }
+      if (!lMain && eMain) continue;
+    }
+    if (bookRank(l.bookmaker) < bookRank(existing.bookmaker)) {
       trendLineByKey.set(key, l);
     }
   }
@@ -639,7 +667,7 @@ async function getResults(): Promise<{
     if (!actualCol) continue;
 
     const line = trendLineByKey.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
-    if (!line || line.line < minLine) continue;
+    if (!line || !lineQualifies(propType, line.line, minLine)) continue;
     const log = trendLogByKey.get(`${p.player_id}|${p.projection_date}`);
     if (!log) continue;
     const actualRaw = log[actualCol];

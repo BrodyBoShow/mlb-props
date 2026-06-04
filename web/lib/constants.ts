@@ -28,11 +28,12 @@ export const ALL_PROP_TYPES: PropType[] = [
 export const TRACKER_PROPS: ReadonlySet<PropType> = new Set([
   "walks",
   "earned_runs",
-  "pitcher_first_inning_pitches",
   "hitter_hits",
   // hitter_total_bases moved to Betting Edge (it HAS real two-sided pinnacle
   // lines, so it's graded lean-vs-line, not calibration-only). hitter_hits
   // stays here — pinnacle posts no two-sided hits line (consensus only).
+  // pitcher_first_inning_pitches moved to Betting Edge too — its PrizePicks line
+  // is now captured (lines.py PrizePicks-direct), so it's graded vs that line.
 ]);
 
 // Hitter prop set — used by PropBoard for live pace logic.
@@ -67,6 +68,17 @@ export const MIN_LINE: Partial<Record<PropType, number>> = {
   hitter_fantasy_score:   4.0,
   hitter_total_bases:     1.5,   // top hitter prop — pinnacle posts two-sided TB lines
   hitter_hits_runs_rbis:  1.5,   // combo prop — main two-sided line
+  pitcher_first_inning_pitches: 8.5,  // PrizePicks DFS line (~13-18); floor gates out odd lows
+};
+
+// Exact MAIN-MARKET line value for props whose main line is a fixed number, so
+// /results grades them ONLY on the main line and never on a 2.5+ alternate.
+// Total Bases is the case that needed it: pinnacle/DK post a two-sided 1.5 main
+// AND 2.5+ alts, and the plain ">= MIN_LINE" floor let the alts through. Pitcher
+// props (strikeouts/outs/etc.) have a per-pitcher VARYING main line, so they have
+// no fixed value here and keep the floor-only gate.
+export const MAIN_LINE_VALUE: Partial<Record<PropType, number>> = {
+  hitter_total_bases:    1.5,
 };
 
 // The sharp badge's OWN main-market floor — intentionally SEPARATE from
