@@ -28,6 +28,7 @@ const BETTING_HITTER_PROPS: PropType[] = ["hitter_hits_runs_rbis", "hitter_fanta
 
 const TRACKER_PROPS: PropType[] = [
   "hitter_hits", "hitter_total_bases", "walks", "earned_runs",
+  "pitcher_first_inning_pitches",
 ];
 
 // Section-1 filter union: All / Pitcher / Hitter group + each individual prop.

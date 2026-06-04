@@ -283,23 +283,60 @@ def _boxscore(game_id: int) -> dict:
         return {}
 
 
-def _decisions(game_id: int) -> tuple[int | None, int | None]:
-    """Return (winning_pitcher_id, losing_pitcher_id) for a finished game.
+def _game_feed(game_id: int) -> dict:
+    """Fetch the live-feed endpoint once per game (cached by the caller).
 
-    boxscore_data doesn't expose decisions, so we hit the live-feed endpoint
-    once per game. Returns (None, None) on any error or for games that
-    didn't reach an official decision — the caller treats both as "no W".
+    The feed carries the W/L decision AND the per-play + linescore data the
+    first-inning props need (pitches thrown + runs scored), so ONE fetch serves
+    all three — no extra API calls beyond the decision fetch we already made.
     """
     try:
-        feed = statsapi.get("game", {"gamePk": game_id})
+        return statsapi.get("game", {"gamePk": game_id})
     except Exception as exc:
-        print(f"  decisions fetch failed for game {game_id}: {exc}")
-        return (None, None)
+        print(f"  feed fetch failed for game {game_id}: {exc}")
+        return {}
 
+
+def _decisions_from_feed(feed: dict) -> tuple[int | None, int | None]:
+    """(winning_pitcher_id, losing_pitcher_id) from an already-fetched feed."""
     deci = (feed.get("liveData") or {}).get("decisions") or {}
-    winner = (deci.get("winner") or {}).get("id")
-    loser = (deci.get("loser") or {}).get("id")
-    return (winner, loser)
+    return ((deci.get("winner") or {}).get("id"), (deci.get("loser") or {}).get("id"))
+
+
+def _first_inning_pitches(feed: dict, player_id: int) -> int | None:
+    """This pitcher's pitch count in the 1st inning, from the cached feed.
+
+    None when the pitcher never faced a 1st-inning batter (didn't start / wasn't
+    an opener) — so a reliever who entered later is NOT logged a misleading 0.
+    """
+    plays = ((feed.get("liveData") or {}).get("plays") or {}).get("allPlays") or []
+    n = 0
+    faced = False
+    for p in plays:
+        if (p.get("about") or {}).get("inning") != 1:
+            continue
+        if ((p.get("matchup") or {}).get("pitcher") or {}).get("id") != player_id:
+            continue
+        faced = True
+        n += sum(1 for e in (p.get("playEvents") or []) if e.get("isPitch"))
+    return n if faced else None
+
+
+def _first_inning_runs(feed: dict) -> int | None:
+    """Total runs scored in the 1st inning by BOTH teams, from the cached feed.
+
+    This is the NRFI/YRFI actual: 0 -> NRFI, >=1 -> YRFI. None when the
+    linescore has no first inning yet (postponed / data gap).
+    """
+    innings = ((feed.get("liveData") or {}).get("linescore") or {}).get("innings") or []
+    if not innings:
+        return None
+    first = innings[0]
+    away = (first.get("away") or {}).get("runs")
+    home = (first.get("home") or {}).get("runs")
+    if away is None and home is None:
+        return None
+    return int(away or 0) + int(home or 0)
 
 
 def _pitcher_result(box: dict, player_id: int) -> dict | None:
@@ -380,9 +417,10 @@ def grade_yesterday(
 
     year = yesterday.year
 
-    # Fetch each game's box score + W/L decision once, keyed by game_id.
+    # Fetch each game's box score + live feed once, keyed by game_id. The feed
+    # provides the W/L decision AND the first-inning pitch count for each starter.
     box_cache: dict[int, dict] = {}
-    decision_cache: dict[int, tuple[int | None, int | None]] = {}
+    feed_cache: dict[int, dict] = {}
 
     # Pre-fetch every starting batter's bats handedness via the MLB Stats
     # API /people endpoint — one bulk call for the whole slate. The
@@ -419,8 +457,8 @@ def grade_yesterday(
 
         if game_id not in box_cache:
             box_cache[game_id] = _boxscore(game_id)
-        if game_id not in decision_cache:
-            decision_cache[game_id] = _decisions(game_id)
+        if game_id not in feed_cache:
+            feed_cache[game_id] = _game_feed(game_id)
 
         result = _pitcher_result(box_cache[game_id], player_id)
 
@@ -449,8 +487,16 @@ def grade_yesterday(
         # PrizePicks fantasy score: outs+K+ER (always graded) + W and QS
         # bonuses (final, since the game is Final). Computed via the shared
         # fantasy_score module so weights live in exactly one place.
-        winner_id, _loser_id = decision_cache[game_id]
+        winner_id, _loser_id = _decisions_from_feed(feed_cache[game_id])
         actual_win = (winner_id == player_id)
+        # First-inning pitch count (the new prop's actual) from the same feed.
+        first_inning_pitches = _first_inning_pitches(feed_cache[game_id], player_id)
+        # NRFI/YRFI actual (game-level): the total 1st-inning runs are stored ONCE
+        # per game on the HOME starter's row — the carrier the first_inning_runs
+        # projection uses — so the two join cleanly. None on every other row.
+        first_inning_runs = (
+            _first_inning_runs(feed_cache[game_id]) if side == "home" else None
+        )
         actual_pitcher_fp = pitcher_fantasy_score(
             outs=result["actual_outs_recorded"],
             strikeouts=result["actual_strikeouts"],
@@ -522,6 +568,8 @@ def grade_yesterday(
             "actual_walks":          result["actual_walks"],
             "actual_earned_runs":    result["actual_earned_runs"],
             "actual_outs_recorded":  result["actual_outs_recorded"],
+            "actual_first_inning_pitches": first_inning_pitches,
+            "actual_first_inning_runs":    first_inning_runs,
             "actual_win":            actual_win,
             "actual_pitcher_fantasy_score": actual_pitcher_fp,
             "home_away":             side,

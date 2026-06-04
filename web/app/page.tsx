@@ -84,6 +84,7 @@ const SPARK_ACTUAL_COL: Partial<Record<PropType, string>> = {
   strikeouts:    "actual_strikeouts",
   hits_allowed:  "actual_hits_allowed",
   outs_recorded: "actual_outs_recorded",
+  pitcher_first_inning_pitches: "actual_first_inning_pitches",
   walks:         "actual_walks",
   earned_runs:   "actual_earned_runs",
 };
@@ -97,6 +98,7 @@ const TREND_ACTUAL_COL: Partial<Record<PropType, string>> = {
   strikeouts:             "actual_strikeouts",
   hits_allowed:           "actual_hits_allowed",
   outs_recorded:          "actual_outs_recorded",
+  pitcher_first_inning_pitches: "actual_first_inning_pitches",
   walks:                  "actual_walks",
   earned_runs:            "actual_earned_runs",
   hitter_hits:            "actual_hits",
@@ -605,6 +607,26 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
   }
 
+  // Game-level NRFI/YRFI read. The first_inning_runs projection (P(YRFI), 0-1)
+  // is keyed on the home-starter carrier, so we map it to the GAME by game_id
+  // and render it as a game-header tag. ISOLATED + failure-tolerant (new
+  // prop_type); on any error the tag simply doesn't render. ~15 rows.
+  const nrfiByGame = new Map<number, number>();
+  {
+    const { data: nrfiRows, error: nrfiErr } = await supabase
+      .from("projections")
+      .select("game_id, projection")
+      .eq("projection_date", selectedDate)
+      .eq("prop_type", "first_inning_runs");
+    if (nrfiErr) {
+      console.log(`[home-diag] NRFI (first_inning_runs) fetch skipped (${String(nrfiErr)})`);
+    } else {
+      for (const r of (nrfiRows ?? []) as Array<{ game_id: number; projection: number }>) {
+        nrfiByGame.set(r.game_id, r.projection);
+      }
+    }
+  }
+
   // ── HR-card sweet-spot (display-only) ───────────────────────────────────
   // Rolling 7-day Statcast batted-ball quality, set ONLY on hitter_home_runs
   // projection rows by the engine. ISOLATED + failure-tolerant for the same
@@ -795,6 +817,8 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
             windSpeed: w?.windSpeed ?? null,
             windDirDeg: w?.windDirDeg ?? null,
             isDome: w?.isDome ?? null,
+            // Game-level NRFI/YRFI read (P(YRFI)) for the game-header tag.
+            firstInningRuns: nrfiByGame.get(r.game_id),
             pitchers: [],
           });
         }

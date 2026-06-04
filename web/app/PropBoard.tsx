@@ -46,6 +46,7 @@ const PROPS: { key: PropType; label: string; unit: string; short: string }[] = [
   { key: "walks",                 label: "Pitcher Walks",         unit: "BB",   short: "BB"   },
   { key: "earned_runs",           label: "Pitcher Earned Runs",   unit: "ER",   short: "ER"   },
   { key: "outs_recorded",         label: "Pitcher Outs Recorded", unit: "outs", short: "Outs" },
+  { key: "pitcher_first_inning_pitches", label: "Pitcher 1st-Inning Pitches", unit: "P", short: "1stP" },
   { key: "pitcher_fantasy_score", label: "Pitcher Fantasy Score", unit: "FP",   short: "FP"   },
   // hitter props
   { key: "hitter_hits",           label: "Hitter Hits",           unit: "H",    short: "H"    },
@@ -666,6 +667,7 @@ type GameView = {
   windSpeed?: number | null;
   windDirDeg?: number | null;
   isDome?: boolean | null;
+  firstInningRuns?: number;   // P(YRFI) — game-level NRFI/YRFI read
   pitchers: PlayerRow[];
   hitters: PlayerRow[];
 };
@@ -798,6 +800,7 @@ function buildGameViews(byProp: ByProp): GameView[] {
       windSpeed: meta.windSpeed,
       windDirDeg: meta.windDirDeg,
       isDome: meta.isDome,
+      firstInningRuns: meta.firstInningRuns,
       pitchers,
       hitters,
     });
@@ -1359,6 +1362,22 @@ function GameCard({
                 {wc.text}
               </span>
             )}
+            {gv.firstInningRuns != null && (() => {
+              const p = gv.firstInningRuns;          // P(YRFI), 0-1
+              const yrfi = p >= 0.5;
+              const shown = Math.round((yrfi ? p : 1 - p) * 100);
+              return (
+                <>
+                  {(parkShown || wc) && <span className="text-[10px] text-slate-600">·</span>}
+                  <span
+                    title={`Model: ${Math.round(p * 100)}% chance a run scores in the 1st inning`}
+                    className={`text-[11px] font-medium tabular-nums ${yrfi ? "text-amber-400" : "text-sky-400"}`}
+                  >
+                    {yrfi ? "YRFI" : "NRFI"} {shown}%
+                  </span>
+                </>
+              );
+            })()}
           </div>
         </div>
         {!expanded && <CollapsedSummary summary={summary} />}

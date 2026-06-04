@@ -11,6 +11,7 @@ export type PropType =
   | "walks"
   | "earned_runs"
   | "outs_recorded"
+  | "pitcher_first_inning_pitches"
   | "pitcher_fantasy_score"
   | "hitter_hits"
   | "hitter_total_bases"
@@ -106,6 +107,10 @@ export type GameGroup = {
   windSpeed?: number | null;
   windDirDeg?: number | null;
   isDome?: boolean | null;
+  // Game-level NRFI/YRFI read: the model's P(YRFI) (0-1) — probability a run
+  // scores in the 1st inning by either team. Rendered as a game-header tag
+  // (NRFI lean when < 0.5, YRFI when >= 0.5). undefined when not projected.
+  firstInningRuns?: number;
   pitchers: Pitcher[];
 };
 

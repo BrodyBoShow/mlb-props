@@ -43,6 +43,7 @@ PROP_TO_MARKET = {
     "walks":         "player_walks",
     "earned_runs":   "player_earned_runs",
     "outs_recorded": "player_pitcher_outs",
+    "pitcher_first_inning_pitches": "player_first_inning_pitches",
     # hitter
     "hitter_hits":        "player_hits",
     "hitter_total_bases": "player_total_bases",
@@ -79,6 +80,15 @@ MARKET_TO_PROP = {
     "player_earned_runs_allowed":   "earned_runs",
     "player_outs":                  "outs_recorded",
     "player_pitching_outs":         "outs_recorded",
+    # First-inning pitches. The exact response key ParlayAPI returns isn't yet
+    # confirmed (the prop is intermittently posted, mostly by PrizePicks closer
+    # to first pitch), so several plausible variants are mapped; the lines.py
+    # diagnostic prints any unmapped market_key so the real one can be confirmed
+    # from the cron log and pruned here.
+    "player_first_inning_pitches":      "pitcher_first_inning_pitches",
+    "player_1st_inning_pitches":        "pitcher_first_inning_pitches",
+    "player_pitches_thrown_1st_inning": "pitcher_first_inning_pitches",
+    "player_first_inning_pitches_thrown": "pitcher_first_inning_pitches",
     # hitter
     "player_hits":         "hitter_hits",
     "player_total_bases":  "hitter_total_bases",

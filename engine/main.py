@@ -31,6 +31,7 @@ import calibrate
 import db
 import edge
 import fetch
+import first_inning
 import grade
 import lines
 import matchup_k
@@ -344,6 +345,27 @@ def _run_pitcher_pipeline(
         other_prop_rows.extend(rows)
         n = db.upsert_projections(rows)
         print(f"  upserted {n} {label} projections")
+
+    # First-inning pitches — Statcast-based (the game-log has no per-inning
+    # split), so it's built separately from the loop above and reuses the same
+    # bulk Statcast frame the strikeout builder already fetched.
+    print("Building first-inning pitches projections...")
+    fip_rows = baseline.build_pitcher_first_inning_pitches_projections(
+        starters, projection_date=et_today(), bulk_df=bulk_df
+    )
+    other_prop_rows.extend(fip_rows)
+    n_fip = db.upsert_projections(fip_rows)
+    print(f"  upserted {n_fip} first-inning pitches projections")
+
+    # First-inning runs (NRFI/YRFI) — GAME-level, one row per game keyed on the
+    # home starter as carrier. Kept OUT of other_prop_rows so it never flows into
+    # the player-line/edge/calibration paths (it has no per-player book line).
+    print("Building first-inning runs (NRFI/YRFI) projections...")
+    nrfi_rows = first_inning.build_first_inning_runs_projections(
+        games, projection_date=et_today()
+    )
+    n_nrfi = db.upsert_projections(nrfi_rows)
+    print(f"  upserted {n_nrfi} first-inning runs projections")
 
     all_pitcher_projections = projections + other_prop_rows
 

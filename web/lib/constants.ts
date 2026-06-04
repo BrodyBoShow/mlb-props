@@ -12,6 +12,7 @@ export const ALL_PROP_TYPES: PropType[] = [
   "walks",
   "earned_runs",
   "outs_recorded",
+  "pitcher_first_inning_pitches",
   "pitcher_fantasy_score",
   "hitter_hits",
   "hitter_total_bases",
@@ -27,6 +28,7 @@ export const ALL_PROP_TYPES: PropType[] = [
 export const TRACKER_PROPS: ReadonlySet<PropType> = new Set([
   "walks",
   "earned_runs",
+  "pitcher_first_inning_pitches",
   "hitter_hits",
   "hitter_total_bases",
 ]);
@@ -308,6 +310,7 @@ export const PROP_LABELS: Record<PropType, string> = {
   walks:                 "Walks",
   earned_runs:           "Earned Runs",
   outs_recorded:         "Outs",
+  pitcher_first_inning_pitches: "1st Inning Pitches",
   pitcher_fantasy_score: "Pitcher Fantasy",
   hitter_hits:           "Hits",
   hitter_total_bases:    "Total Bases",

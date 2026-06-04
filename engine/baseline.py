@@ -134,6 +134,74 @@ def build_strikeout_projections(
     return rows
 
 
+# ─── first-inning pitches (Statcast via pybaseball) ──────────────────────────
+
+def _first_inning_pitches_per_start(
+    player_id: int, start_dt: str, end_dt: str, bulk_df=None,
+) -> list[int]:
+    """Count of a pitcher's 1st-inning pitches per start in the window, newest first.
+
+    Each Statcast row is one pitch, so filtering to inning == 1 and counting per
+    game gives the first-inning pitch count. Shares the bulk Statcast frame with
+    the strikeout builder when provided (no per-pitcher round-trip); falls back
+    to a single statcast_pitcher() call otherwise. The MLB Stats API game-log
+    carries no per-inning split, so this prop MUST come from Statcast.
+    """
+    if bulk_df is not None and not bulk_df.empty:
+        df = bulk_df[bulk_df["pitcher"] == player_id]
+    else:
+        df = pybaseball.statcast_pitcher(start_dt, end_dt, player_id)
+    if df is None or df.empty or "inning" not in df.columns:
+        return []
+    first = df[df["inning"] == 1]
+    if first.empty:
+        return []
+    per_game = first.groupby("game_date").size().sort_index(ascending=False)
+    return [int(n) for n in per_game.tolist()]
+
+
+def build_pitcher_first_inning_pitches_projections(
+    starters: list[dict],
+    projection_date: date | None = None,
+    bulk_df=None,
+) -> "list[ProjectionRow]":
+    """Weighted rolling projection for a starter's 1st-inning pitch count.
+
+    Statcast-based (the game-log has no per-inning data), so this mirrors
+    build_strikeout_projections and shares the same bulk Statcast frame rather
+    than the gameLog _build_from_starts path.
+    """
+    proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
+    start_dt = (proj_date - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    end_dt = proj_date.strftime("%Y-%m-%d")
+    proj_date_str = proj_date.strftime("%Y-%m-%d")
+
+    rows: list[dict] = []
+    for s in starters:
+        player_id = s["player_id"]
+        counts = _first_inning_pitches_per_start(
+            player_id, start_dt, end_dt, bulk_df=bulk_df
+        )
+        if not counts:
+            print(f"  no recent 1st-inning data for player {player_id}, skipping")
+            continue
+        projection = _weighted_projection([float(c) for c in counts])
+        rows.append(
+            {
+                "game_id": s["game_id"],
+                "player_id": player_id,
+                "prop_type": "pitcher_first_inning_pitches",
+                "projection": projection,
+                "projection_date": proj_date_str,
+            }
+        )
+        print(
+            f"  {s.get('full_name', player_id)}: {counts} -> "
+            f"{projection} 1st-inn pitches"
+        )
+    return rows
+
+
 # ─── MLB Stats API builders (hits, walks, earned runs, outs) ─────────────────
 
 def _build_from_starts(

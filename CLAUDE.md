@@ -3718,11 +3718,87 @@ Featured Plays — full visual refinement + quality gate (this session):
   pre-existing React-dup bug in AutoRefresh/usePathname — unrelated to this
   change; the production build + the standalone dev server both render fine.)
 
+1-inning props sector — first-inning pitches + NRFI/YRFI (this session):
+- USER: "huge market for 1-inning props" — add NRFI/YRFI + 1st-inning pitches.
+  STEP 0 probes (MLB live feed + PrizePicks-direct, both confirmed): the data to
+  PROJECT + GRADE both is available FREE from the MLB game feed (no Statcast lag)
+  — 1st-inning pitches per starter (allPlays, inning==1, isPitch) + 1st-inning
+  runs (linescore.innings[0]). LINE caveat: PrizePicks isn't posting inning
+  markets in its current board (3385 MLB projections, none inning) — intermittent
+  / game-time-posted; NRFI lines are sportsbook (ParlayAPI), not PrizePicks. So
+  both ship as projection + tracker today; lines ingest when posted. User chose
+  the GAME-LEVEL NRFI model (AskUserQuestion).
+- PHASE 1 — pitcher_first_inning_pitches (clean pitcher count prop, full PropType):
+  * engine/baseline.py: _first_inning_pitches_per_start + build_pitcher_first_
+    inning_pitches_projections — STATCAST-based (the gameLog has no per-inning
+    split), mirrors build_strikeout_projections + SHARES the same bulk Statcast
+    frame (free; filter inning==1, count per game, weighted rolling avg).
+  * engine/main.py: built in _run_pitcher_pipeline with bulk_df, upserted.
+  * engine/grade.py: refactored the per-game decision fetch into a CACHED full
+    live-feed (_game_feed) so ONE fetch serves W/L + 1st-inning pitches + 1st-
+    inning runs (no extra calls). _first_inning_pitches(feed,pid) returns None
+    when the pitcher never faced a 1st-inning batter (reliever — NOT a 0).
+    actual_first_inning_pitches written on each pitcher row. Removed the now-
+    orphaned _decisions().
+  * lines.py PROP_TO_MARKET/MARKET_TO_PROP (player_first_inning_pitches + variants
+    — exact ParlayAPI key TBD, diagnostic prints unmapped keys); calibrate._ACTUAL
+    _COL; schemas.PitcherGameLogRow; db._PITCHER_PROP_TYPES + _CONTEXT_COLS strip.
+  * Frontend: PropType + ALL_PROP_TYPES + PROP_LABELS ("1st Inning Pitches") +
+    TRACKER_PROPS (Model-Tracker, not Betting — line intermittent) + PropBoard
+    PROPS tab + SPARK/TREND_ACTUAL_COL + results ACTUAL_COLUMN/DIAG_PROPS +
+    ResultsBoard TRACKER_PROPS. NOT in PROP_STAT_KEY (the live box score carries
+    only TOTAL pitches, not 1st-inning) → projection-only during games.
+- PHASE 2 — first_inning_runs (GAME-LEVEL NRFI/YRFI), engine/first_inning.py (new):
+  * Models P(YRFI) DIRECTLY from SCORELESS RATES, NOT expected-runs-vs-0.5. KEY
+    CALIBRATION LESSON: 1st-inning runs are right-skewed (most innings 0, a few
+    2-3), so mean runs (~1.0) >> 0.5 and an expected-runs-vs-0.5 model leans YRFI
+    on 9/9 games (measured). Scoreless rates are naturally calibrated to the ~50%
+    base rate: P(YRFI)=1 - P(top scoreless)*P(bottom scoreless), each half = mean
+    of the batting team's recent scoreless-in-1st rate + the opposing starter's
+    hold-scoreless rate. From the schedule linescore over 21d (one
+    statsapi.get('schedule', hydrate=linescore,probablePitcher) call per date,
+    lru_cached). Verified: P(YRFI) 46-67% centered ~52%, realistic 6 YRFI/3 NRFI
+    split (was 9/9 YRFI under the runs model).
+  * STORAGE: one projection per game, prop_type='first_inning_runs', projection =
+    P(YRFI) (0-1), CARRIER player_id = the home starting pitcher (games['home_
+    starter_id']) — a stable per-game carrier in the player-keyed projections
+    table. Kept OUT of the PropType union + ALL_PROP_TYPES so it never renders as
+    a player-prop tab; fetched by an ISOLATED page.tsx query and shown as a
+    GAME-HEADER tag (fits the game-first board: game-level data on the game header
+    alongside park/wind). NRFI lean (sky) when P(YRFI)<0.5, YRFI (amber) else.
+  * GRADING: actual_first_inning_runs (total 1st-inning runs, both teams) written
+    ONCE per game on the HOME starter's row (side=='home') from the cached feed —
+    the same carrier the projection uses, so they join.
+  * main.py builds it after the pitcher pipeline (uses games' starter ids); kept
+    out of other_prop_rows so it never enters the player-line/edge/calibration
+    paths (no per-player book line).
+- DB: db/migrations/add_first_inning.sql (actual_first_inning_pitches +
+  actual_first_inning_runs on player_game_logs) + schema.sql. db.py _CONTEXT_COLS
+  strips both pre-migration (grading the other actuals keeps working). ACTION
+  REQUIRED: run add_first_inning.sql in Supabase before the new ACTUALS persist;
+  PROJECTIONS work immediately (projections table stores prop_type as a value, no
+  new column).
+- DEFERRED (line-gated follow-ups): NRFI lines/edges (game-level sportsbook
+  market — needs the ParlayAPI key + game-level line handling, not the player-
+  keyed lines.py path); a /results NRFI hit-rate (P(YRFI) lean vs the binary
+  outcome); confirming/pruning the first_inning_pitches market keys from cron logs.
+- VERIFIED end-to-end: engine unit tests (grade helpers: Matz 20 / Flaherty 13 /
+  reliever None / 1st-inn runs 2; Statcast baseline Matz [20,36,18,16]->22.5; NRFI
+  model calibrated); py_compile + imports clean; FEATURE_COLS untouched (11);
+  tsc clean; npm run build passes. Populated the live 2026-06-03 slate (29 FIP +
+  15 NRFI) — board renders 15 NRFI/YRFI game-header tags + the FIP tab. NOTE the
+  manual populate hit the et_today June-3/4 day boundary (wrote 06-04 first, then
+  realigned to the 06-03 full slate + cleaned 06-04); production crons build every
+  prop under one et_today date so this is a manual-only artifact. The new props go
+  live on the board immediately (06-03) and on every slate going forward via the
+  next full cron (after this push).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains
 on the full backfilled season (Stage-2 flip) — watch the calibration scorecard
-for strikeouts to confirm it holds.
+for strikeouts to confirm it holds. Run db/migrations/add_first_inning.sql in
+Supabase to persist the new 1-inning actuals (projections already work).
 
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
