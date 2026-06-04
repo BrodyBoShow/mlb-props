@@ -17,7 +17,7 @@ runs/day = 90 calls.
 """
 
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import requests
 

@@ -18,14 +18,12 @@ No pkl file is written or read; the model retrains on every Actions run.
 """
 
 from datetime import date, timedelta
-from functools import lru_cache
 
 from typing import TYPE_CHECKING
 
 import db
 import pandas as pd
 import pybaseball
-import statsapi
 from xgboost import XGBRegressor
 
 if TYPE_CHECKING:
