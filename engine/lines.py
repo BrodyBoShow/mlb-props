@@ -191,7 +191,18 @@ def _pp_prop_for_stat(stat_type: str | None) -> str | None:
     if "1st inning" in s and "pitch" in s and "run" not in s and "strikeout" not in s:
         return "pitcher_first_inning_pitches"
     return None
-_PP_PROJECTIONS_URL = "https://api.prizepicks.com/projections?league_id=2&per_page=1000"
+# PrizePicks DFS leagues we read STANDARD lines from.
+#   league_id 2   = standard MLB board (full-game Pitcher/Hitter Fantasy Score).
+#   league_id 231 = MLBLIVE board — the ONLY public source for "1st Inning
+#                   Pitches Thrown" (no sportsbook and no ParlayAPI book posts
+#                   it). Same standard/goblin/demon ladder as the fantasy props,
+#                   so the existing odds_type=='standard' filter picks the real
+#                   rung (verified vs the live app: Sale 14.5, Lugo 14.5).
+# Found via api.prizepicks.com/leagues (MLBLIVE -> id 231). The two leagues
+# don't overlap on the stat_types we keep: full-game fantasy lives on 2, the
+# 1st-inning pitch count lives on 231.
+_PP_LEAGUE_IDS = (2, 231)
+_PP_PROJECTIONS_BASE = "https://api.prizepicks.com/projections?per_page=1000"
 
 # Realistic browser headers — a free attempt to defeat a header-based block.
 # Likely insufficient against Cloudflare's IP block on datacenter ranges (that's
@@ -208,11 +219,16 @@ _PP_HEADERS = {
 }
 
 
-def _fetch_prizepicks_standard_fantasy(
+def _fetch_prizepicks_standard(
     name_to_id: dict[str, int],
     normalized_to_id: dict[str, int],
 ) -> dict[tuple[int, str], float]:
-    """Fetch PrizePicks STANDARD fantasy-score lines straight from PrizePicks.
+    """Fetch PrizePicks STANDARD DFS lines straight from PrizePicks.
+
+    Covers the full-game fantasy-score props (league 2) AND the MLBLIVE
+    "1st Inning Pitches Thrown" prop (league 231) — both are PrizePicks DFS
+    markets with the goblin/standard/demon ladder, and neither is posted by any
+    sportsbook or ParlayAPI book, so PrizePicks is the only source.
 
     Returns {(player_id, prop_type): standard_line} for players we can match to
     name_to_id. Free (no ParlayAPI credits) and DETERMINISTIC — filters to
@@ -247,50 +263,51 @@ def _fetch_prizepicks_standard_fantasy(
                 else urllib.request.urlopen(req, timeout=20))
 
     try:
-        page = 1
-        total_pages = 1
-        while page <= total_pages and page <= 20:
-            url = f"{_PP_PROJECTIONS_URL}&page={page}"
-            req = urllib.request.Request(url, headers=_PP_HEADERS)
-            with _open(req) as resp:
-                data = json.load(resp)
+        for league_id in _PP_LEAGUE_IDS:
+            page = 1
+            total_pages = 1
+            while page <= total_pages and page <= 20:
+                url = f"{_PP_PROJECTIONS_BASE}&league_id={league_id}&page={page}"
+                req = urllib.request.Request(url, headers=_PP_HEADERS)
+                with _open(req) as resp:
+                    data = json.load(resp)
 
-            total_pages = (data.get("meta", {}) or {}).get("total_pages", 1) or 1
+                total_pages = (data.get("meta", {}) or {}).get("total_pages", 1) or 1
 
-            # included[] carries new_player rows: id -> display_name.
-            pp_players = {
-                inc["id"]: (inc.get("attributes", {}) or {}).get("display_name")
-                for inc in data.get("included", [])
-                if inc.get("type") == "new_player"
-            }
+                # included[] carries new_player rows: id -> display_name.
+                pp_players = {
+                    inc["id"]: (inc.get("attributes", {}) or {}).get("display_name")
+                    for inc in data.get("included", [])
+                    if inc.get("type") == "new_player"
+                }
 
-            for d in data.get("data", []):
-                a = d.get("attributes", {}) or {}
-                if a.get("odds_type") != "standard":
-                    continue
-                prop_type = _pp_prop_for_stat(a.get("stat_type"))
-                if prop_type is None:
-                    continue
-                if prop_type == "pitcher_first_inning_pitches":
-                    seen_inning_stats.add(a.get("stat_type") or "")
-                line = a.get("line_score")
-                if line is None:
-                    continue
-                try:
-                    pp_pid = d["relationships"]["new_player"]["data"]["id"]
-                except (KeyError, TypeError):
-                    continue
-                nm = pp_players.get(pp_pid)
-                if not nm:
-                    continue
-                player_id = name_to_id.get(nm)
-                if player_id is None:
-                    player_id = normalized_to_id.get(_normalize(nm))
-                if player_id is None:
-                    continue
-                out[(player_id, prop_type)] = float(line)
+                for d in data.get("data", []):
+                    a = d.get("attributes", {}) or {}
+                    if a.get("odds_type") != "standard":
+                        continue
+                    prop_type = _pp_prop_for_stat(a.get("stat_type"))
+                    if prop_type is None:
+                        continue
+                    if prop_type == "pitcher_first_inning_pitches":
+                        seen_inning_stats.add(a.get("stat_type") or "")
+                    line = a.get("line_score")
+                    if line is None:
+                        continue
+                    try:
+                        pp_pid = d["relationships"]["new_player"]["data"]["id"]
+                    except (KeyError, TypeError):
+                        continue
+                    nm = pp_players.get(pp_pid)
+                    if not nm:
+                        continue
+                    player_id = name_to_id.get(nm)
+                    if player_id is None:
+                        player_id = normalized_to_id.get(_normalize(nm))
+                    if player_id is None:
+                        continue
+                    out[(player_id, prop_type)] = float(line)
 
-            page += 1
+                page += 1
     except urllib.error.HTTPError as exc:
         print(
             f"  PrizePicks-direct unavailable (HTTP {exc.code}) {via} -- "
@@ -426,7 +443,7 @@ def fetch_prop_lines(
     # the median accumulation as a fallback. If PrizePicks-direct fails entirely
     # (e.g. Cloudflare blocks the runner), pp_standard is {} and every fantasy
     # row falls back to the ladder/median path — no regression.
-    pp_standard = _fetch_prizepicks_standard_fantasy(name_to_id, normalized_to_id)
+    pp_standard = _fetch_prizepicks_standard(name_to_id, normalized_to_id)
     pp_applied = 0
     pp_dropped_stale = 0
     # Fantasy-score lines are sourced ONLY from the authoritative PrizePicks-direct
