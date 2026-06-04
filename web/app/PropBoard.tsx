@@ -47,6 +47,7 @@ const PROPS: { key: PropType; label: string; unit: string; short: string }[] = [
   { key: "earned_runs",           label: "Pitcher Earned Runs",   unit: "ER",   short: "ER"   },
   { key: "outs_recorded",         label: "Pitcher Outs Recorded", unit: "outs", short: "Outs" },
   { key: "pitcher_first_inning_pitches", label: "Pitcher 1st-Inning Pitches", unit: "P", short: "1stP" },
+  { key: "pitcher_first_inning_strikeouts", label: "Pitcher 1st-Inning Ks", unit: "K", short: "1stK" },
   { key: "pitcher_fantasy_score", label: "Pitcher Fantasy Score", unit: "FP",   short: "FP"   },
   // hitter props
   { key: "hitter_hits",           label: "Hitter Hits",           unit: "H",    short: "H"    },

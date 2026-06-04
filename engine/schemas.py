@@ -56,6 +56,7 @@ class PitcherGameLogRow(TypedDict, total=False):
     actual_earned_runs: int
     actual_outs_recorded: int    # inningsPitched → total outs via _parse_innings
     actual_first_inning_pitches: int   # pitches in the 1st inning (live feed); None if didn't start
+    actual_first_inning_strikeouts: int  # strikeouts in the 1st inning (live feed); None if didn't start
     actual_win: bool             # W decision from decisions endpoint
     actual_pitcher_fantasy_score: float   # PrizePicks formula
 

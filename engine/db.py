@@ -229,6 +229,7 @@ _CONTEXT_COLS = (
     # First-inning props (add_first_inning.sql): the pitcher 1st-inning pitch
     # count + the game-level NRFI 1st-inning run total. Stripped pre-migration.
     "actual_first_inning_pitches",
+    "actual_first_inning_strikeouts",
     "actual_first_inning_runs",
 )
 
@@ -469,7 +470,8 @@ def get_players_with_sweet_spot(date_str: str) -> set[int]:
 
 _PITCHER_PROP_TYPES = (
     "strikeouts", "hits_allowed", "walks", "earned_runs",
-    "outs_recorded", "pitcher_first_inning_pitches", "pitcher_fantasy_score",
+    "outs_recorded", "pitcher_first_inning_pitches",
+    "pitcher_first_inning_strikeouts", "pitcher_fantasy_score",
 )
 _HITTER_PROP_TYPES = (
     "hitter_hits", "hitter_total_bases", "hitter_hits_runs_rbis",

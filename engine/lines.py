@@ -44,6 +44,7 @@ PROP_TO_MARKET = {
     "earned_runs":   "player_earned_runs",
     "outs_recorded": "player_pitcher_outs",
     "pitcher_first_inning_pitches": "player_first_inning_pitches",
+    "pitcher_first_inning_strikeouts": "player_1st_inning_pitcher_strikeouts",
     # hitter
     "hitter_hits":        "player_hits",
     "hitter_total_bases": "player_total_bases",
@@ -89,6 +90,9 @@ MARKET_TO_PROP = {
     "player_1st_inning_pitches":        "pitcher_first_inning_pitches",
     "player_pitches_thrown_1st_inning": "pitcher_first_inning_pitches",
     "player_first_inning_pitches_thrown": "pitcher_first_inning_pitches",
+    # 1st-inning strikeouts — confirmed real ParlayAPI market (from the cron log's
+    # market_keys diagnostic). Two-sided book line, so it grades lean-vs-line.
+    "player_1st_inning_pitcher_strikeouts": "pitcher_first_inning_strikeouts",
     # hitter
     "player_hits":         "hitter_hits",
     "player_total_bases":  "hitter_total_bases",

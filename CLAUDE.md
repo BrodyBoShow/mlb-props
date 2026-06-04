@@ -3887,6 +3887,44 @@ Hitter baseline regression-to-mean — the spiky-projection fix (this session):
   lines._PP_STAT_TO_PROP. Verified: py_compile + tsc + build clean; /results renders
   both (1st-inn-pitches "no lines yet" row; TB pinned with alts dropped).
 
+1st-inning pitcher STRIKEOUTS prop — the working 1-inning betting prop (session):
+- CONTEXT: the cron log showed 1st-inning PITCHES-thrown can't capture a line —
+  PrizePicks-direct 403s via the (datacenter) proxy AND ParlayAPI has no pitches-
+  thrown market. But the log's market_keys diagnostic listed
+  player_1st_inning_pitcher_strikeouts (+ 2nd/3rd/1+2/1+2+3 inning K variants). So
+  1st-inning STRIKEOUTS IS on ParlayAPI. User chose "go capture its line" -> added
+  1st-inning Ks as a new prop (different stat than pitches; a real working line).
+- VALIDATED the premise FIRST: a live lines.fetch_prop_lines returned 7
+  pitcher_first_inning_strikeouts lines (Houser/Sale/Morris/Jones 0.5, Crow/Teng/
+  Wrobleski 1.5) — all bookmaker=prizepicks (DFS flat o100/u-100), captured via
+  ParlayAPI (NOT PrizePicks-direct), so it works in CI where the proxy 403s. The
+  per-pitcher standard varies (0.5 most, 1.5 for high-K arms) — NOT an alt ladder,
+  so MIN_LINE is a 0.5 floor, NOT a MAIN_LINE_VALUE pin.
+- BUILT end-to-end, mirroring the 1st-inning-pitches plumbing:
+  * baseline.py _first_inning_strikeouts_per_start (Statcast inning==1 K events,
+    grouped per game so a 0-K 1st is a real 0) + build_pitcher_first_inning_
+    strikeouts_projections (shares the bulk frame). main.py builds it next to FIP.
+  * grade.py _first_inning_strikeouts(feed,pid) — counts inning-1 strikeout/
+    strikeout_double_play eventTypes from the cached feed (one fetch already serves
+    W/L + pitches + runs + now Ks); None for a reliever who didn't face the 1st.
+    actual_first_inning_strikeouts written per pitcher row.
+  * lines.py PROP_TO_MARKET + MARKET_TO_PROP (player_1st_inning_pitcher_strikeouts);
+    calibrate._ACTUAL_COL; schemas.PitcherGameLogRow; db._PITCHER_PROP_TYPES +
+    _CONTEXT_COLS strip.
+  * Frontend: PropType + ALL_PROP_TYPES + PROP_LABELS ("1st Inning Ks") + MIN_LINE
+    0.5 (Betting Edge, NOT TRACKER) + PropBoard tab + page SPARK/TREND_ACTUAL_COL +
+    results ACTUAL_COLUMN/DIAG_PROPS + ResultsBoard BETTING_PITCHER_PROPS.
+  * db/migrations/add_first_inning_strikeouts.sql (actual_first_inning_strikeouts
+    on player_game_logs) + schema.sql. PGRST204-stripped pre-migration. ACTION
+    REQUIRED: run it in Supabase before the actual persists; projections + lines +
+    edges work immediately.
+- VERIFIED: engine unit tests (grade Matz/Flaherty 1 K each, reliever None;
+  Statcast baseline Matz [1,2,0,0] -> 0.8 with 0-K innings counted); py_compile +
+  imports clean; tsc + build clean; 7 real lines captured live. Goes live on the
+  board + Betting Edge on the next full cron (today's slate already built, so it
+  fills in on the next slate). NOTE 1st-inning pitches-thrown stays wired but
+  proxy-gated; 1st-inning Ks is the one that actually populates.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains

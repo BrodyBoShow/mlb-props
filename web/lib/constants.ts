@@ -13,6 +13,7 @@ export const ALL_PROP_TYPES: PropType[] = [
   "earned_runs",
   "outs_recorded",
   "pitcher_first_inning_pitches",
+  "pitcher_first_inning_strikeouts",
   "pitcher_fantasy_score",
   "hitter_hits",
   "hitter_total_bases",
@@ -69,6 +70,7 @@ export const MIN_LINE: Partial<Record<PropType, number>> = {
   hitter_total_bases:     1.5,   // top hitter prop — pinnacle posts two-sided TB lines
   hitter_hits_runs_rbis:  1.5,   // combo prop — main two-sided line
   pitcher_first_inning_pitches: 8.5,  // PrizePicks DFS line (~13-18); floor gates out odd lows
+  pitcher_first_inning_strikeouts: 0.5,  // real two-sided ParlayAPI line (main is 0.5)
 };
 
 // Exact MAIN-MARKET line value for props whose main line is a fixed number, so
@@ -326,6 +328,7 @@ export const PROP_LABELS: Record<PropType, string> = {
   earned_runs:           "Earned Runs",
   outs_recorded:         "Outs",
   pitcher_first_inning_pitches: "1st Inning Pitches",
+  pitcher_first_inning_strikeouts: "1st Inning Ks",
   pitcher_fantasy_score: "Pitcher Fantasy",
   hitter_hits:           "Hits",
   hitter_total_bases:    "Total Bases",

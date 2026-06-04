@@ -85,6 +85,7 @@ const SPARK_ACTUAL_COL: Partial<Record<PropType, string>> = {
   hits_allowed:  "actual_hits_allowed",
   outs_recorded: "actual_outs_recorded",
   pitcher_first_inning_pitches: "actual_first_inning_pitches",
+  pitcher_first_inning_strikeouts: "actual_first_inning_strikeouts",
   walks:         "actual_walks",
   earned_runs:   "actual_earned_runs",
 };
@@ -99,6 +100,7 @@ const TREND_ACTUAL_COL: Partial<Record<PropType, string>> = {
   hits_allowed:           "actual_hits_allowed",
   outs_recorded:          "actual_outs_recorded",
   pitcher_first_inning_pitches: "actual_first_inning_pitches",
+  pitcher_first_inning_strikeouts: "actual_first_inning_strikeouts",
   walks:                  "actual_walks",
   earned_runs:            "actual_earned_runs",
   hitter_hits:            "actual_hits",

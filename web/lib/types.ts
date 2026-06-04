@@ -12,6 +12,7 @@ export type PropType =
   | "earned_runs"
   | "outs_recorded"
   | "pitcher_first_inning_pitches"
+  | "pitcher_first_inning_strikeouts"
   | "pitcher_fantasy_score"
   | "hitter_hits"
   | "hitter_total_bases"

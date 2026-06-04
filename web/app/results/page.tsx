@@ -54,6 +54,7 @@ const ACTUAL_COLUMN: Record<PropType, string> = {
   earned_runs:            "actual_earned_runs",
   outs_recorded:          "actual_outs_recorded",
   pitcher_first_inning_pitches: "actual_first_inning_pitches",
+  pitcher_first_inning_strikeouts: "actual_first_inning_strikeouts",
   pitcher_fantasy_score:  "actual_pitcher_fantasy_score",
   hitter_hits:            "actual_hits",
   hitter_total_bases:     "actual_total_bases",
@@ -334,7 +335,8 @@ async function getResults(): Promise<{
   // stage is empty; the per-stage drop counter below pinpoints the join.
   const DIAG_PROPS: PropType[] = [
     "strikeouts", "hits_allowed", "walks", "earned_runs", "outs_recorded",
-    "pitcher_first_inning_pitches", "pitcher_fantasy_score",
+    "pitcher_first_inning_pitches", "pitcher_first_inning_strikeouts",
+    "pitcher_fantasy_score",
     "hitter_hits", "hitter_total_bases", "hitter_hits_runs_rbis",
     "hitter_fantasy_score",
   ];

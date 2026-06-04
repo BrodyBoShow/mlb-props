@@ -357,6 +357,16 @@ def _run_pitcher_pipeline(
     n_fip = db.upsert_projections(fip_rows)
     print(f"  upserted {n_fip} first-inning pitches projections")
 
+    # First-inning strikeouts — Statcast-based too; has a real two-sided ParlayAPI
+    # line (player_1st_inning_pitcher_strikeouts), so it's a Betting-Edge prop.
+    print("Building first-inning strikeouts projections...")
+    fik_rows = baseline.build_pitcher_first_inning_strikeouts_projections(
+        starters, projection_date=et_today(), bulk_df=bulk_df
+    )
+    other_prop_rows.extend(fik_rows)
+    n_fik = db.upsert_projections(fik_rows)
+    print(f"  upserted {n_fik} first-inning strikeouts projections")
+
     # First-inning runs (NRFI/YRFI) — GAME-level, one row per game keyed on the
     # home starter as carrier. Kept OUT of other_prop_rows so it never flows into
     # the player-line/edge/calibration paths (it has no per-player book line).

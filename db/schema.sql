@@ -51,6 +51,7 @@ create table if not exists player_game_logs (
     actual_earned_runs   integer,
     actual_outs_recorded integer,
     actual_first_inning_pitches integer,  -- starter's 1st-inning pitch count (live feed)
+    actual_first_inning_strikeouts integer,  -- starter's 1st-inning strikeout count (live feed)
     -- game-level NRFI/YRFI actual: total 1st-inning runs by both teams, stored on
     -- the carrier (home starting pitcher) row for the first_inning_runs prop.
     actual_first_inning_runs    integer,

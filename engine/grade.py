@@ -322,6 +322,26 @@ def _first_inning_pitches(feed: dict, player_id: int) -> int | None:
     return n if faced else None
 
 
+def _first_inning_strikeouts(feed: dict, player_id: int) -> int | None:
+    """This pitcher's strikeout count in the 1st inning, from the cached feed.
+
+    None when the pitcher never faced a 1st-inning batter (didn't start) — so a
+    reliever who entered later is NOT logged a misleading 0.
+    """
+    plays = ((feed.get("liveData") or {}).get("plays") or {}).get("allPlays") or []
+    n = 0
+    faced = False
+    for p in plays:
+        if (p.get("about") or {}).get("inning") != 1:
+            continue
+        if ((p.get("matchup") or {}).get("pitcher") or {}).get("id") != player_id:
+            continue
+        faced = True
+        if ((p.get("result") or {}).get("eventType")) in ("strikeout", "strikeout_double_play"):
+            n += 1
+    return n if faced else None
+
+
 def _first_inning_runs(feed: dict) -> int | None:
     """Total runs scored in the 1st inning by BOTH teams, from the cached feed.
 
@@ -489,8 +509,9 @@ def grade_yesterday(
         # fantasy_score module so weights live in exactly one place.
         winner_id, _loser_id = _decisions_from_feed(feed_cache[game_id])
         actual_win = (winner_id == player_id)
-        # First-inning pitch count (the new prop's actual) from the same feed.
+        # First-inning pitch + strikeout counts (new props' actuals) from the feed.
         first_inning_pitches = _first_inning_pitches(feed_cache[game_id], player_id)
+        first_inning_strikeouts = _first_inning_strikeouts(feed_cache[game_id], player_id)
         # NRFI/YRFI actual (game-level): the total 1st-inning runs are stored ONCE
         # per game on the HOME starter's row — the carrier the first_inning_runs
         # projection uses — so the two join cleanly. None on every other row.
@@ -569,6 +590,7 @@ def grade_yesterday(
             "actual_earned_runs":    result["actual_earned_runs"],
             "actual_outs_recorded":  result["actual_outs_recorded"],
             "actual_first_inning_pitches": first_inning_pitches,
+            "actual_first_inning_strikeouts": first_inning_strikeouts,
             "actual_first_inning_runs":    first_inning_runs,
             "actual_win":            actual_win,
             "actual_pitcher_fantasy_score": actual_pitcher_fp,
