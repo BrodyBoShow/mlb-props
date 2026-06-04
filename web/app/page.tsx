@@ -2,7 +2,7 @@ import Link from "next/link";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
 import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, FEATURED_PROJ_CAP, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
-import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType, Trends, TrendWindow } from "@/lib/types";
+import type { ByProp, FeaturedPlay, FeaturedSection, GameGroup, PropType, Trends, TrendWindow } from "@/lib/types";
 import PropBoard from "./PropBoard";
 import FutureSlate, { type FutureGame } from "./FutureSlate";
 import LiveUpdated from "./LiveUpdated";
@@ -55,24 +55,6 @@ const FEATURED_MIN_LEAN = 0.3;
 // Featured plays + the sharp badge both use the shared MIN_LINE map (the same
 // thresholds /results uses) so alt lines never inflate a featured edge or a
 // sharp count. Imported from @/lib/constants — single source of truth.
-
-// ── Recent-form spark dots ───────────────────────────────────────────────────
-// Maps each pitcher prop that gets an L5 spark row to its actual column in
-// player_game_logs. Verified live (2026-06): all five are 60/60 non-null on
-// graded pitcher rows, so all five get spark rows. Hitter / fantasy props are
-// absent here, so sparkFor returns undefined for them (no spark on those tabs).
-// player_game_logs has NO prop_type column and the per-game `projection`
-// column was dropped earlier — so the dots compare each graded ACTUAL against
-// tonight's book LINE (the market's expectation), not a historical projection.
-const SPARK_ACTUAL_COL: Partial<Record<PropType, string>> = {
-  strikeouts:    "actual_strikeouts",
-  hits_allowed:  "actual_hits_allowed",
-  outs_recorded: "actual_outs_recorded",
-  pitcher_first_inning_pitches: "actual_first_inning_pitches",
-  pitcher_first_inning_strikeouts: "actual_first_inning_strikeouts",
-  walks:         "actual_walks",
-  earned_runs:   "actual_earned_runs",
-};
 
 // Hit-rate trends (L5/L10/L15/SZN vs the line) — the props.cash-style panel,
 // shown ONLY in the focused single-prop card. Covers pitcher AND hitter main
@@ -371,8 +353,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     [col: string]: number | string | null;
   };
   // Every slate player (pitchers AND hitters) so the trends panel covers hitter
-  // props too. The pitcher-only spark dots (sparkFor) still work — their columns
-  // are a subset of the trend columns fetched here.
+  // props too.
   const allPlayerIds = [...new Set(rows.map((r) => r.player_id))];
   const recentByPlayer = new Map<number, RecentGameRow[]>();
   if (allPlayerIds.length > 0) {
@@ -406,37 +387,9 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
   }
 
-  // Compute the L5 dots for one (pitcher, prop): each of the last ≤5 graded
-  // actuals vs tonight's line, oldest→newest. undefined when there's no
-  // current line (nothing to compare against), no actual column for the prop
-  // (hitter/fantasy), or no graded history.
-  function sparkFor(
-    playerId: number,
-    propType: PropType,
-    line: number | undefined,
-  ): FormDot[] | undefined {
-    if (line === undefined || line === null) return undefined;
-    const col = SPARK_ACTUAL_COL[propType];
-    if (!col) return undefined;
-    const games = recentByPlayer.get(playerId);
-    if (!games || games.length === 0) return undefined;
-
-    const dots: FormDot[] = [];   // newest→oldest while collecting
-    for (const g of games) {
-      const v = g[col];
-      if (v === null || v === undefined) continue;
-      const actual = Number(v);
-      if (!Number.isFinite(actual)) continue;
-      dots.push(actual > line ? "over" : actual < line ? "under" : "push");
-      if (dots.length >= 5) break;
-    }
-    if (dots.length === 0) return undefined;
-    return dots.reverse();   // oldest→newest for left-to-right display
-  }
-
   // ── hit-rate trends (props.cash-style L5/L10/L15/SZN + Diff + Streak) ─────
-  // For one (player, prop) vs tonight's line, from the SAME graded actuals as
-  // the spark dots: each window's over-rate, the recent-avg-minus-line gap, and
+  // For one (player, prop) vs tonight's line, from the graded actuals fetched
+  // above: each window's over-rate, the recent-avg-minus-line gap, and
   // the current over/under streak. Pure display — undefined when there's no
   // line, no trend column for the prop (fantasy), or no graded history.
   function trendsFor(
@@ -826,9 +779,6 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           overPrice: e?.over_price ?? undefined,
           underPrice: e?.under_price ?? undefined,
           bookmaker: e?.bookmaker,
-          // L5 recent-form dots for THIS prop vs this prop's current line.
-          // undefined on hitter/fantasy tabs and when there's no line/history.
-          recentForm: sparkFor(r.player_id, propType, e?.line),
           // Hit-rate trends (L5/L10/L15/SZN + Diff + Streak) vs the line, for the
           // focused-card panel. Covers pitcher + hitter props; undefined for
           // fantasy / no line / no history.

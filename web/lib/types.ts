@@ -27,8 +27,6 @@ export type PropType =
 // One pitcher/hitter row. Projection is always present; all other fields are
 // optional — most players won't have a line or enough graded history yet.
 // All values are pre-computed by the engine (the frontend does ZERO math).
-// One graded game's actual vs tonight's line, oldest→newest for display.
-export type FormDot = "over" | "under" | "push";
 
 // Hit-rate trends (props.cash-style) for one (player, prop) vs tonight's line.
 // Pure display — computed from graded game logs, no model involvement.
@@ -79,11 +77,6 @@ export type Pitcher = {
   overPrice?: number;
   underPrice?: number;
   bookmaker?: string;
-  // Last-5 recent-form dots for THIS prop: each graded actual vs the current
-  // line (over/under/push), oldest→newest. Computed per (player, prop) at
-  // build time so each prop tab carries the right dots. undefined when the
-  // pitcher has no graded history OR no current line to compare against.
-  recentForm?: FormDot[];
   // Hit-rate trends (L5/L10/L15/SZN + Diff + Streak vs the line) for the focused
   // single-prop card. undefined for fantasy props / no line / no graded history.
   trends?: Trends;

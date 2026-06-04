@@ -12,7 +12,6 @@ import { useLiveBoxScores } from "./useLiveBoxScores";
 import type {
   ByProp,
   FeaturedSection,
-  FormDot,
   GameGroup,
   GameStatus,
   Pitcher,
@@ -419,19 +418,6 @@ function ConfidenceBar({ confidence }: { confidence: number | undefined }) {
   );
 }
 
-// ── recent-form spark dots ───────────────────────────────────────────────────
-// A quiet L5 row: the pitcher's last ≤5 graded actuals for THIS prop vs
-// tonight's line, oldest→newest (rightmost = most recent). Pre-computed
-// server-side per (pitcher, prop), so switching tabs shows the right dots.
-// Renders nothing when there's no form data (no line / no history / hitter
-// or fantasy prop) — feature 2's confidence line already conveys "no history".
-
-const FORM_DOT_CLASS: Record<FormDot, string> = {
-  over:  "bg-emerald-500/80",
-  under: "bg-red-500/70",
-  push:  "bg-slate-600",
-};
-
 // ── hit-rate trends row (props.cash-style) ───────────────────────────────────
 // Focused-card ONLY (the deep-dive view), so it adds nothing to the dense scan
 // grid. One quiet tabular line: L5 / L10 / L15 / SZN over-rate vs the line, the
@@ -482,34 +468,6 @@ function TrendRow({ trends }: { trends: Trends | undefined }) {
           {Math.abs(streak)}
         </span>
       )}
-    </div>
-  );
-}
-
-function RecentFormDots({ form }: { form: FormDot[] | undefined }) {
-  if (!form || form.length === 0) return null;
-
-  // Tooltip spells out the sequence, e.g. "O-U-O-O-U" (oldest→newest).
-  const seq = form
-    .map((d) => (d === "over" ? "O" : d === "under" ? "U" : "P"))
-    .join("-");
-
-  return (
-    <div
-      className="mt-1 flex items-center gap-1.5"
-      title={`Last ${form.length} starts vs tonight's line: ${seq}`}
-    >
-      <span className="text-[9px] uppercase tracking-wider text-slate-600">
-        L5
-      </span>
-      <div className="flex items-center gap-1">
-        {form.map((d, i) => (
-          <span
-            key={i}
-            className={`h-1.5 w-1.5 rounded-full ${FORM_DOT_CLASS[d]}`}
-          />
-        ))}
-      </div>
     </div>
   );
 }
