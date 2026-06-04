@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
-import { ALL_PROP_TYPES, FEATURED_MIN_LINE, MAIN_LINE_VALUE, MIN_LINE, REAL_BOOKS, TRACKER_PROPS } from "@/lib/constants";
+import { ALL_PROP_TYPES, FEATURED_MIN_LINE, FEATURED_PER_SECTION, FEATURED_PROJ_CAP, MAIN_LINE_VALUE, MIN_LINE, REAL_BOOKS, TRACKER_PROPS } from "@/lib/constants";
 import type {
   EvaluatedResult,
   PropType,
@@ -522,43 +522,46 @@ async function getResults(): Promise<{
     }
   }
 
-  const featuredResults: EvaluatedResult[] = [];
+  // Featured Plays hit-rate = ONLY the cards actually DISPLAYED each day — the
+  // top-FEATURED_PER_SECTION pitching + top-FEATURED_PER_SECTION hitting plays by
+  // |edge| per day (the SAME daily selection the home board's buildEdgePlays
+  // makes), NOT the whole high-edge subset. Same gates + FEATURED_PROJ_CAP so the
+  // board and this row agree on which plays count. We pick the top-N FIRST (the
+  // displayed cards), THEN grade the resolved ones — so a displayed card that
+  // isn't graded yet just doesn't contribute, rather than promoting a 4th play
+  // that was never shown. (The hitter min-games / point-in-time gates the board
+  // also applies can't be replayed historically, but the proj-cap + edge ordering
+  // capture the displayed set closely.)
+  const FEAT_PITCHER_PROPS: ReadonlySet<PropType> = new Set([
+    "strikeouts", "hits_allowed", "outs_recorded",
+  ]);
+  type FeatCand = {
+    absEdge: number; key: string;
+    gameId: number; matchup: string; playerId: number; playerName: string;
+    propType: PropType; gameDate: string; projection: number;
+    line: number; bookmaker: string;
+  };
+  const featuredCandidates: FeatCand[] = [];
   for (const p of projections) {
     const propType = p.prop_type as PropType;
     if (!FEATURED_RESULT_PROPS.has(propType)) continue;
-    const actualCol = ACTUAL_COLUMN[propType];
-    if (!actualCol) continue;
-
-    const line = linesByKey.get(
-      `${p.player_id}|${p.prop_type}|${p.projection_date}`,
-    );
+    if (!ACTUAL_COLUMN[propType]) continue;
+    // Same gates as the board's buildEdgePlays — NO log requirement yet (we grade
+    // AFTER the top-N cut so we select the displayed cards, not the graded ones).
+    const cap = FEATURED_PROJ_CAP[propType];
+    if (cap !== undefined && p.projection > cap) continue;
+    const line = linesByKey.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
     if (!line) continue;
-    // Featured-Plays floor — FEATURED_MIN_LINE, the SAME map the board's
-    // buildEdgePlays uses (NOT the shared MIN_LINE that drives Betting Edge
-    // above). MIN_LINE has no hitter_hits/hitter_total_bases entry, so this row
-    // used to silently exclude the hitter plays the board features;
-    // FEATURED_MIN_LINE adds the hitter main-market floors (total_bases 1.5,
-    // hits 0.5). Combined with the REAL_BOOKS gate on the edge above, this row
-    // and the board's buildEdgePlays now apply IDENTICAL Featured criteria.
     const minLine = FEATURED_MIN_LINE[propType];
     if (minLine === undefined || !lineQualifies(propType, line.line, minLine)) continue;
-
     const edge = edgeByKey.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
     if (edge === undefined || Math.abs(edge) < FEATURED_MIN_EDGE) continue;
     if (Math.abs(p.projection - line.line) < FEATURED_MIN_LEAN) continue;
-
-    const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
-    if (!log) continue;
-    const actualRaw = log[actualCol];
-    if (actualRaw === null || actualRaw === undefined) continue;
-    const actual = Number(actualRaw);
-    if (!Number.isFinite(actual)) continue;
-
-    featuredResults.push({
+    featuredCandidates.push({
+      absEdge: Math.abs(edge),
+      key: `${p.projection_date}|${FEAT_PITCHER_PROPS.has(propType) ? "p" : "h"}`,
       gameId: p.game_id,
-      matchup: p.games
-        ? `${p.games.away_team} @ ${p.games.home_team}`
-        : `Game ${p.game_id}`,
+      matchup: p.games ? `${p.games.away_team} @ ${p.games.home_team}` : `Game ${p.game_id}`,
       playerId: p.player_id,
       playerName: p.players?.full_name ?? "Unknown player",
       propType,
@@ -566,15 +569,47 @@ async function getResults(): Promise<{
       projection: p.projection,
       line: line.line,
       bookmaker: line.bookmaker,
-      actual,
-      lean: p.projection > line.line ? "over" : p.projection < line.line ? "under" : "none",
-      verdict: classify(p.projection, line.line, actual),
     });
+  }
+  // Top-N per (day, section) by |edge| = the displayed cards.
+  const featBySection = new Map<string, FeatCand[]>();
+  for (const c of featuredCandidates) {
+    const arr = featBySection.get(c.key);
+    if (arr) arr.push(c);
+    else featBySection.set(c.key, [c]);
+  }
+  const featuredResults: EvaluatedResult[] = [];
+  let featuredShown = 0;
+  for (const arr of featBySection.values()) {
+    arr.sort((a, b) => b.absEdge - a.absEdge);
+    for (const c of arr.slice(0, FEATURED_PER_SECTION)) {
+      featuredShown += 1;
+      const log = logsByKey.get(`${c.playerId}|${c.gameDate}`);
+      if (!log) continue;            // displayed but not graded yet
+      const actualRaw = log[ACTUAL_COLUMN[c.propType]];
+      if (actualRaw === null || actualRaw === undefined) continue;
+      const actual = Number(actualRaw);
+      if (!Number.isFinite(actual)) continue;
+      featuredResults.push({
+        gameId: c.gameId,
+        matchup: c.matchup,
+        playerId: c.playerId,
+        playerName: c.playerName,
+        propType: c.propType,
+        gameDate: c.gameDate,
+        projection: c.projection,
+        line: c.line,
+        bookmaker: c.bookmaker,
+        actual,
+        lean: c.projection > c.line ? "over" : c.projection < c.line ? "under" : "none",
+        verdict: classify(c.projection, c.line, actual),
+      });
+    }
   }
   featuredResults.sort(sortNewestFirst);
   console.log(
-    `[results-diag] featured plays: ${featuredResults.length} graded ` +
-      `(of ${bettingResults.length} betting)`,
+    `[results-diag] featured plays: ${featuredResults.length} graded of ` +
+      `${featuredShown} displayed (top-${FEATURED_PER_SECTION}/section/day)`,
   );
 
   // ── Weekly Betting Edge trend (Feature 6) ────────────────────────────────

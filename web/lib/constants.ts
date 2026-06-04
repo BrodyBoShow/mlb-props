@@ -128,6 +128,27 @@ export const FEATURED_MIN_LINE: Partial<Record<PropType, number>> = {
   hitter_hits_runs_rbis: 1.5,
 };
 
+// Per-prop projection sanity ceiling for the curated Featured Plays. A thin/spiky
+// baseline window can echo one big game into an implausible projection that posts
+// a fake huge edge; this caps it out of the curated set (both the home board's
+// buildEdgePlays AND the /results Featured-Plays hit-rate, so the two agree on
+// which plays count). Generous — a genuinely elite night stays; only the absurd
+// drops. Shared single source of truth.
+export const FEATURED_PROJ_CAP: Partial<Record<PropType, number>> = {
+  strikeouts: 13,
+  hits_allowed: 9,
+  outs_recorded: 24,
+  hitter_hits: 2.3,
+  hitter_total_bases: 3.2,
+  hitter_hits_runs_rbis: 3.8,
+  hitter_home_runs: 0.8,
+};
+
+// How many cards each Featured Plays section shows per day (top-N by edge). The
+// /results Featured-Plays hit-rate counts only the top-N per day per section, so
+// it tracks the cards actually displayed — not the whole high-edge subset.
+export const FEATURED_PER_SECTION = 3;
+
 // Real, two-sided sportsbooks — the only books that count toward sharp-money
 // agreement (feature 5). DFS apps (prizepicks/underdog/sleeper/betr) post flat
 // single-number lines, not two-sided over/under markets, so they're excluded.

@@ -3925,6 +3925,27 @@ Hitter baseline regression-to-mean — the spiky-projection fix (this session):
   fills in on the next slate). NOTE 1st-inning pitches-thrown stays wired but
   proxy-gated; 1st-inning Ks is the one that actually populates.
 
+/results Featured Plays row = the DISPLAYED daily cards, not the whole subset (session):
+- USER: the /results "Featured Plays" hit-rate counted the entire high-edge SUBSET
+  (122/231) — they want it to represent the ~6 cards actually SHOWN on the home
+  board each day (top-3 pitching + top-3 hitting).
+- FIX (frontend-only, /results): featuredResults now selects the top-FEATURED_PER_
+  SECTION (=3) pitching + 3 hitting plays by |edge| PER DAY (same daily selection
+  as the board's buildEdgePlays), then grades the resolved ones — picking the
+  displayed top-N FIRST and grading AFTER, so an ungraded displayed card just
+  doesn't contribute rather than promoting a 4th never-shown play. Applies the same
+  gates as the board + FEATURED_PROJ_CAP.
+- SHARED CONSTANT: FEATURED_PROJ_CAP moved from page.tsx -> @/lib/constants (single
+  source) so the board's buildEdgePlays and the /results row agree on which plays
+  count; added FEATURED_PER_SECTION=3. ResultsBoard label "high-edge subset" ->
+  "top cards shown daily".
+- CAVEAT (documented in code): the board's hitter min-games gate + point-in-time
+  graded counts can't be replayed historically, so the match isn't byte-exact —
+  but the proj-cap + edge ordering capture the displayed set closely.
+- VERIFIED: tsc + build clean; live /results diag went from 122/231 (subset) to
+  "21 graded of 27 displayed (top-3/section/day)" — the row now tracks the cards
+  actually featured. Betting Edge / Model Tracker / weekly trend unchanged.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains

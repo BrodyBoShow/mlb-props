@@ -151,14 +151,15 @@ function BettingPerPropCard({
         </h3>
       </div>
       <ul className="divide-y divide-slate-800">
-        {/* Featured Plays — high-edge subset shown on the board. Same row UI. */}
+        {/* Featured Plays — the exact cards shown on the board each day (top 3
+            pitching + top 3 hitting by edge). Same row UI. */}
         <li className="flex items-center justify-between px-5 py-3 text-sm">
           <span className="flex flex-col items-start gap-0.5">
             <span className={fEmpty ? "text-slate-500" : "text-slate-200"}>
               Featured Plays
             </span>
             <span className="text-[10px] uppercase tracking-wide text-slate-500">
-              high-edge subset
+              top cards shown daily
             </span>
           </span>
           <div className="flex items-center gap-3 tabular-nums">

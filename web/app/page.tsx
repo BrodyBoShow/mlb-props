@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
-import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, FEATURED_PROJ_CAP, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
 import type { ByProp, FeaturedPlay, FeaturedSection, FormDot, GameGroup, PropType, Trends, TrendWindow } from "@/lib/types";
 import PropBoard from "./PropBoard";
@@ -48,25 +48,9 @@ const FEATURED_MIN_EDGE = 0.12;
 // visibly off the line.
 const FEATURED_MIN_LEAN = 0.3;
 
-// Per-prop projection SANITY CEILING for the curated Featured Plays only.
-// A thin/spiky baseline window can echo one huge game into an implausible
-// projection (e.g. Gleyber Torres 4.0 total bases = two extra-base hits EVERY
-// game), which then posts a huge fake edge and headlines the section. The
-// games-tracked gate can't catch it once the season backfill gives the player
-// history, so we cap on the projection's own plausibility. These are deliberately
-// generous — a genuinely elite night (Acuña 2.7 TB) stays; only the absurd is
-// dropped. Excludes the play from the curated top-3 ONLY; it still shows on the
-// normal prop tab. The real fix is engine-side regression-to-mean on thin
-// hitter baselines (a separate, deferred task).
-const FEATURED_PROJ_CAP: Partial<Record<PropType, number>> = {
-  strikeouts: 13,         // a 13+ K projection is implausible for one start
-  hits_allowed: 9,
-  outs_recorded: 24,      // 8 IP
-  hitter_hits: 2.3,
-  hitter_total_bases: 3.2,
-  hitter_hits_runs_rbis: 3.8,
-  hitter_home_runs: 0.8,  // HR section: legit elites sit ~0.4–0.6
-};
+// FEATURED_PROJ_CAP (per-prop projection sanity ceiling) now lives in
+// @/lib/constants as the single source of truth — shared with the /results
+// Featured-Plays hit-rate so the board and results agree on which plays count.
 
 // Featured plays + the sharp badge both use the shared MIN_LINE map (the same
 // thresholds /results uses) so alt lines never inflate a featured edge or a
