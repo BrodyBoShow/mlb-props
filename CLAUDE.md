@@ -3813,6 +3813,40 @@ Total Bases moved to /results Betting Edge (this session):
   gap), so lean-vs-line grading is now legitimate. Verified: tsc clean; npm run
   build passes.
 
+Hitter baseline regression-to-mean — the spiky-projection fix (this session):
+- PROBLEM (flagged repeatedly: Torres 4.0 TB, etc.): the hitter baseline was a raw
+  weighted rolling mean over a 30-day window, so a thin/spiky sample (1 hot game)
+  over-projected and produced inflated edges — including on the Total Bases
+  betting edges just surfaced. The deferred "regression-to-mean" fix.
+- DISCIPLINE: measured BEFORE changing. engine/validate_regression.py (new,
+  permanent) — a strict-prior backtest over the full backfilled season replicating
+  the production baseline (30-day window + RECENT_WEIGHT), comparing raw vs
+  Marcel-style regression toward (a) the LEAGUE prior and (b) a PLAYER prior, for
+  k in {2,3,5}, reporting RMSE/MAE overall + by prior-sample-size bucket.
+- FINDINGS: regression LOWERS RMSE for ALL SIX hitter count props, concentrated in
+  thin samples (1-3 prior games: ~15-20% RMSE cut — TB 1.92->1.58, HRR 2.20->1.85,
+  hits 1.02->0.86) with deep samples (11+) barely changed. The LEAGUE prior works;
+  the PLAYER prior basically doesn't (a thin recent sample means thin player
+  history too). k=5 was marginally best on overall RMSE but shrinks the 93%-deep
+  majority more for ~0.5%; chose k=3 — captures the bulk of the thin-sample fix
+  with least disturbance to established hitters.
+- FIX (engine-only): constants.py HITTER_REGRESSION_K=3.0 + HITTER_LEAGUE_PRIOR
+  (per-prop 2026 league means/game: TB 1.30, hits 0.80, HRR 1.64, runs 0.44, rbis
+  0.42, HR 0.11). baseline.py _regressed_projection(values, prior, k) =
+  (weighted_sum + k*prior)/(sum_weights + k); _build_hitter_from_games uses it for
+  every hitter count prop (fantasy-score still uses the median — different skew
+  handling; pitcher builders unchanged). FEATURE_COLS untouched (11) — this is the
+  baseline, NOT the XGBoost model.
+- VERIFIED on the live backfill: deep samples (336 players) raw 1.23 -> reg 1.24
+  (+0.01, preserved — stars 2.7->2.6, 2.5->2.4); thin samples (19) pulled toward
+  the prior (spiky 4.0->2.8 tamed, 1-game 0.0->0.8 lifted — both correct);
+  units [4.0]->2.4, [0.0]->0.8. py_compile + imports clean.
+- ROLLOUT: applies to every hitter build going forward (next full cron per slate);
+  the current slate keeps its already-built projections until the next hitter
+  rebuild. Complements (doesn't replace) the Featured-Plays FEATURED_PROJ_CAP — an
+  extreme 2-game sample can still approach the cap, which stays as a backstop. The
+  TB betting edges become trustworthy as regressed projections build.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains

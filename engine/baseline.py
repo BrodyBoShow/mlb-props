@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 import stats
 from constants import (
+    HITTER_LEAGUE_PRIOR,
+    HITTER_REGRESSION_K,
     LEAGUE_AVG_HITTER_FP,
     LOOKBACK_DAYS,
     OLDER_WEIGHT,
@@ -53,6 +55,28 @@ def _weighted_projection(values_newest_first: list[float]) -> float:
     return round(
         sum(w * v for w, v in zip(weights, values_newest_first)) / total_w, 1
     )
+
+
+def _regressed_projection(
+    values_newest_first: list[float], prior: float, k: float = HITTER_REGRESSION_K
+) -> float:
+    """Weighted rolling mean regressed toward `prior` (Marcel-style).
+
+    Adds k pseudo-games at the prior to the weighted sum, so a THIN sample is
+    pulled hard toward the prior (taming spiky 1-game projections) while a DEEP
+    sample barely moves. Same weighting as _weighted_projection. Validated in
+    engine/validate_regression.py — lowers RMSE for every hitter count prop,
+    concentrated in thin samples. See constants.HITTER_LEAGUE_PRIOR.
+    """
+    if not values_newest_first:
+        return round(prior, 1)
+    weights = [
+        RECENT_WEIGHT if i < RECENT_STARTS else OLDER_WEIGHT
+        for i in range(len(values_newest_first))
+    ]
+    sw = sum(weights)
+    wsum = sum(w * v for w, v in zip(weights, values_newest_first))
+    return round((wsum + k * prior) / (sw + k), 1)
 
 
 def _median_projection(values: list[float]) -> float:
@@ -361,7 +385,15 @@ def _build_hitter_from_games(
             print(f"  no recent game-log data for hitter {player_id}, skipping")
             continue
         values = [float(g[field]) for g in games]
-        projection = _weighted_projection(values)
+        # Regress toward the league prior (Marcel-style) so a thin/spiky recent
+        # window doesn't over-project; deep samples are barely touched. Falls back
+        # to the plain weighted mean for any prop without a configured prior.
+        prior = HITTER_LEAGUE_PRIOR.get(prop_type)
+        projection = (
+            _regressed_projection(values, prior)
+            if prior is not None
+            else _weighted_projection(values)
+        )
         rows.append(
             {
                 "game_id": p["game_id"],

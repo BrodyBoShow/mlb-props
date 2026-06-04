@@ -214,6 +214,31 @@ RECENT_STARTS = 5        # starts that receive the heavier weight
 RECENT_WEIGHT = 2.0      # weight for the most recent RECENT_STARTS starts
 OLDER_WEIGHT = 1.0       # weight for starts older than RECENT_STARTS
 
+# Hitter baseline regression-to-mean (Marcel-style). A thin/spiky recent window
+# (e.g. 1 hot game) makes the raw weighted mean over-project (Gleyber Torres 4.0
+# TB off a single game). We add HITTER_REGRESSION_K pseudo-games at the league
+# prior, so a thin sample is pulled hard toward the prior and a deep sample
+# barely moves: proj = (weighted_sum + K*prior) / (sum_weights + K).
+# VALIDATED via engine/validate_regression.py (strict-prior backtest on the full
+# backfilled season): regression lowers RMSE for ALL six hitter count props,
+# concentrated in thin samples (1-3 prior games: ~15-20% RMSE reduction) with
+# deep samples (11+) barely changed. K=3 captures the bulk of the thin-sample
+# fix with the least disturbance to established hitters (K=5 was marginally
+# better on RMSE but shrinks the deep majority more for ~0.5%). The LEAGUE prior
+# (not a player prior) is what works — a thin recent sample means thin player
+# history too. Priors are 2026-season league means per game (recompute via
+# validate_regression.py if they drift). Fantasy-score props use the median, not
+# this, so they're excluded.
+HITTER_REGRESSION_K = 3.0
+HITTER_LEAGUE_PRIOR = {
+    "hitter_total_bases":    1.30,
+    "hitter_hits":           0.80,
+    "hitter_hits_runs_rbis": 1.64,
+    "hitter_runs":           0.44,
+    "hitter_rbis":           0.42,
+    "hitter_home_runs":      0.11,
+}
+
 # Fallback / defaults
 LEAGUE_AVG_K_PCT = 0.22  # ~22% of MLB plate appearances end in a strikeout
 
