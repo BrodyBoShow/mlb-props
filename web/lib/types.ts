@@ -211,6 +211,15 @@ export type FeaturedPlay = {
   gradedStarts: number;
   // Multi-book sharp agreement (feature 5) for this featured pitcher+prop.
   sharpAgreement?: SharpAgreement;
+  // De-vig transparency: the model's and the market's no-vig OVER probabilities
+  // (0–1). The card shows them framed to the LEANED side so the edge is legible
+  // ("model 72% under vs market 29%"). From the edge row; undefined for HR plays.
+  modelOverProb?: number;
+  fairOverProb?: number;
+  // Recent-form backing (props.cash-style): over/under count in the LEAN direction
+  // over the last ≤10 graded games vs THIS line. Computed from the season-backfilled
+  // trends. undefined when there's no line / no graded history.
+  hitRate?: { hit: number; total: number };
   // HR-matchup section: home-park hit factor (display) + proj × parkFactor
   // ranking score (not displayed, used only for the sort).
   parkFactor?: number;

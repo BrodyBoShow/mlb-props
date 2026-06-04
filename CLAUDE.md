@@ -3657,6 +3657,67 @@ STAGE 2 DONE — backfill validated + flipped into training (this session):
   * home_away re-run DONE: deleted backfilled rows + re-ran backfill_logs.py (now
     carries home_away); graded 859 untouched; 16667/16667 backfill rows have it.
 
+Featured Plays — full visual refinement + quality gate (this session):
+- USER: "do a full visual refinement of Featured Plays ... clean and
+  professional ... best and most important data ... what props get shown."
+  Frontend-only (3 files); engine/model/FEATURE_COLS (11) untouched.
+- WHAT PROPS GET SHOWN (the headline fix): new FEATURED_PROJ_CAP in page.tsx —
+  a per-prop projection SANITY CEILING applied ONLY to the curated Featured
+  Plays (NOT the board / /results). A thin/spiky baseline window can echo one
+  huge game into an implausible projection (Gleyber Torres 4.0 total bases = two
+  XBH every game) that posts a fake huge edge and headlines the section; the
+  games-tracked gate can't catch it once the season backfill gives the player
+  history (Torres now has 33 graded games → passed the gate). Caps: strikeouts
+  13, hits_allowed 9, outs_recorded 24, hitter_hits 2.3, hitter_total_bases 3.2,
+  hitter_hits_runs_rbis 3.8, hitter_home_runs 0.8 (HR section). Generous — a
+  genuinely elite night (Acuña 2.7 TB) stays; only the absurd drops. Applied in
+  buildEdgePlays (return null over cap) + the hrMatchups filter chain. The play
+  still shows on the normal prop tab — only the curated top-3 excludes it. The
+  deeper fix (engine regression-to-mean on thin hitter baselines) stays a
+  separate deferred task. VERIFIED live (2026-06-03): Torres 0 occurrences in
+  the featured section (was headlining HITTING + HR); sections now lead
+  Webb/Peralta/Arrighetti (pitching), Bleday/Acuña/Rice (hitting),
+  Acuña/Hernández/Soto (HR).
+- BEST/MOST IMPORTANT DATA (two adds, both surfaced on the card):
+  * De-vig transparency: FeaturedPlay gains modelOverProb + fairOverProb (from
+    the edge row — already selected, just attached in buildEdgePlays). The card
+    shows a math row "proj X · model Y% vs mkt Z%" framed to the LEANED side
+    (under lean → model under% vs market under%), so the edge is legible:
+    Webb UNDER 17.5 (proj 12.5) → model 92% vs mkt 45% = +0.47 edge (consistent
+    by construction; verified the numbers reconcile to the stored edge).
+  * Recent-form backing (props.cash-style): FeaturedPlay gains hitRate =
+    {hit,total} = the L10 over/under count IN THE LEAN DIRECTION vs THIS line,
+    computed from the season-backfilled trends via the existing trendsFor()
+    (now meaningful because the backfill filled the season). Rendered as a
+    FormChip "L9 3/9 ▼" toned by strength (≥70% emerald, ≥50% slate, <50%
+    amber) — HONEST: Webb's 3/9 under shows amber (recent form contradicts the
+    model's under), exactly the signal a bettor needs. types.ts carries both.
+- VISUAL REDESIGN (FeaturedPlays.tsx rewrite, same data + insight/sweet-spot/
+  sharp pieces reused): clean hierarchy replacing the cluttered split rows —
+  (1) a LEFT ACCENT BAR colored by direction (emerald over / red under; HR =
+  park-favorability emerald/red/slate) so color = meaning, not a wall of green;
+  (2) header = name (15px semibold) + matchup + a prop chip; (3) HERO row = the
+  bet (OVER/UNDER + line, colored) and the +edge (emerald) together; (4) the
+  de-vig math row; (5) a CONVICTION chip row = FormChip · SharpBadge · sample
+  (n GP / "new", emerald ≥8); (6) the AI insight divided by a hairline, clamp+
+  expand unchanged. HR cards: HR proj as the hero + park + wind tag + a
+  sweet-spot chip (🔥 EV · % sweet, emerald when ≥35% sweet or ≥90 EV) + sample.
+  New shared Chip component (good/muted/warn tones, ring-inset pills). Section
+  headers gain a hairline rule + a terse right-aligned blurb (sm+). Footer
+  rewritten to explain edge = model no-vig − de-vig book, and that form/sharp
+  count REAL two-sided books only.
+- SCOPE/SAFETY: page.tsx (buildEdgePlays attaches the 3 new fields + cap; HR cap
+  filter), types.ts (3 optional fields), FeaturedPlays.tsx (rewrite). The AI
+  insight route is UNCHANGED (reads existing fields; cache key unaffected). No
+  new DB column reads (modelOverProb/fairOverProb come from the edges select
+  that already ran; hitRate from the existing recent-form fetch) → no
+  resolveExistingColumns needed. VERIFIED: tsc --noEmit clean; npm run build
+  passes (/ 14.6 kB); dev server renders 200 with all 3 sections; SSR HTML
+  confirms model%/mkt% (×6 edge cards), L10 form chips, sample chips, HR proj/
+  park/wind/sweet, and Torres excluded. (Preview MCP harness 500s on a
+  pre-existing React-dup bug in AutoRefresh/usePathname — unrelated to this
+  change; the production build + the standalone dev server both render fine.)
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains

@@ -48,6 +48,26 @@ const FEATURED_MIN_EDGE = 0.12;
 // visibly off the line.
 const FEATURED_MIN_LEAN = 0.3;
 
+// Per-prop projection SANITY CEILING for the curated Featured Plays only.
+// A thin/spiky baseline window can echo one huge game into an implausible
+// projection (e.g. Gleyber Torres 4.0 total bases = two extra-base hits EVERY
+// game), which then posts a huge fake edge and headlines the section. The
+// games-tracked gate can't catch it once the season backfill gives the player
+// history, so we cap on the projection's own plausibility. These are deliberately
+// generous — a genuinely elite night (Acuña 2.7 TB) stays; only the absurd is
+// dropped. Excludes the play from the curated top-3 ONLY; it still shows on the
+// normal prop tab. The real fix is engine-side regression-to-mean on thin
+// hitter baselines (a separate, deferred task).
+const FEATURED_PROJ_CAP: Partial<Record<PropType, number>> = {
+  strikeouts: 13,         // a 13+ K projection is implausible for one start
+  hits_allowed: 9,
+  outs_recorded: 24,      // 8 IP
+  hitter_hits: 2.3,
+  hitter_total_bases: 3.2,
+  hitter_hits_runs_rbis: 3.8,
+  hitter_home_runs: 0.8,  // HR section: legit elites sit ~0.4–0.6
+};
+
 // Featured plays + the sharp badge both use the shared MIN_LINE map (the same
 // thresholds /results uses) so alt lines never inflate a featured edge or a
 // sharp count. Imported from @/lib/constants — single source of truth.
@@ -895,9 +915,21 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         const proj = projIndex.get(`${e.player_id}|${e.prop_type}`);
         if (!proj) return null;
         if (Math.abs(proj.projection - e.line) < FEATURED_MIN_LEAN) return null;
+        // Sanity ceiling: drop implausible (thin/spiky baseline) projections so
+        // a fake 4.0-TB edge can't headline the section.
+        const cap = FEATURED_PROJ_CAP[propType];
+        if (cap !== undefined && proj.projection > cap) return null;
 
         const lean: "over" | "under" =
           proj.projection > e.line ? "over" : "under";
+
+        // Recent-form backing (props.cash-style): how often the player landed on
+        // THIS lean's side over the last ≤10 graded games vs THIS line. From the
+        // season-backfilled trends; the count is framed to the lean direction.
+        const l10 = trendsFor(e.player_id, propType, e.line)?.l10;
+        const hitRate = l10
+          ? { hit: lean === "over" ? l10.over : l10.total - l10.over, total: l10.total }
+          : undefined;
         const matchup = proj.games
           ? `${proj.games.away_team} @ ${proj.games.home_team}`
           : `Game ${proj.game_id}`;
@@ -932,6 +964,10 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           matchup,
           gradedStarts: 0, // enriched below in ONE query across all sections
           sharpAgreement: computeSharp(e.player_id, propType, proj.projection, e.edge),
+          // De-vig transparency — surfaced on the card as "model X% vs market Y%".
+          modelOverProb: e.model_over_prob ?? undefined,
+          fairOverProb: e.fair_over_prob ?? undefined,
+          hitRate,
           parkFactor,
           // opp K rate lives only on strikeouts rows (pitching context).
           oppKRate: oppKByPlayer.get(e.player_id),
@@ -1134,6 +1170,9 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
       ? hrPlays.filter((p) => (hrGradedByPlayer.get(p.playerId) ?? 0) >= HR_MIN_GAMES_TRACKED)
       : hrPlays
   )
+    // Same plausibility ceiling as the edge sections: a thin/spiky baseline can
+    // echo one big game into a ~1.0 HR projection that dominates the composite.
+    .filter((p) => p.projection <= (FEATURED_PROJ_CAP.hitter_home_runs ?? Infinity))
     .sort((a, b) => (b.hrScore ?? 0) - (a.hrScore ?? 0))
     .slice(0, 3);
 
