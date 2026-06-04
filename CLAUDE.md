@@ -3793,6 +3793,26 @@ Featured Plays — full visual refinement + quality gate (this session):
   live on the board immediately (06-03) and on every slate going forward via the
   next full cron (after this push).
 
+Total Bases moved to /results Betting Edge (this session):
+- USER: /results Betting Edge "just shows pitcher props". Correct — Betting Edge
+  only grades props with reliable two-sided book lines, which were 4 pitcher
+  props + hitter_hits_runs_rbis + hitter_fantasy_score. hitter_total_bases — the
+  single most-bet hitter prop, with REAL two-sided pinnacle lines (verified
+  240-286 edges + 1000+ lines/day) — was sitting in the Model Tracker (Section 2)
+  instead of Betting Edge (Section 1).
+- FIX (frontend-only): moved hitter_total_bases from TRACKER_PROPS -> Betting
+  Edge. constants.ts: added hitter_total_bases:1.5 to MIN_LINE + removed it from
+  TRACKER_PROPS. ResultsBoard.tsx: added it to BETTING_HITTER_PROPS (first) +
+  removed from the local TRACKER_PROPS. Now graded lean-vs-line like the other
+  two-sided props. MIN_LINE is used ONLY by /results (Featured Plays uses
+  FEATURED_MIN_LINE, the sharp badge SHARP_MIN_LINE), so the blast radius is just
+  the Betting Edge section + its weekly-trend chart — no Featured Plays / board /
+  sharp change. hitter_hits stays in the Tracker (pinnacle posts no two-sided
+  hits line — consensus only). The hitter over-bias that originally justified
+  Tracker placement was resolved by the Poisson fix (calibration scorecard ~0
+  gap), so lean-vs-line grading is now legitimate. Verified: tsc clean; npm run
+  build passes.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains

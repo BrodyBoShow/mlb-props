@@ -30,7 +30,9 @@ export const TRACKER_PROPS: ReadonlySet<PropType> = new Set([
   "earned_runs",
   "pitcher_first_inning_pitches",
   "hitter_hits",
-  "hitter_total_bases",
+  // hitter_total_bases moved to Betting Edge (it HAS real two-sided pinnacle
+  // lines, so it's graded lean-vs-line, not calibration-only). hitter_hits
+  // stays here — pinnacle posts no two-sided hits line (consensus only).
 ]);
 
 // Hitter prop set — used by PropBoard for live pace logic.
@@ -63,6 +65,7 @@ export const MIN_LINE: Partial<Record<PropType, number>> = {
   outs_recorded:          10.5,
   pitcher_fantasy_score:  6.0,
   hitter_fantasy_score:   4.0,
+  hitter_total_bases:     1.5,   // top hitter prop — pinnacle posts two-sided TB lines
   hitter_hits_runs_rbis:  1.5,   // combo prop — main two-sided line
 };
 
