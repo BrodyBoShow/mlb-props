@@ -4028,6 +4028,44 @@ Behavior-preserving cleanup audit (this session) — Phase 2 applied:
   pushed (d9dd399). Goes live on every slate via the next cron (subject to the proxy
   caveat in CI).
 
+PrizePicks-direct proxy retry — fixes intermittent 403 (this session):
+- USER set PRIZEPICKS_PROXY_URL but reported "the proxy didn't work". DIAGNOSED
+  from the live Actions logs (NOT guessed): it WAS working intermittently — the
+  19:11 UTC cron logged "PrizePicks-direct standard via proxy: 50 lines" (success)
+  while the 19:35 UTC cron logged "PrizePicks-direct unavailable (HTTP 403) via
+  proxy". Same proxy, opposite result minutes apart = a ROTATING residential
+  proxy: each connection exits through a different residential IP, some clean,
+  some on Cloudflare's blocklist (-> 403). The fetch gave up on the first 403, so
+  one bad rotation killed the whole PrizePicks-direct pass.
+  (Also confirmed the user's earlier "0 first-inning pitches" was a DEPLOY-TIMING
+  artifact: that run ran commit d2e796d at 19:11, 17 min BEFORE the MLBLIVE fix
+  d9dd399 landed at 19:28 — old league-2-only code, unrelated to the proxy.)
+- FIX (engine/lines.py): when PRIZEPICKS_PROXY_URL is set, _fetch_prizepicks_
+  standard now RETRIES each request up to _PP_PROXY_ATTEMPTS times (default 8,
+  env-overridable via PRIZEPICKS_PROXY_ATTEMPTS) on a 403. Each retry opens a new
+  connection -> the proxy re-rolls the exit IP until a clean one lands (we'd
+  already proven clean IPs exist in the pool via the 50-line success). Direct (no
+  proxy) keeps a SINGLE attempt — the same IP would 403 every time, so retrying
+  is pointless. Non-403 HTTPErrors re-raise immediately (real errors). The success
+  log appends "[N proxy retries]" so the mechanism is visible. Still fully
+  defensive: if every attempt 403s, returns {} and the pipeline falls back to the
+  ladder/median path exactly as before — no regression. Added `import time`;
+  ppd_note text corrected ("DFS lines (fantasy + 1st-inning pitches)" — pp_applied
+  now counts both, the old "fantasy lines" wording was stale).
+- VERIFIED in CI (manual workflow_dispatch on the fix, run 26975139412): "PrizePicks
+  -direct standard via proxy: 62 lines" + "captured 1st-inning-pitches lines
+  (PrizePicks label: 1st Inning Pitches Thrown)" — both the proxy AND the MLBLIVE
+  1st-inning-pitches capture now work end-to-end through the rotating proxy (62 vs
+  the old 50 = +~12 1st-inning-pitches lines). NOTE the per_prop summary still
+  prints "pitcher_first_inning_pitches: 0" — that counter only tallies ParlayAPI
+  rows; the PrizePicks-direct lines (fantasy + 1st-inning pitches) are appended
+  later and counted in the "[N DFS lines from PrizePicks-direct standard]" note,
+  then upserted. py_compile + ruff F clean; FEATURE_COLS unchanged (11).
+- TUNING: if a future cron logs a high "[N proxy retries]" or still 403s after 8
+  tries, the pool's clean-IP rate is low — bump PRIZEPICKS_PROXY_ATTEMPTS (env/
+  Actions secret) rather than redeploying, or switch the proxy to a sticky-session
+  endpoint.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains

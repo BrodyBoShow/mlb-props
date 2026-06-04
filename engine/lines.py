@@ -516,7 +516,8 @@ def fetch_prop_lines(
     norm_note = f" [{normalized_matches} via normalized match]" if normalized_matches else ""
     pp_note = f" [{pp_only_dropped} non-PrizePicks fantasy lines dropped]" if pp_only_dropped else ""
     ppd_note = (
-        f" [{pp_applied} fantasy lines from PrizePicks-direct standard]"
+        f" [{pp_applied} DFS lines from PrizePicks-direct standard "
+        f"(fantasy + 1st-inning pitches)]"
         if pp_applied
         else f" [PrizePicks-direct unavailable -- {pp_dropped_stale} fantasy rows dropped, last-good lines kept]"
     )
