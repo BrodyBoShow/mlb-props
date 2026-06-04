@@ -3946,6 +3946,36 @@ Hitter baseline regression-to-mean — the spiky-projection fix (this session):
   "21 graded of 27 displayed (top-3/section/day)" — the row now tracks the cards
   actually featured. Betting Edge / Model Tracker / weekly trend unchanged.
 
+Behavior-preserving cleanup audit (this session) — Phase 2 applied:
+- Two-phase audit (report -> approve -> apply) under a strict no-touch list (no
+  model param, projection/edge/grade/calibrate math, DB shape, or migration may
+  change). Used ruff (pyflakes F-rules) on engine/ + tsc --noUnusedLocals on web/
+  + repo-wide greps to verify every finding. Applied in 4 reversible commits:
+  * Group 1 (22081b0): removed unused imports — model.py functools.lru_cache +
+    statsapi; weather.py datetime.date + timedelta (datetime/timezone kept).
+  * Group 2 (adbabd6): removed unused local `under` (ResultsBoard); dropped the
+    f-prefix on 4 placeholder-less f-strings (_validate_matchup_k.py, test_model.py)
+    — identical string output.
+  * Group 3 (f747bc1): removed the DEAD spark-dots chain (superseded by TrendRow,
+    left unrendered) — SPARK_ACTUAL_COL + sparkFor (page.tsx), recentForm field +
+    write (types.ts/page.tsx), FormDot type, FORM_DOT_CLASS + RecentFormDots
+    (PropBoard.tsx). Verified spark-only (trends use TrendWindow, never FormDot);
+    the shared recent-form FETCH stays (trendsFor uses it). -103 lines.
+  * Group 4: consolidated two byte-identical helpers (fmt, formatShortDate) into
+    new web/lib/format.ts; PropBoard/ResultsBoard/FutureSlate import them.
+    FeaturedPlays' fmt (digits param) intentionally left local.
+- VERIFIED: all 24 engine modules import clean; FEATURE_COLS still 11; tsc + build
+  clean; grep-confirmed no dangling refs; net -116 lines. NO computation/
+  persistence/migration file touched (baseline/edge/grade/calibrate/constants/db/
+  stats/main/first_inning/lines/matchup_k + db/schema + db/migrations all
+  UNCHANGED) — so graded results keep measuring the SAME model.
+- NOT applied (reported, left for an explicit call): TRACKER_PROPS Set(constants)
+  vs array(ResultsBoard) consolidation (classification-adjacent); FEATURED_MIN_EDGE/
+  LEAN dups (model gates, no-touch); joblib in requirements.txt (pinned for version
+  stability, transitive via sklearn); EdgeRow/ProjectionRow same-name-different-shape
+  (not real dups); E402 import-order in main/backfill/validate (intentional —
+  load_dotenv must precede engine imports).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains
