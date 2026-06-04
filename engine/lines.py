@@ -10,6 +10,7 @@ Reads PARLAY_API_KEY from the environment (via python-dotenv).
 
 import json
 import os
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -218,6 +219,15 @@ _PP_HEADERS = {
     "Referer": "https://app.prizepicks.com/",
 }
 
+# Rotating residential proxies exit through a different IP per connection, and
+# some of those IPs sit on Cloudflare's blocklist (-> 403) while others are
+# clean. A 403 through the proxy is therefore NOT fatal — retrying re-rolls to a
+# fresh residential IP, so we retry each request several times until one lands.
+# Tunable via env so the count can be raised (e.g. for a low-quality pool)
+# without a redeploy. Only applies when PRIZEPICKS_PROXY_URL is set; a direct
+# request gets a single attempt (the same IP would 403 every time).
+_PP_PROXY_ATTEMPTS = int(os.getenv("PRIZEPICKS_PROXY_ATTEMPTS", "8"))
+
 
 def _fetch_prizepicks_standard(
     name_to_id: dict[str, int],
@@ -258,9 +268,30 @@ def _fetch_prizepicks_standard(
     )
     via = "via proxy" if proxy_url else "(direct)"
 
+    # Retry on 403 ONLY when routing through a (rotating) proxy: each retry opens
+    # a new connection, which the proxy exits through a fresh residential IP, so
+    # a Cloudflare-blocked IP is re-rolled until a clean one lands. Direct gets a
+    # single attempt — the same IP would 403 every time, so retrying is pointless.
+    attempts = _PP_PROXY_ATTEMPTS if proxy_url else 1
+    retries_used = 0
+
     def _open(req):
-        return (opener.open(req, timeout=20) if opener
-                else urllib.request.urlopen(req, timeout=20))
+        nonlocal retries_used
+        last_exc = None
+        for i in range(attempts):
+            try:
+                return (opener.open(req, timeout=25) if opener
+                        else urllib.request.urlopen(req, timeout=25))
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                if exc.code != 403:
+                    raise          # a real error, not a blocked-IP rotation
+            except urllib.error.URLError as exc:
+                last_exc = exc     # transient proxy/network blip — re-roll
+            if i < attempts - 1:
+                retries_used += 1
+                time.sleep(0.5)
+        raise last_exc
 
     try:
         for league_id in _PP_LEAGUE_IDS:
@@ -321,7 +352,8 @@ def _fetch_prizepicks_standard(
         )
         return {}
 
-    print(f"  PrizePicks-direct standard {via}: {len(out)} lines")
+    retry_note = f" [{retries_used} proxy retries]" if retries_used else ""
+    print(f"  PrizePicks-direct standard {via}: {len(out)} lines{retry_note}")
     if seen_inning_stats:
         print(f"    captured 1st-inning-pitches lines (PrizePicks label{'s' if len(seen_inning_stats) > 1 else ''}: "
               f"{', '.join(sorted(seen_inning_stats))})")
