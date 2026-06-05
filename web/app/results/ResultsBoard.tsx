@@ -80,7 +80,7 @@ function BettingOverallCard({ results }: { results: EvaluatedResult[] }) {
   const color = rateColor(correct, evaluable);
 
   return (
-    <div className="mb-5 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
+    <div className="mb-5 rounded-xl surface p-5">
       <div className="flex items-baseline justify-between">
         <h3 className="text-sm font-medium uppercase tracking-wider text-slate-400">
           Overall hit rate
@@ -133,7 +133,7 @@ function BettingPerPropCard({
   const fEmpty = fEval + fSkip === 0;
 
   return (
-    <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/50">
+    <div className="mb-6 rounded-xl surface">
       <div className="border-b border-slate-800 px-5 py-3">
         <h3 className="text-sm font-medium uppercase tracking-wider text-slate-400">
           By prop type
@@ -385,7 +385,7 @@ function TrackerOverallCard({ results }: { results: TrackerResult[] }) {
   const label = calibrationLabel(over, under);
 
   return (
-    <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/50 p-6">
+    <div className="mb-6 rounded-xl surface p-6">
       <div className="flex items-baseline justify-center gap-6 text-3xl font-bold tabular-nums">
         <span className="text-slate-200">▲ {overPct}% over</span>
         <span className="text-slate-400">▼ {underPct}% under</span>
@@ -426,7 +426,7 @@ function TrackerPerPropCard({
   if (rows.length === 0) return null;
 
   return (
-    <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/50">
+    <div className="mb-6 rounded-xl surface">
       <div className="border-b border-slate-800 px-5 py-3">
         <h3 className="text-sm font-medium uppercase tracking-wider text-slate-400">
           By prop type
@@ -582,7 +582,7 @@ function TrackerSection({
       </div>
 
       {filtered.length === 0 ? (
-        <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
+        <div className="rounded-lg surface p-8 text-center text-slate-400">
           No tracker rows for this prop.
         </div>
       ) : (
@@ -617,7 +617,7 @@ function TrackerByProp({ results }: { results: TrackerResult[] }) {
         return (
           <section
             key={propType}
-            className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
+            className="overflow-hidden rounded-xl surface"
           >
             <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-5 py-3">
               <h3 className="truncate font-semibold text-slate-200">
@@ -745,7 +745,7 @@ export default function ResultsBoard({
       </div>
 
       {filteredBetting.length === 0 ? (
-        <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
+        <div className="rounded-lg surface p-8 text-center text-slate-400">
           No betting-edge results match this filter.
         </div>
       ) : (
@@ -757,7 +757,7 @@ export default function ResultsBoard({
             return (
               <section
                 key={gid}
-                className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
+                className="overflow-hidden rounded-xl surface"
               >
                 <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-5 py-3">
                   <div className="min-w-0">

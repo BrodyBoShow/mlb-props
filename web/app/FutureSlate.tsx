@@ -48,13 +48,13 @@ export default function FutureSlate({
     <>
       <DateNav currentDate={date} prevDate={prevDate} nextDate={nextDate} />
 
-      <div className="mb-6 rounded-lg border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm text-slate-400">
+      <div className="mb-6 rounded-lg surface px-4 py-3 text-sm text-slate-400">
         Projections not yet available · Probable starters shown where announced ·
         Refreshes automatically when projections are ready
       </div>
 
       {sorted.length === 0 ? (
-        <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
+        <div className="rounded-lg surface p-8 text-center text-slate-400">
           No games scheduled for this date.
         </div>
       ) : (
@@ -62,7 +62,7 @@ export default function FutureSlate({
           {sorted.map((g) => (
             <section
               key={g.game_id}
-              className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50"
+              className="overflow-hidden rounded-xl surface"
             >
               <div className="border-b border-slate-800 bg-slate-900 px-5 py-3">
                 <div className="flex items-start justify-between gap-2">

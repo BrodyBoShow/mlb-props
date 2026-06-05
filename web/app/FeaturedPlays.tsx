@@ -218,7 +218,7 @@ function FeaturedPlayCard({
       : undefined;
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60 py-3.5 pl-5 pr-4 transition-colors hover:border-slate-700">
+    <div className="surface relative overflow-hidden rounded-2xl py-3.5 pl-5 pr-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/15">
       {/* direction / park accent */}
       <span aria-hidden className={`absolute inset-y-0 left-0 w-1 ${accent}`} />
 

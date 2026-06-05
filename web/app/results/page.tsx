@@ -793,7 +793,7 @@ export default async function ResultsPage() {
           weeklyTrend={weeklyTrend}
         />
       ) : (
-        <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
+        <div className="rounded-lg surface p-8 text-center text-slate-400">
           No evaluable results yet — projections need to land alongside graded
           actuals (and book lines, for the Betting Edge section). Check back
           once a few full slates accumulate.

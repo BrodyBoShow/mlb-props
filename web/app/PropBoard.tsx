@@ -1448,7 +1448,7 @@ function GameCard({
   const focusUnit = focus !== "all" ? PROP_META[focus].unit : "";
 
   return (
-    <section className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50">
+    <section className="surface overflow-hidden rounded-2xl">
       {/* clickable header — role=button keeps the <h2> heading semantics. */}
       <div
         role="button"
@@ -1794,12 +1794,12 @@ function BoardTable({
       </div>
 
       {sorted.length === 0 ? (
-        <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
+        <div className="surface rounded-2xl p-8 text-center text-slate-400">
           No lined props{" "}
           {q ? `match “${query.trim()}”` : edgesOnly ? "with a qualifying edge" : "yet"}.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-800">
+        <div className="surface overflow-x-auto rounded-2xl">
           <table className="min-w-full text-xs tabular-nums">
             <thead className="bg-slate-900 text-slate-500">
               <tr>
@@ -2083,19 +2083,19 @@ function PlayerDrawer({
         <div className="space-y-5 px-5 py-4">
           {/* key numbers */}
           <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+            <div className="surface rounded-xl py-2">
               <div className="text-[10px] uppercase tracking-wide text-slate-500">Line</div>
               <div className="text-sm font-semibold tabular-nums text-slate-100">
                 {line !== undefined ? fmt(line) : "—"}
               </div>
             </div>
-            <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+            <div className="surface rounded-xl py-2">
               <div className="text-[10px] uppercase tracking-wide text-slate-500">Proj</div>
               <div className="text-sm font-semibold tabular-nums text-slate-100">
                 {fmt(row.projection)}
               </div>
             </div>
-            <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+            <div className="surface rounded-xl py-2">
               <div className="text-[10px] uppercase tracking-wide text-slate-500">
                 {liveActual !== undefined ? "Actual" : "Edge"}
               </div>
@@ -2546,7 +2546,7 @@ export default function PropBoard({
 
       {/* games */}
       {decorated.length === 0 ? (
-        <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
+        <div className="surface rounded-2xl p-8 text-center text-slate-400">
           {focus === "all"
             ? `No projections for ${date}.`
             : `No ${PROP_META[focus].label.toLowerCase()} projections for ${date}.`}

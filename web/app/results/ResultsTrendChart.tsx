@@ -28,7 +28,7 @@ function weekLabel(weekKey: string): string {
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
+    <div className="mb-6 rounded-xl surface p-5">
       <h3 className="text-[10px] uppercase tracking-widest text-slate-400">
         Weekly Trend
       </h3>
