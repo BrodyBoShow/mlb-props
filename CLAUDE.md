@@ -4165,6 +4165,17 @@ Prop-UI upgrade batch 2 — Board table view (this session, SHIPPED 3d5858d):
   expandable detail (EdgeDetail Fair/Book, ConfidenceBar, TrendRow, OppContextLine)
   + "all <prop> ->" jump to the focused view. tsc clean; build passes (/ 18.3 kB);
   dev SSR renders the toggle (HTTP 200, no errors).
+- MAIN-LINE FLOOR fix (SHIPPED 1f540a2, after the user flagged alt-line junk in
+  the Board screenshots): evalRow now also requires the prop's MIN_LINE floor for
+  qualifiesEdge — so an edge counts as STRUCTURAL (colored, sorts to top, passes
+  "Edges only", drives best-play/hitters-with-edges) only when it's a REAL
+  two-sided book AND on the main line. Killed the TB 0.5 alt-line "+0.39 edges"
+  and the noisy non-betting props (earned_runs/walks/raw hits/runs/rbis/HR — all
+  absent from MIN_LINE) from reading as hot edges. The number still shows MUTED
+  (chip + table Edge cell) so nothing is hidden. prop threaded into evalRow (5
+  call sites). Applied in the SHARED classifier so the Board AND the Games-view
+  best-plays/sort are fixed together. Frontend-only; tsc clean; build passes.
+  (Note: qualifiesConsensus is now set-but-unread — harmless; prune later.)
 - REMAINING this thread: (a) player detail DRAWER — full side panel with deep
   data: last-10 game log, book-by-book lines (per-book lines are already fetched
   for the sharp badge -> sharpByKey; thread them in), matchup/park/weather,
