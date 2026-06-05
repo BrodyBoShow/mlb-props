@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import DateNav from "./DateNav";
 import FeaturedPlays from "./FeaturedPlays";
 import ParkTag from "./ParkTag";
@@ -1573,6 +1573,306 @@ function GameCard({
   );
 }
 
+// ── Board view: dense sortable table of every lined prop ─────────────────────
+type BoardSortCol = "edge" | "model" | "proj" | "line" | "l10" | "player";
+
+function l10Tone(pct: number): string {
+  return pct >= 60 ? "text-emerald-400" : pct <= 40 ? "text-red-400" : "text-slate-300";
+}
+
+// The Edge column cell — real-book edge (colored signed), consensus (muted
+// number), DFS lean (muted arrow), or — . Mirrors the chip's edge tiering.
+function edgeCell(ev: ReturnType<typeof evalRow>): JSX.Element {
+  if (ev.qualifiesEdge && ev.edge !== undefined) {
+    const s = `${ev.edge >= 0 ? "+" : "−"}${Math.abs(ev.edge).toFixed(2)}`;
+    return (
+      <span className={ev.direction === "over" ? "text-emerald-400" : "text-red-400"}>
+        {ev.direction === "over" ? "▲" : "▼"}
+        {s}
+      </span>
+    );
+  }
+  if (ev.qualifiesConsensus && ev.edge !== undefined) {
+    return (
+      <span className="text-slate-500">
+        {`${ev.edge >= 0 ? "+" : "−"}${Math.abs(ev.edge).toFixed(2)}`}
+      </span>
+    );
+  }
+  if (ev.qualifiesLean) {
+    return (
+      <span className="text-slate-500">
+        {ev.direction === "over" ? "▲" : ev.direction === "under" ? "▼" : ""}
+      </span>
+    );
+  }
+  return <span className="text-slate-600">—</span>;
+}
+
+function BoardTable({
+  games,
+  liveStatus,
+  liveStats,
+  firstInningStats,
+  query,
+  onFocus,
+}: {
+  games: GameView[];
+  liveStatus: Map<number, GameStatus>;
+  liveStats: Map<number, Map<number, StatLine>>;
+  firstInningStats: FirstInningMap;
+  query: string;
+  onFocus: (p: PropType) => void;
+}) {
+  const [sortCol, setSortCol] = useState<BoardSortCol>("edge");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [edgesOnly, setEdgesOnly] = useState(false);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+
+  const q = query.trim().toLowerCase();
+
+  type Entry = {
+    gv: GameView;
+    player: PlayerRow;
+    prop: PropType;
+    row: Pitcher;
+    status: GameStatus | undefined;
+    ev: ReturnType<typeof evalRow>;
+  };
+  const entries: Entry[] = [];
+  for (const gv of games) {
+    const matchupHit = q ? gv.matchup.toLowerCase().includes(q) : false;
+    const status = liveStatus.get(gv.game_id);
+    const consider = (player: PlayerRow, keys: PropType[]) => {
+      if (q && !matchupHit && !player.name.toLowerCase().includes(q)) return;
+      for (const prop of keys) {
+        const row = player.props[prop];
+        if (!row || row.line === undefined) continue;
+        entries.push({ gv, player, prop, row, status, ev: evalRow(row) });
+      }
+    };
+    for (const pl of gv.pitchers) consider(pl, PITCHER_PROP_KEYS);
+    for (const pl of gv.hitters) consider(pl, HITTER_PROP_KEYS);
+  }
+
+  const filtered = edgesOnly ? entries.filter((e) => e.ev.qualifiesEdge) : entries;
+
+  const sortVal = (e: Entry): number => {
+    switch (sortCol) {
+      case "proj":
+        return e.row.projection;
+      case "line":
+        return e.row.line ?? 0;
+      case "l10":
+        return e.row.trends?.l10?.pct ?? -1;
+      case "model":
+        return e.row.modelOverProb ?? -1;
+      case "edge":
+      default:
+        return e.ev.qualifiesEdge ? e.ev.magnitude : -1;
+    }
+  };
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortCol === "player") {
+      const c = a.player.name.localeCompare(b.player.name);
+      return sortDir === "asc" ? c : -c;
+    }
+    const d = sortVal(a) - sortVal(b);
+    return sortDir === "asc" ? d : -d;
+  });
+
+  const setSort = (col: BoardSortCol) => {
+    if (col === sortCol) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortCol(col);
+      // text/low-is-natural columns default ascending; value columns descending.
+      setSortDir(col === "player" ? "asc" : "desc");
+    }
+  };
+
+  const Th = ({
+    col,
+    label,
+    align = "left",
+  }: {
+    col?: BoardSortCol;
+    label: string;
+    align?: "left" | "right";
+  }) => (
+    <th
+      onClick={col ? () => setSort(col) : undefined}
+      className={[
+        "whitespace-nowrap px-2 py-2 font-medium",
+        align === "right" ? "text-right" : "text-left",
+        col ? "cursor-pointer select-none hover:text-slate-200" : "",
+      ].join(" ")}
+    >
+      {label}
+      {col && sortCol === col ? (sortDir === "desc" ? " ↓" : " ↑") : ""}
+    </th>
+  );
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-xs text-slate-500">
+          {sorted.length} lined prop{sorted.length === 1 ? "" : "s"} · tap a row for detail
+        </p>
+        <button
+          type="button"
+          onClick={() => setEdgesOnly((v) => !v)}
+          className={[
+            "shrink-0 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+            edgesOnly
+              ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
+              : "border-slate-700 text-slate-300 hover:bg-slate-800",
+          ].join(" ")}
+        >
+          Edges only
+        </button>
+      </div>
+
+      {sorted.length === 0 ? (
+        <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-8 text-center text-slate-400">
+          No lined props{" "}
+          {q ? `match “${query.trim()}”` : edgesOnly ? "with a qualifying edge" : "yet"}.
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="min-w-full text-xs tabular-nums">
+            <thead className="bg-slate-900 text-slate-500">
+              <tr>
+                <Th col="player" label="Player" />
+                <Th label="Prop" />
+                <Th col="line" label="Line" align="right" />
+                <Th col="proj" label="Proj" align="right" />
+                <Th col="edge" label="Edge" align="right" />
+                <Th col="model" label="Model/Mkt" align="right" />
+                <Th col="l10" label="L10" align="right" />
+                <Th label="Sharp" />
+                <Th label="Result" align="right" />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((e) => {
+                const key = `${e.player.player_id}|${e.prop}`;
+                const isOpen = openKey === key;
+                const showActual =
+                  e.status?.state === "live" || e.status?.state === "final";
+                const actual = showActual
+                  ? liveActualFor(
+                      e.prop,
+                      liveStats.get(e.gv.game_id)?.get(e.player.player_id),
+                      e.status?.state === "final",
+                      firstInningStats.get(e.gv.game_id),
+                      e.player.player_id,
+                    )
+                  : undefined;
+                const locked = actualLocked(e.prop, e.status);
+                const grade =
+                  actual !== undefined && e.row.line !== undefined
+                    ? gradeLean(e.row.projection, e.row.line, actual, locked)
+                    : "none";
+                const model = e.row.modelOverProb;
+                const fair = e.row.fairOverProb;
+                return (
+                  <Fragment key={key}>
+                    <tr
+                      onClick={() => setOpenKey((p) => (p === key ? null : key))}
+                      className={[
+                        "cursor-pointer border-t border-slate-800/70 hover:bg-slate-900/60",
+                        isOpen ? "bg-slate-900/60" : "",
+                      ].join(" ")}
+                    >
+                      <td className="max-w-[150px] truncate px-2 py-1.5 text-slate-100">
+                        {e.player.name}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-slate-400">
+                        {PROP_META[e.prop].short}
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-slate-300">
+                        {fmt(e.row.line as number)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-slate-100">
+                        {fmt(e.row.projection)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">{edgeCell(e.ev)}</td>
+                      <td className="px-2 py-1.5 text-right text-slate-400">
+                        {model !== undefined && fair !== undefined
+                          ? `${Math.round(model * 100)}/${Math.round(fair * 100)}`
+                          : "—"}
+                      </td>
+                      <td
+                        className={[
+                          "px-2 py-1.5 text-right",
+                          e.row.trends?.l10 ? l10Tone(e.row.trends.l10.pct) : "text-slate-600",
+                        ].join(" ")}
+                      >
+                        {e.row.trends?.l10
+                          ? `${e.row.trends.l10.over}/${e.row.trends.l10.total}`
+                          : "—"}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <SharpBadge sharp={e.row.sharpAgreement} />
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-right">
+                        {actual !== undefined ? (
+                          <span className={gradeTextColor(grade)}>
+                            {fmt(actual)}
+                            {grade === "win" ? " ✓" : grade === "loss" ? " ✗" : ""}
+                          </span>
+                        ) : (
+                          <span className="text-slate-600">
+                            {e.status?.state === "live"
+                              ? "live"
+                              : e.status?.state === "final"
+                                ? "final"
+                                : "—"}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="border-t border-slate-800/70 bg-slate-950/40">
+                        <td colSpan={9} className="px-4 py-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="mb-1 text-[11px] text-slate-500">
+                                {e.gv.matchup} · {PROP_META[e.prop].label}
+                              </div>
+                              <EdgeDetail pitcher={e.row} actual={actual} isFinal={locked} />
+                              <ConfidenceBar confidence={e.row.confidence} />
+                              <TrendRow trends={e.row.trends} />
+                              {e.prop === "strikeouts" && (
+                                <OppContextLine kRate={e.row.oppContext?.kRate} />
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                onFocus(e.prop);
+                              }}
+                              className="shrink-0 text-[11px] text-slate-500 transition-colors hover:text-slate-300"
+                            >
+                              all {PROP_META[e.prop].short} →
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── component ─────────────────────────────────────────────────────────────────
 
 export default function PropBoard({
@@ -1614,6 +1914,8 @@ export default function PropBoard({
   // Slate toolbar: free-text search (player or team) + sort mode.
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<"time" | "edge" | "count">("time");
+  // View: game cards (default) or the dense sortable Board table.
+  const [view, setView] = useState<"games" | "board">("games");
 
   // Poll the MLB Stats API for live game status + box scores (unchanged).
   const liveStatus = useLiveGameStatus(date);
@@ -1698,17 +2000,36 @@ export default function PropBoard({
       {/* featured plays — three ranked sections with AI insights */}
       <FeaturedPlays sections={featuredSections} />
 
-      {/* prop FILTER — "All props" (game-first matrix) or focus a single prop */}
-      <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
-        <button onClick={() => selectFocus("all")} className={chipCls(focus === "all")}>
-          All props
-        </button>
-        {PROPS.map((p) => (
-          <button key={p.key} onClick={() => selectFocus(p.key)} className={chipCls(focus === p.key)}>
-            {p.label}
+      {/* view toggle — game cards vs the dense Board table */}
+      <div className="mb-3 inline-flex rounded-lg border border-slate-700 p-0.5">
+        {(["games", "board"] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setView(v)}
+            className={[
+              "rounded-md px-3 py-1 text-sm font-medium transition-colors",
+              view === v ? "bg-slate-700 text-slate-100" : "text-slate-400 hover:text-slate-200",
+            ].join(" ")}
+          >
+            {v === "games" ? "Games" : "Board"}
           </button>
         ))}
       </div>
+
+      {/* prop FILTER — "All props" (game-first matrix) or focus a single prop */}
+      {view === "games" && (
+        <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+          <button onClick={() => selectFocus("all")} className={chipCls(focus === "all")}>
+            All props
+          </button>
+          {PROPS.map((p) => (
+            <button key={p.key} onClick={() => selectFocus(p.key)} className={chipCls(focus === p.key)}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* slate toolbar — search · sort · today's model record */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1732,30 +2053,32 @@ export default function PropBoard({
           )}
         </div>
 
-        <div className="flex items-center gap-1 text-sm">
-          <span className="mr-0.5 text-slate-500">Sort</span>
-          {(
-            [
-              ["time", "Time"],
-              ["edge", "Best edge"],
-              ["count", "Most edges"],
-            ] as const
-          ).map(([k, label]) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setSortMode(k)}
-              className={[
-                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                sortMode === k
-                  ? "bg-slate-700 text-slate-100"
-                  : "text-slate-400 hover:bg-slate-800 hover:text-slate-200",
-              ].join(" ")}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {view === "games" && (
+          <div className="flex items-center gap-1 text-sm">
+            <span className="mr-0.5 text-slate-500">Sort</span>
+            {(
+              [
+                ["time", "Time"],
+                ["edge", "Best edge"],
+                ["count", "Most edges"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setSortMode(k)}
+                className={[
+                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                  sortMode === k
+                    ? "bg-slate-700 text-slate-100"
+                    : "text-slate-400 hover:bg-slate-800 hover:text-slate-200",
+                ].join(" ")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {slateRecord &&
           (() => {
@@ -1778,6 +2101,22 @@ export default function PropBoard({
           })()}
       </div>
 
+      {view === "board" && (
+        <BoardTable
+          games={games}
+          liveStatus={liveStatus}
+          liveStats={liveStats}
+          firstInningStats={firstInningStats}
+          query={q}
+          onFocus={(p) => {
+            setView("games");
+            selectFocus(p);
+          }}
+        />
+      )}
+
+      {view === "games" && (
+        <>
       {/* legend */}
       <p className="mb-6 text-xs leading-relaxed text-slate-500">
         {focus === "all" ? (
@@ -1850,6 +2189,8 @@ export default function PropBoard({
               />
             ))}
           </div>
+        </>
+      )}
         </>
       )}
     </>
