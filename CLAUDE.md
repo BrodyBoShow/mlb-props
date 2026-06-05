@@ -4202,8 +4202,44 @@ Prop-UI upgrade batch 3 — wider layout + player drawer (this session, f152c23)
   * (Game-view player-name -> drawer is a future add; V1 is Board-row -> drawer.)
   Frontend-only; engine/FEATURE_COLS (11) untouched. tsc clean; build passes.
 - STATUS of the user's 3 picks: Board table [DONE 3d5858d], player drawer [DONE
-  f152c23], line-movement [STILL PENDING — needs the engine clean-opening-main-
-  line fix; see the line_opens finding above].
+  f152c23], line-movement [ENGINE FOUNDATION DONE 00b8982; visible tag pending
+  clean opens — see below].
+
+Deterministic main-line selection — line-movement foundation (this session, 00b8982):
+- Fixed the ROOT cause of the line-movement blocker AND a latent edge/results bug:
+  the per-(player,prop,book,day) dedup in lines.py kept the FIRST ParlayAPI row,
+  but rung order isn't stable across crons, so the stored line jumped between the
+  main and alt rungs run-to-run — corrupting edges, /results grading, and making
+  open->close movement an alt-vs-main artifact.
+- FIX (engine/lines.py): new _price_balance(row) = |implied(over) - implied(under)|
+  from the American prices. The dedup now keeps the rung with the LOWEST balance
+  (most balanced two-sided juice = the main market line, set near the projected
+  median); alt rungs are off-median with skewed prices. Order-STABLE. Rows without
+  prices keep first-seen (DFS books post one rung); fantasy props still overridden
+  by PrizePicks-direct downstream. Unit-tested: -110/-110 -> 0.0, skewed alts
+  higher; dedup picks the main 5.5 over 4.5/6.5 alts regardless of input order.
+- Since record_line_opens is fed the SAME deduped rows, both the opening snapshot
+  and the current line now use the stable main rung -> open vs close is like-for-
+  like (the prerequisite for an honest movement tag). Net edge-quality win too:
+  edges de-vig a real main line, not a random rung. Row COUNT per key unchanged
+  (one per key) so edge COVERAGE is unaffected — only the line VALUE improves.
+- WHY THE VISIBLE TAG IS HELD: today's line_opens were already captured this
+  morning with the OLD random-first dedup (keep-first freezes them), so movement
+  computed today = dirty-open vs clean-close = garbage. CLEAN opens start with
+  TOMORROW's first cron (new dedup). So the frontend open->close tag lands after
+  ~1 day of clean opening data — never showing a fake move (honesty-first). The
+  engine fix delivers the edge-quality improvement immediately regardless.
+- VALIDATION: unit test (logic) passed; py_compile + ruff F clean. The pipeline-
+  level check is the next cron: edge COUNT should hold (count is per-key, only the
+  line value changes); watch the Actions log. Revert is isolated (the dedup block)
+  if edges regress.
+
+In-progress (this session): launched a multi-agent RESEARCH WORKFLOW
+(props-growth-research) on retention + UX + discovery + trust + hit-rate
+CALIBRATION -> a prioritized growth + calibration roadmap. First attempt failed
+(general-purpose agents doing web research didn't emit the StructuredOutput
+schema); redesigned so research agents return TEXT and only the single synthesis
+agent produces the schema (robust). Roadmap pending; act on it when it returns.
 - BIGGER-VISION ROADMAP (sequenced): (1) line-movement engine fix + tag [PENDING];
   (2) Board table view [DONE 3d5858d]; (3) player drawer [DONE f152c23];
   (4) best-available-line shopping (partly in the drawer's book-by-book now;
