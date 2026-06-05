@@ -4103,6 +4103,55 @@ PrizePicks-direct proxy retry — fixes intermittent 403 (this session):
   clean; npm run build passes (/ 15.6 kB). Committed + pushed (06cc621).
   Frontend-only; no engine, no schema, FEATURE_COLS still 11.
 
+Prop-UI upgrade batch 1 — slate toolbar + scorecard (this session):
+- USER confirmed 4 UI features (line-movement, live hit-rate scorecard, player
+  search, sort-by-edge) + gave a broader "clean analytics terminal" vision (sticky
+  toolbar, 3 views Featured/Board/Games, dense sortable table, expandable player
+  drawers, best-line shopping, freshness badges). Sequencing the big vision as
+  focused follow-ups rather than a board rewrite; built batch 1 now.
+- web/app/PropBoard.tsx (frontend-only; engine/FEATURE_COLS=11 untouched):
+  * SEARCH box (player or team): filters the slate to matching games, narrows each
+    game to the matching players (jump-to-player) and force-expands them; team-only
+    match shows the whole game; × clears. Threaded `query` into GameCard (new
+    `open = expanded || isSearching`; pitchersShown/hittersAll narrowed by name).
+  * SORT selector: Time (default chronological) · Best edge · Most edges. Added
+    GameSummary.topMagnitude (strongest qualifying |edge| per game) for the edge
+    sort; replaced the old `ordered` useMemo with an inline sort on `decorated`.
+  * "Model today" SCORECARD chip: live W/total + hit% across FINISHED games,
+    graded by the same gradeLean the chips use (computeSlateRecord aggregates
+    per-prop win/loss over final games; pushes/no-lean excluded; hidden until
+    something grades; emerald>=55 / amber 45-55 / red<45).
+  * Verified: tsc --noEmit clean; npm run build passes (/ 16.6 kB); dev-server SSR
+    renders the toolbar (HTTP 200, search + sort present, no render errors).
+    Committed + pushed (58992b8).
+- LINE-MOVEMENT (4th feature) — NOT BUILT, deferred on a data-quality finding:
+  line_opens IS populated (14.4k rows, capturing daily; RLS fix applied) BUT the
+  open-vs-current "movement" is DOMINATED by alt-vs-main RUNG conflation, not real
+  money. Live probe (2026-06-04): 525 "moved" props, but the moves are artifacts —
+  Chris Sale strikeouts 7.5->1.5, Imanaga hits_allowed 5.5->0.5, hitter "moves"
+  almost all 0.5->1.5; only a handful look genuine (outs 17.5->16.5, Lugo 1st-inn
+  pitches 14.5->15.0). ROOT CAUSE (engine): record_line_opens keep-firsts whatever
+  rung that run's "first row = main line" heuristic picked, and ParlayAPI's row
+  ORDER isn't stable across crons, so the opening rung often differs from the
+  closing main line -> fake movement. Showing this as "line moved" would violate
+  the project's honesty principle. FIX NEEDED FIRST (engine): capture a clean
+  OPENING MAIN line (gate record_line_opens to the main market — MAIN_LINE_VALUE
+  for pinned props + a deterministic main-line pick for the rest, same idea as the
+  /results lineQualifies), so open and current are like-for-like. THEN build the
+  frontend movement tag. Deferred until that lands.
+  * SIDE FINDING (flagged, not chased): "Manny Machado strikeouts 0.5->1.5" — a
+    HITTER carrying a pitcher `strikeouts` line suggests ParlayAPI's
+    player_strikeouts (batter Ks) is being mapped to our pitcher strikeouts
+    prop_type for hitters. Likely harmless on the board/edges (a hitter has no
+    strikeouts projection to join) but worth verifying it doesn't pollute
+    strikeouts lines/results. Investigate separately.
+- BIGGER-VISION ROADMAP (sequenced, not yet built): (1) line-movement engine fix
+  + tag; (2) Board table view (dense sortable) as a 3rd view alongside Featured/
+  game-cards; (3) expandable player drawer (deep data: game log, book-by-book
+  lines, matchup/park/weather, projection history); (4) best-available-line
+  shopping (per-book lines already in the `lines` table); (5) freshness/confidence
+  badges + mobile bottom-sheet filters. Build as focused increments, verify each.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains
