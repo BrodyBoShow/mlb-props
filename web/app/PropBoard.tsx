@@ -25,7 +25,7 @@ import type {
   Trends,
   TrendWindow,
 } from "@/lib/types";
-import { EDGE_THRESHOLD, HITTER_PROPS, REAL_BOOKS } from "@/lib/constants";
+import { EDGE_THRESHOLD, HITTER_PROPS, MIN_LINE, REAL_BOOKS } from "@/lib/constants";
 import { fmt, formatShortDate } from "@/lib/format";
 import {
   hitterFantasyScore,
@@ -675,7 +675,7 @@ type RowEval = {
   qualifiesConsensus: boolean; // consensus edge over threshold — chip number only (muted)
   qualifiesLean: boolean; // DFS lean over threshold — chip arrow only
 };
-function evalRow(row: Pitcher): RowEval {
+function evalRow(row: Pitcher, prop: PropType): RowEval {
   if (row.line === undefined) {
     return {
       hasLine: false,
@@ -692,6 +692,13 @@ function evalRow(row: Pitcher): RowEval {
     const mag = Math.abs(row.edge);
     const isRealBook = !!row.bookmaker && REAL_BOOKS.includes(row.bookmaker);
     const overThresh = mag > EDGE_THRESHOLD;
+    // A real edge must also be on the prop's MAIN market line — the same floor
+    // /results + Featured Plays use — so low-value alt lines (e.g. a 0.5
+    // total-bases alt) and the noisy non-betting props (earned_runs/walks, which
+    // aren't in MIN_LINE) never show as hot edges or top the sort. The number is
+    // still shown MUTED below; it just doesn't count as a structural edge.
+    const floor = MIN_LINE[prop];
+    const meetsFloor = floor !== undefined && (row.line as number) >= floor;
     return {
       hasLine: true,
       isEdge: true,
@@ -699,7 +706,7 @@ function evalRow(row: Pitcher): RowEval {
       edge: row.edge,
       magnitude: mag,
       direction: row.edge > EDGE_THRESHOLD ? "over" : row.edge < -EDGE_THRESHOLD ? "under" : "even",
-      qualifiesEdge: overThresh && isRealBook,
+      qualifiesEdge: overThresh && isRealBook && meetsFloor,
       qualifiesConsensus: overThresh && !isRealBook,
       qualifiesLean: false,
     };
@@ -721,7 +728,7 @@ function evalRow(row: Pitcher): RowEval {
 function playerHasEdge(pl: PlayerRow): boolean {
   return PROPS.some((p) => {
     const r = pl.props[p.key];
-    return !!r && evalRow(r).qualifiesEdge;
+    return !!r && evalRow(r, p.key).qualifiesEdge;
   });
 }
 
@@ -730,7 +737,7 @@ function playerBestMag(pl: PlayerRow): number {
   for (const p of PROPS) {
     const r = pl.props[p.key];
     if (r) {
-      const e = evalRow(r);
+      const e = evalRow(r, p.key);
       if (e.qualifiesEdge && e.magnitude > m) m = e.magnitude;
     }
   }
@@ -813,7 +820,7 @@ function summarizeGameView(gv: GameView, focus: PropType | "all"): GameSummary {
   const consider = (prop: PropType, row: Pitcher) => {
     if (row.line === undefined) return;
     hasAnyLine = true;
-    const e = evalRow(row);
+    const e = evalRow(row, prop);
     if (e.qualifiesEdge) {
       qualifyingCount += 1;
       if (e.magnitude > bestMag) {
@@ -997,7 +1004,7 @@ function PropChip({
   onTap: () => void;
 }) {
   const meta = PROP_META[prop];
-  const e = evalRow(row);
+  const e = evalRow(row, prop);
   const hasLine = row.line !== undefined;
 
   let valueText: string;
@@ -1018,8 +1025,10 @@ function PropChip({
         trailing = <span className="text-red-400">▼{signed}</span>;
         tint = "border-red-500/40 bg-red-500/10";
       }
-    } else if (e.qualifiesConsensus && e.edge !== undefined) {
-      // Consensus (synthetic-line) edge — number but MUTED, no tint.
+    } else if (e.edge !== undefined) {
+      // A de-vigged edge that doesn't structurally qualify — consensus line OR a
+      // real-book edge below the prop's main-line floor (e.g. a 0.5 TB alt).
+      // Shown as a number but MUTED, no tint, so it never reads as a hot edge.
       const signed = `${e.edge >= 0 ? "+" : "−"}${Math.abs(e.edge).toFixed(2)}`;
       trailing = (
         <span className="text-slate-400">
@@ -1592,7 +1601,9 @@ function edgeCell(ev: ReturnType<typeof evalRow>): JSX.Element {
       </span>
     );
   }
-  if (ev.qualifiesConsensus && ev.edge !== undefined) {
+  if (ev.edge !== undefined) {
+    // Non-qualifying edge (consensus, or real-book below the main-line floor) —
+    // number shown muted so it never reads as a hot edge.
     return (
       <span className="text-slate-500">
         {`${ev.edge >= 0 ? "+" : "−"}${Math.abs(ev.edge).toFixed(2)}`}
@@ -1648,7 +1659,7 @@ function BoardTable({
       for (const prop of keys) {
         const row = player.props[prop];
         if (!row || row.line === undefined) continue;
-        entries.push({ gv, player, prop, row, status, ev: evalRow(row) });
+        entries.push({ gv, player, prop, row, status, ev: evalRow(row, prop) });
       }
     };
     for (const pl of gv.pitchers) consider(pl, PITCHER_PROP_KEYS);
