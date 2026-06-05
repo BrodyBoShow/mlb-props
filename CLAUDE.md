@@ -3183,6 +3183,23 @@ Self-healing misdated-projection guard — no manual cleanup ever (this session)
 - VERIFIED: py_compile clean (db, main); standalone run removed 0 (June 3
   already clean, nothing else misdated) — confirms it doesn't touch correct rows
   and runs without error. Engine-only; takes effect next cron run.
+- *** DISABLED 2026-06-05 (bcb75ae) — IT WAS WIPING THE LIVE SLATE. *** The
+  self-heal turned into a FALSE-POSITIVE machine: on 2026-06-05 it logged
+  "self-heal: removed 1287 misdated projection rows across 1 wrong-date group(s)"
+  and deleted the ENTIRE freshly-built June-5 slate, leaving projections=0 and the
+  frontend stuck on the future-slate ("projections not yet available") view all
+  day. VERIFIED it was a false positive: fetch_starters_for_date('2026-06-05')
+  returns 15 distinct game_ids, ALL of which compute to ET date 2026-06-05 from
+  games.start_time (tz-aware +00:00 ISO) — so the June-5 projections were
+  correctly dated and should NOT have been deleted. The original misdating bug is
+  fixed at the SOURCE (builders + main.py use et_today(), never date.today()), so
+  the guard is redundant anyway. FIX: commented out the db.cleanup_misdated_
+  projections() call in main.py (function kept in db.py). Re-triggered a build ->
+  June 5 persisted (1209 projections, latest projection_date now June 5). ROOT
+  CAUSE of the false positive is STILL OPEN — the runtime ET-date computation in
+  CI evidently disagreed with the offline check (games table changed mid-run?
+  hitter fill-in mapping a team to a late ET-June-4 game? game_id mismatch?). DO
+  NOT re-enable until understood; the et_today() source fix is the real guard.
 
 New prop: hitter_hits_runs_rbis (H+R+RBI combo) end-to-end (this session):
 - Added a full new prop type mirroring hitter_total_bases across EVERY layer.
