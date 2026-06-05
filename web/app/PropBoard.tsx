@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import DateNav from "./DateNav";
 import FeaturedPlays from "./FeaturedPlays";
 import ParkTag from "./ParkTag";
@@ -25,7 +25,7 @@ import type {
   Trends,
   TrendWindow,
 } from "@/lib/types";
-import { EDGE_THRESHOLD, HITTER_PROPS, MIN_LINE, REAL_BOOKS } from "@/lib/constants";
+import { BOOK_DISPLAY, EDGE_THRESHOLD, HITTER_PROPS, MIN_LINE, REAL_BOOKS } from "@/lib/constants";
 import { fmt, formatShortDate } from "@/lib/format";
 import {
   hitterFantasyScore,
@@ -1626,19 +1626,18 @@ function BoardTable({
   liveStats,
   firstInningStats,
   query,
-  onFocus,
+  onOpenDrawer,
 }: {
   games: GameView[];
   liveStatus: Map<number, GameStatus>;
   liveStats: Map<number, Map<number, StatLine>>;
   firstInningStats: FirstInningMap;
   query: string;
-  onFocus: (p: PropType) => void;
+  onOpenDrawer: (t: DrawerTarget) => void;
 }) {
   const [sortCol, setSortCol] = useState<BoardSortCol>("edge");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [edgesOnly, setEdgesOnly] = useState(false);
-  const [openKey, setOpenKey] = useState<string | null>(null);
 
   const q = query.trim().toLowerCase();
 
@@ -1768,7 +1767,6 @@ function BoardTable({
             <tbody>
               {sorted.map((e) => {
                 const key = `${e.player.player_id}|${e.prop}`;
-                const isOpen = openKey === key;
                 const showActual =
                   e.status?.state === "live" || e.status?.state === "final";
                 const actual = showActual
@@ -1788,14 +1786,21 @@ function BoardTable({
                 const model = e.row.modelOverProb;
                 const fair = e.row.fairOverProb;
                 return (
-                  <Fragment key={key}>
-                    <tr
-                      onClick={() => setOpenKey((p) => (p === key ? null : key))}
-                      className={[
-                        "cursor-pointer border-t border-slate-800/70 hover:bg-slate-900/60",
-                        isOpen ? "bg-slate-900/60" : "",
-                      ].join(" ")}
-                    >
+                  <tr
+                    key={key}
+                    onClick={() =>
+                      onOpenDrawer({
+                        player: e.player,
+                        prop: e.prop,
+                        row: e.row,
+                        gv: e.gv,
+                        status: e.status,
+                        liveActual: actual,
+                        locked,
+                      })
+                    }
+                    className="cursor-pointer border-t border-slate-800/70 hover:bg-slate-900/60"
+                  >
                       <td className="max-w-[150px] truncate px-2 py-1.5 text-slate-100">
                         {e.player.name}
                       </td>
@@ -1843,43 +1848,326 @@ function BoardTable({
                           </span>
                         )}
                       </td>
-                    </tr>
-                    {isOpen && (
-                      <tr className="border-t border-slate-800/70 bg-slate-950/40">
-                        <td colSpan={9} className="px-4 py-3">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="mb-1 text-[11px] text-slate-500">
-                                {e.gv.matchup} · {PROP_META[e.prop].label}
-                              </div>
-                              <EdgeDetail pitcher={e.row} actual={actual} isFinal={locked} />
-                              <ConfidenceBar confidence={e.row.confidence} />
-                              <TrendRow trends={e.row.trends} />
-                              {e.prop === "strikeouts" && (
-                                <OppContextLine kRate={e.row.oppContext?.kRate} />
-                              )}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={(ev) => {
-                                ev.stopPropagation();
-                                onFocus(e.prop);
-                              }}
-                              className="shrink-0 text-[11px] text-slate-500 transition-colors hover:text-slate-300"
-                            >
-                              all {PROP_META[e.prop].short} →
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
+                  </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Player detail drawer (deep-dive side panel) ──────────────────────────────
+// player_game_logs column carrying each prop's graded actual (for the L10 log).
+const DRAWER_ACTUAL_COL: Partial<Record<PropType, string>> = {
+  strikeouts: "actual_strikeouts",
+  hits_allowed: "actual_hits_allowed",
+  walks: "actual_walks",
+  earned_runs: "actual_earned_runs",
+  outs_recorded: "actual_outs_recorded",
+  pitcher_first_inning_pitches: "actual_first_inning_pitches",
+  pitcher_first_inning_strikeouts: "actual_first_inning_strikeouts",
+  pitcher_fantasy_score: "actual_pitcher_fantasy_score",
+  hitter_hits: "actual_hits",
+  hitter_total_bases: "actual_total_bases",
+  hitter_hits_runs_rbis: "actual_hits_runs_rbis",
+  hitter_rbis: "actual_rbis",
+  hitter_runs: "actual_runs",
+  hitter_home_runs: "actual_home_runs",
+  hitter_fantasy_score: "actual_hitter_fantasy_score",
+};
+
+type DrawerTarget = {
+  player: PlayerRow;
+  prop: PropType;
+  row: Pitcher;
+  gv: GameView;
+  status: GameStatus | undefined;
+  liveActual: number | undefined;
+  locked: boolean;
+};
+type BookLine = {
+  bookmaker: string;
+  line: number;
+  over_price: number | null;
+  under_price: number | null;
+};
+type LogGame = { date: string; actual: number };
+
+// Lightweight read-only PostgREST fetch (anon key) so the drawer's on-demand
+// queries don't pull the supabase-js client into the page bundle — mirrors the
+// raw-fetch pattern the live MLB hooks already use. Never throws.
+async function supaRest(pathAndQuery: string): Promise<Record<string, unknown>[]> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return [];
+  try {
+    const res = await fetch(`${url}/rest/v1/${pathAndQuery}`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    return (await res.json()) as Record<string, unknown>[];
+  } catch {
+    return [];
+  }
+}
+
+function PlayerDrawer({
+  target,
+  date,
+  onClose,
+}: {
+  target: DrawerTarget | null;
+  date: string;
+  onClose: () => void;
+}) {
+  const [books, setBooks] = useState<BookLine[]>([]);
+  const [log, setLog] = useState<LogGame[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const tkey = target
+    ? `${target.player.player_id}|${target.prop}|${target.gv.game_id}`
+    : null;
+
+  // On open, fetch the per-book lines + last-12 graded games for this player+prop
+  // straight from Supabase (read-only anon). Never throws — on any failure the
+  // drawer just shows the data it already has.
+  useEffect(() => {
+    if (!target) return;
+    let cancelled = false;
+    setBooks([]);
+    setLog([]);
+    setLoading(true);
+    const actualCol = DRAWER_ACTUAL_COL[target.prop];
+    const pid = target.player.player_id;
+    const propParam = encodeURIComponent(target.prop);
+    const gd = encodeURIComponent(date);
+    (async () => {
+      try {
+        const [lineRows, logRows] = await Promise.all([
+          supaRest(
+            `lines?select=bookmaker,line,over_price,under_price` +
+              `&player_id=eq.${pid}&prop_type=eq.${propParam}&game_date=eq.${gd}`,
+          ),
+          actualCol
+            ? supaRest(
+                `player_game_logs?select=game_date,${actualCol}` +
+                  `&player_id=eq.${pid}&${actualCol}=not.is.null` +
+                  `&order=game_date.desc&limit=12`,
+              )
+            : Promise.resolve([] as Record<string, unknown>[]),
+        ]);
+        if (cancelled) return;
+        const bl = (lineRows as unknown as BookLine[])
+          .filter((b) => b.line !== null && b.line !== undefined)
+          .sort((a, b) => a.line - b.line || a.bookmaker.localeCompare(b.bookmaker));
+        setBooks(bl);
+        const lg = logRows
+          .map((r) => ({ date: String(r.game_date), actual: Number(r[actualCol as string]) }))
+          .filter((r) => Number.isFinite(r.actual));
+        setLog(lg);
+      } catch {
+        /* read-only deep-dive; ignore failures */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tkey]);
+
+  // Close on Escape.
+  useEffect(() => {
+    if (!target) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [target, onClose]);
+
+  if (!target) return null;
+
+  const { player, prop, row, gv, liveActual, locked } = target;
+  const meta = PROP_META[prop];
+  const isHitter = HITTER_PROPS.has(prop);
+  const homeTeam = gv.matchup.includes(" @ ") ? gv.matchup.split(" @ ")[1] : "";
+  const line = row.line;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative h-full w-full max-w-md overflow-y-auto border-l border-slate-800 bg-slate-950 shadow-2xl"
+      >
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-slate-800 bg-slate-950/95 px-5 py-4 backdrop-blur">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="truncate text-base font-semibold text-slate-100">{player.name}</h3>
+              {!isHitter && <SharpBadge sharp={row.sharpAgreement} />}
+            </div>
+            <p className="mt-0.5 truncate text-xs text-slate-400">
+              {meta.label} · {gv.matchup}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="space-y-5 px-5 py-4">
+          {/* key numbers */}
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Line</div>
+              <div className="text-sm font-semibold tabular-nums text-slate-100">
+                {line !== undefined ? fmt(line) : "—"}
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Proj</div>
+              <div className="text-sm font-semibold tabular-nums text-slate-100">
+                {fmt(row.projection)}
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-900/50 py-2">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                {liveActual !== undefined ? "Actual" : "Edge"}
+              </div>
+              <div className="text-sm font-semibold tabular-nums">
+                {liveActual !== undefined ? (
+                  (() => {
+                    const g =
+                      line !== undefined
+                        ? gradeLean(row.projection, line, liveActual, locked)
+                        : "none";
+                    return (
+                      <span className={gradeTextColor(g)}>
+                        {fmt(liveActual)}
+                        {g === "win" ? " ✓" : g === "loss" ? " ✗" : ""}
+                      </span>
+                    );
+                  })()
+                ) : row.edge !== undefined ? (
+                  <span
+                    className={
+                      row.edge > EDGE_THRESHOLD
+                        ? "text-emerald-400"
+                        : row.edge < -EDGE_THRESHOLD
+                          ? "text-red-400"
+                          : "text-slate-300"
+                    }
+                  >
+                    {row.edge >= 0 ? "+" : "−"}
+                    {Math.abs(row.edge).toFixed(2)}
+                  </span>
+                ) : (
+                  <span className="text-slate-500">—</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* edge / result + context (reused leaf components) */}
+          <div>
+            <EdgeDetail pitcher={row} actual={liveActual} isFinal={locked} />
+            <ConfidenceBar confidence={row.confidence} />
+            <TrendRow trends={row.trends} />
+            {prop === "strikeouts" && <OppContextLine kRate={row.oppContext?.kRate} />}
+            {(prop === "hitter_total_bases" || prop === "hitter_home_runs") && (
+              <WindCardLine
+                homeTeam={homeTeam}
+                windSpeed={gv.windSpeed}
+                windDirDeg={gv.windDirDeg}
+                isDome={gv.isDome}
+              />
+            )}
+          </div>
+
+          {/* book-by-book lines (line shopping) */}
+          <div>
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              Sportsbook lines
+            </div>
+            {books.length === 0 ? (
+              <div className="text-xs text-slate-600">
+                {loading ? "Loading…" : "No book lines posted."}
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {books.map((b) => (
+                  <div
+                    key={b.bookmaker}
+                    className="flex items-center justify-between rounded-md border border-slate-800 bg-slate-900/40 px-3 py-1.5 text-xs tabular-nums"
+                  >
+                    <span className="text-slate-300">
+                      {BOOK_DISPLAY[b.bookmaker] ?? b.bookmaker}
+                    </span>
+                    <span className="flex items-center gap-3">
+                      <span className="font-medium text-slate-100">{fmt(b.line)}</span>
+                      <span className="text-slate-500">
+                        {b.over_price != null
+                          ? `o ${b.over_price > 0 ? "+" : ""}${b.over_price}`
+                          : ""}
+                        {b.under_price != null
+                          ? ` · u ${b.under_price > 0 ? "+" : ""}${b.under_price}`
+                          : ""}
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* L10 game log */}
+          <div>
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              Recent results {line !== undefined ? `vs ${fmt(line)}` : ""}
+            </div>
+            {log.length === 0 ? (
+              <div className="text-xs text-slate-600">
+                {loading ? "Loading…" : "No graded games yet."}
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {log.map((gm, i) => {
+                  const over = line !== undefined ? gm.actual > line : false;
+                  const under = line !== undefined ? gm.actual < line : false;
+                  const tone = over ? "text-emerald-400" : under ? "text-red-400" : "text-slate-300";
+                  return (
+                    <div
+                      key={`${gm.date}-${i}`}
+                      className="flex items-center justify-between rounded-md border border-slate-800/60 px-3 py-1 text-xs tabular-nums"
+                    >
+                      <span className="text-slate-500">{formatShortDate(gm.date)}</span>
+                      <span className={tone}>
+                        {fmt(gm.actual)} {meta.unit}
+                        {line !== undefined && (
+                          <span className="ml-1.5 text-slate-600">
+                            {over ? "O" : under ? "U" : "P"}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1927,6 +2215,8 @@ export default function PropBoard({
   const [sortMode, setSortMode] = useState<"time" | "edge" | "count">("time");
   // View: game cards (default) or the dense sortable Board table.
   const [view, setView] = useState<"games" | "board">("games");
+  // Player detail drawer (deep-dive side panel) — null when closed.
+  const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
 
   // Poll the MLB Stats API for live game status + box scores (unchanged).
   const liveStatus = useLiveGameStatus(date);
@@ -2119,10 +2409,7 @@ export default function PropBoard({
           liveStats={liveStats}
           firstInningStats={firstInningStats}
           query={q}
-          onFocus={(p) => {
-            setView("games");
-            selectFocus(p);
-          }}
+          onOpenDrawer={setDrawer}
         />
       )}
 
@@ -2204,6 +2491,8 @@ export default function PropBoard({
       )}
         </>
       )}
+
+      <PlayerDrawer target={drawer} date={date} onClose={() => setDrawer(null)} />
     </>
   );
 }

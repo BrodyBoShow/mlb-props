@@ -766,7 +766,7 @@ export default async function ResultsPage() {
   const hasAny = bettingResults.length + trackerResults.length > 0;
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
+    <main className="mx-auto max-w-7xl px-4 py-10">
       <header className="mb-8 flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Results</h1>

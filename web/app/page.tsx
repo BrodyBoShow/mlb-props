@@ -1245,7 +1245,7 @@ export default async function Home({
     Object.values(byProp).some((games) => games.length > 0);
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
+    <main className="mx-auto max-w-7xl px-4 py-10">
       {/* Soft-refreshes the server component on an interval (tab-aware) so a
           new cron run appears without a manual reload. Renders nothing. */}
       <AutoRefresh />
