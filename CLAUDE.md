@@ -4145,10 +4145,35 @@ Prop-UI upgrade batch 1 — slate toolbar + scorecard (this session):
     prop_type for hitters. Likely harmless on the board/edges (a hitter has no
     strikeouts projection to join) but worth verifying it doesn't pollute
     strikeouts lines/results. Investigate separately.
-- BIGGER-VISION ROADMAP (sequenced, not yet built): (1) line-movement engine fix
-  + tag; (2) Board table view (dense sortable) as a 3rd view alongside Featured/
-  game-cards; (3) expandable player drawer (deep data: game log, book-by-book
-  lines, matchup/park/weather, projection history); (4) best-available-line
+- USER picked 3 of 4 to build next: line-movement (done right), Board table view,
+  player detail drawer. Sequencing: frontend views first (zero engine risk), then
+  the line-movement engine fix.
+
+Prop-UI upgrade batch 2 — Board table view (this session, SHIPPED 3d5858d):
+- New "Board" view alongside the game-card "Games" view via a segmented toggle
+  (Games default). Featured Plays + the search/scorecard toolbar stay above both;
+  the prop-tab filter + the games Time/Edge/Most-edges sort show only in Games
+  (the table sorts by column header). web/app/PropBoard.tsx only; engine/
+  FEATURE_COLS (11) untouched.
+- BoardTable: flattens every LINED (player, prop) into one row — Player · Prop ·
+  Line · Proj · Edge · Model/Mkt% · L10 · Sharp · Result. Sortable columns (Edge
+  default desc; Proj/Line/L10/Model/Player). "Edges only" filter (qualifiesEdge).
+  Reuses the toolbar search. Edge cell mirrors the chip tiering; Model/Mkt =
+  modelOverProb/fairOverProb; L10 from trends; Sharp via SharpBadge; Result =
+  live/final actual + ✓/✗ via the same liveActualFor + gradeLean + actualLocked
+  the chips use (1st-inning props grade here too). Tap a row -> drawer-lite
+  expandable detail (EdgeDetail Fair/Book, ConfidenceBar, TrendRow, OppContextLine)
+  + "all <prop> ->" jump to the focused view. tsc clean; build passes (/ 18.3 kB);
+  dev SSR renders the toggle (HTTP 200, no errors).
+- REMAINING this thread: (a) player detail DRAWER — full side panel with deep
+  data: last-10 game log, book-by-book lines (per-book lines are already fetched
+  for the sharp badge -> sharpByKey; thread them in), matchup/park/weather,
+  projection history. The board table + game cards already have a "drawer-lite"
+  expandable detail, so the dedicated drawer adds the game log + per-book lines.
+  (b) line-movement engine fix (see above) + tag.
+- BIGGER-VISION ROADMAP (sequenced): (1) line-movement engine fix + tag; (2) Board
+  table view [DONE 3d5858d]; (3) expandable player drawer (deep data: game log,
+  book-by-book lines, matchup/park/weather, projection history); (4) best-available-line
   shopping (per-book lines already in the `lines` table); (5) freshness/confidence
   badges + mobile bottom-sheet filters. Build as focused increments, verify each.
 
