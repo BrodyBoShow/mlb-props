@@ -4234,12 +4234,46 @@ Deterministic main-line selection — line-movement foundation (this session, 00
   line value changes); watch the Actions log. Revert is isolated (the dedup block)
   if edges regress.
 
-In-progress (this session): launched a multi-agent RESEARCH WORKFLOW
-(props-growth-research) on retention + UX + discovery + trust + hit-rate
-CALIBRATION -> a prioritized growth + calibration roadmap. First attempt failed
-(general-purpose agents doing web research didn't emit the StructuredOutput
-schema); redesigned so research agents return TEXT and only the single synthesis
-agent produces the schema (robust). Roadmap pending; act on it when it returns.
+Growth research + edge CALIBRATION (this session):
+- USER asked for advanced research to raise retention + the hit rate (calibration)
+  + best UX for finding stats/edges. Launched a multi-agent research workflow
+  (props-growth-research) TWICE; both failed — root cause was API RATE-LIMITING of
+  the 7 parallel general-purpose research agents (each firing many web searches),
+  surfaced as "subagent completed without StructuredOutput". Did the research
+  MYSELF instead (own sequential web searches worked fine; the rate limit was the
+  agent swarm). Delivered a prioritized roadmap (in chat): calibration plan +
+  quick wins (watchlist/bet-tracker via localStorage, best-line column, daily
+  recap, PWA) + big bets (push alerts, deep-linking). User picked all 4 to build:
+  calibrate edges, watchlist+tracker, best-line column, mobile+PWA.
+- SHIPPED #1 (the hit-rate fix) — isotonic edge calibration (8e80d1c):
+  * MEASURED first (calibration scorecard, 3220 graded pairs): the model is
+    calibrated IN AGGREGATE (pooled pred 0.42 / act 0.42) but OVERCONFIDENT at the
+    extremes for several props — hitter_total_bases top bucket predicts 0.76 /
+    realizes 0.58; hitter_hits_runs_rbis 0.78 / 0.40. Those are the board's "fake
+    big edges". (Also found: earned_runs/strikeouts are PROJECTION-biased, a
+    separate fix calibration can't make; small-sample props are noisy.)
+  * PROVED the fix before shipping: 5-fold CV on the live pairs — isotonic LOWERS
+    out-of-sample Brier for every prop with enough data (TB -0.015, HRR -0.065,
+    hits/rbis/runs improve) and -0.009 pooled; thin props OVERFIT per-prop
+    (hits_allowed n=90 got WORSE). So: per-prop isotonic where n>=150, single
+    POOLED isotonic fallback otherwise.
+  * engine/calibrate_probs.py (new): fit_over_prob_calibrators() fits isotonic IN
+    the pipeline each full run from graded history (reuses calibration_scorecard.
+    gather(); no pickle — precompute/one-writer). Defensive: any failure -> None
+    -> edge.compute_edges uses raw probs (no regression). engine/edge.py:
+    compute_edges(calibrators=None) maps model_over_prob through the calibrator
+    before edge = calibrated - fair. main.py fits + passes them.
+  * Effect: TB 0.76 -> 0.607, HRR 0.78 -> 0.426 (kills that fake edge). Fewer but
+    TRUER edges -> higher realized hit rate. Stored model_over_prob (board Model%)
+    is now the calibrated value. FEATURE_COLS untouched (calibrates the EDGE layer,
+    not the projection model). Verified live (6 per-prop + pooled, 3220 pairs);
+    py_compile + ruff F clean.
+  * FOLLOW-UP: add a calibrated-Brier line to the scorecard for ongoing monitoring;
+    the projection BIAS on earned_runs (-0.16 under) / strikeouts needs a
+    projection fix (centering), not calibration.
+- REMAINING of the user's 4 picks (next sessions): watchlist + bet tracker
+  (localStorage, no auth), best-available-line column on the Board (per-book lines
+  already fetched for the drawer), mobile polish + PWA install.
 - BIGGER-VISION ROADMAP (sequenced): (1) line-movement engine fix + tag [PENDING];
   (2) Board table view [DONE 3d5858d]; (3) player drawer [DONE f152c23];
   (4) best-available-line shopping (partly in the drawer's book-by-book now;
