@@ -4286,6 +4286,25 @@ Growth research + edge CALIBRATION (this session):
   hitter has no strikeouts projection to join) but it inflates the strikeouts
   lines table. Fix = a separate hitter/pitcher market split in lines.py.
 
+Watchlist — star players + filter (this session, c5ce691):
+- The #1 daily-return retention feature, built WITHOUT accounts / DB writes
+  (localStorage = pure local user state; respects one-writer). web/app/
+  useWatchlist.ts (Set<player_id> hook: has/toggle/count/hydrated, SSR-safe).
+  PropBoard.tsx: WatchlistCtx + StarButton (☆/★, amber, stopsPropagation) shared
+  via context (no prop-threading). Stars next to the player name in the All-props
+  chip row, focused card, every Board-table row, and the drawer header. "★
+  Watchlist (N)" toolbar toggle filters BOTH views (Games via queried + GameCard
+  narrowing; Board via the table row filter), composes with search; only
+  restricts once hydrated && count>0 (wlActive) so an empty/SSR list never blanks
+  the board; amber hint banner when on with no stars. Frontend-only; FEATURE_COLS
+  untouched; tsc + build clean; SSR verified.
+- REMAINING of the user's 4 picks: (a) BET TRACKER — "track this play" (localStorage
+  list of {playerId,prop,line,side,date,name}) + a "My Plays" panel that auto-
+  grades vs the graded actuals (reuse the drawer's supaRest fetch + gradeLean;
+  pending until graded). Shares the localStorage pattern; the grading is the
+  careful part. (b) BEST-AVAILABLE-LINE column on the Board (per-book lines already
+  fetched for the drawer). (c) MOBILE polish + PWA install.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains
