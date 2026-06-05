@@ -2353,14 +2353,6 @@ export default function PropBoard({
     setOverrides(next);
   };
 
-  const chipCls = (activeChip: boolean) =>
-    [
-      "shrink-0 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
-      activeChip
-        ? "bg-emerald-500 text-slate-950"
-        : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100",
-    ].join(" ");
-
   return (
     <WatchlistCtx.Provider
       value={{ has: watchlist.has, toggle: watchlist.toggle, onlyWatched: wlActive }}
@@ -2388,17 +2380,35 @@ export default function PropBoard({
         ))}
       </div>
 
-      {/* prop FILTER — "All props" (game-first matrix) or focus a single prop */}
+      {/* prop focus — a compact grouped dropdown (replaces the overflowing tab
+          row). "All props" is the default game-first matrix; pick one to focus. */}
       {view === "games" && (
-        <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
-          <button onClick={() => selectFocus("all")} className={chipCls(focus === "all")}>
-            All props
-          </button>
-          {PROPS.map((p) => (
-            <button key={p.key} onClick={() => selectFocus(p.key)} className={chipCls(focus === p.key)}>
-              {p.label}
-            </button>
-          ))}
+        <div className="relative mb-3 inline-block">
+          <select
+            value={focus}
+            onChange={(e) => selectFocus(e.target.value as PropType | "all")}
+            aria-label="Filter by prop"
+            className="min-w-[160px] cursor-pointer appearance-none rounded-lg border border-slate-700 bg-slate-800 py-2 pl-3.5 pr-10 text-sm font-medium text-slate-100 outline-none transition-colors [color-scheme:dark] hover:bg-slate-700 focus:border-slate-500"
+          >
+            <option value="all">All props</option>
+            <optgroup label="Pitcher">
+              {PROPS.filter((p) => !HITTER_PROPS.has(p.key)).map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.label.replace(/^Pitcher /, "")}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Hitter">
+              {PROPS.filter((p) => HITTER_PROPS.has(p.key)).map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.label.replace(/^Hitter /, "")}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+            ▾
+          </span>
         </div>
       )}
 
