@@ -998,13 +998,17 @@ def main() -> None:
         except Exception as exc:
             print(f"  lined-hitter coverage failed ({exc}) -- skipping")
 
-        # SELF-HEAL: drop any projection misfiled onto the wrong date (defense in
-        # depth behind the et_today() builder fix). Runs every cron so the daily
-        # slate stays clean automatically — no manual cleanup SQL ever needed.
-        try:
-            db.cleanup_misdated_projections()
-        except Exception as exc:
-            print(f"  self-heal failed ({exc}) -- skipping")
+        # SELF-HEAL self-heal DISABLED — it was DELETING the entire current slate.
+        # On 2026-06-05 it removed 1287 freshly-built June-5 projections ("1
+        # wrong-date group"), leaving the day with 0 projections and the frontend
+        # stuck on the future-slate view. The June-5 build links to the correct
+        # 15 June-5 game_ids (all ET June 5 — verified), so the deletion was a
+        # FALSE POSITIVE, not a real misdating. The original misdating bug it
+        # guarded against is already fixed at the SOURCE (the builders + main.py
+        # use et_today(), never date.today()/UTC), so this guard is redundant.
+        # Leave the function in db.py but do NOT run it until the false-positive
+        # root cause is understood. (See cleanup_misdated_projections.)
+        # db.cleanup_misdated_projections()  # re-enable only once the FP is fixed
 
         # SHADOW: matchup-expected-K (logged onto strikeouts rows, never the
         # live projection). Decorative + experimental, so any failure is
