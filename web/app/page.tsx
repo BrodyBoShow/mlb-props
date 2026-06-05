@@ -1249,24 +1249,46 @@ export default async function Home({
       {/* Soft-refreshes the server component on an interval (tab-aware) so a
           new cron run appears without a manual reload. Renders nothing. */}
       <AutoRefresh />
-      <header className="mb-8 flex items-start justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">MLB Props</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Pitchers &amp; hitters
-          </p>
-          {/* Full "Last updated" line — client-rendered in the viewer's
-              local timezone (not hardcoded ET) so it matches their wall
-              clock and the relative counter. Honest: same real updatedAt
-              instant, just localized + a count-up counter. */}
-          {updatedAt && <LiveUpdated iso={updatedAt} />}
+      <header className="mb-8">
+        <div className="flex items-center justify-between gap-4">
+          <Link href="/" className="flex items-center gap-3">
+            {/* logo mark — ascending bars = edges trending up */}
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-glow">
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-5 text-slate-950"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <rect x="3" y="13" width="4" height="8" rx="1.2" />
+                <rect x="10" y="8" width="4" height="13" rx="1.2" />
+                <rect x="17" y="3" width="4" height="18" rx="1.2" />
+              </svg>
+            </span>
+            <div className="leading-tight">
+              <h1 className="font-display text-2xl font-bold tracking-tight text-slate-50">
+                MLB<span className="text-emerald-400">Props</span>
+              </h1>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
+                Calibrated projections · honest edges
+              </p>
+            </div>
+          </Link>
+          <nav className="text-sm font-medium">
+            <Link
+              href="/results"
+              className="rounded-lg px-3 py-1.5 text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-slate-100"
+            >
+              Results
+            </Link>
+          </nav>
         </div>
-        <Link
-          href="/results"
-          className="mt-1 text-sm text-slate-400 transition-colors hover:text-slate-200"
-        >
-          Results →
-        </Link>
+        {/* "Last updated" — client-rendered in the viewer's local timezone. */}
+        {updatedAt && (
+          <div className="mt-3">
+            <LiveUpdated iso={updatedAt} />
+          </div>
+        )}
       </header>
 
       <StaleBanner
