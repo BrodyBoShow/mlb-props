@@ -166,6 +166,25 @@ def _normalize(name: str) -> str:
     return " ".join(s.split())   # collapse extra whitespace
 
 
+def _price_balance(row: dict) -> float:
+    """How balanced a line's two-sided pricing is — 0.0 = a perfect coin flip.
+
+    |implied(over) - implied(under)| from the American prices. The MAIN market
+    rung sits near the projected median and carries balanced juice (low value);
+    alt rungs are deliberately off-median with skewed prices (e.g. a +1.5 alt at
+    -300/+250 -> high value). Used to pick the main rung deterministically when a
+    book posts several. Rows missing a price return 1.0 (least preferred) so any
+    priced rung wins; when every rung lacks prices the dedup falls back to
+    first-seen.
+    """
+    op, up = row.get("over_price"), row.get("under_price")
+    if op is None or up is None:
+        return 1.0
+    oi = (-op) / ((-op) + 100) if op < 0 else 100 / (op + 100)
+    ui = (-up) / ((-up) + 100) if up < 0 else 100 / (up + 100)
+    return abs(oi - ui)
+
+
 # PrizePicks' own projections API returns each fantasy line tagged with
 # odds_type ('standard' | 'goblin' | 'demon') — the discriminator ParlayAPI
 # strips when it normalizes DFS payouts. We read the STANDARD rung directly so
@@ -452,19 +471,25 @@ def fetch_prop_lines(
         })
         per_prop[prop_type] += 1
 
-    # Deduplicate: keep one row per (player_id, prop_type, bookmaker, game_date).
-    # For non-fantasy props ParlayAPI returns main + alt lines and the first is
-    # the main line. For the two PrizePicks fantasy props the API returns a
-    # RANDOM rung of the goblin/standard/demon ladder, so "first" is unreliable —
-    # those get overridden below with the PrizePicks-direct standard line.
-    seen: set[tuple] = set()
-    deduped: list[dict] = []
+    # Deduplicate to ONE row per (player_id, prop_type, bookmaker, game_date) by
+    # selecting the MAIN-market rung deterministically: the rung whose two-sided
+    # pricing is most BALANCED (over/under implied probs closest to 50/50, via
+    # _price_balance). The main line sits near the projected median (balanced
+    # juice); alt rungs are off-median with skewed prices. This replaces the old
+    # "keep the first row" pick, which was order-unstable across crons — the
+    # stored line jumped between main and alt rungs, corrupting edges, /results
+    # grading, and (newly) open->close line-movement. A stable main line makes the
+    # opening and current snapshots like-for-like, so movement is REAL rather than
+    # an alt-vs-main artifact. Rows without prices keep first-seen (DFS books post
+    # a single rung). The two PrizePicks fantasy props are overridden below with
+    # the PrizePicks-direct standard, so their pick here doesn't matter.
+    best_rung: dict[tuple, dict] = {}
     for r in rows:
         key = (r["player_id"], r["prop_type"], r["bookmaker"], r["game_date"])
-        if key not in seen:
-            seen.add(key)
-            deduped.append(r)
-    rows = deduped
+        cur = best_rung.get(key)
+        if cur is None or _price_balance(r) < _price_balance(cur):
+            best_rung[key] = r
+    rows = list(best_rung.values())
 
     # ── PrizePicks-direct standard fantasy lines (authoritative override) ─────
     # Replace the ParlayAPI fantasy rows (random alt rung) with the real
