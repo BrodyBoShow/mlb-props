@@ -9,6 +9,7 @@ import { getParkProfile } from "@/lib/constants";
 import { windClause } from "@/lib/windTag";
 import { useLiveGameStatus } from "./useLiveGameStatus";
 import { useLiveBoxScores } from "./useLiveBoxScores";
+import { useFirstInningStats, type FirstInningGame } from "./useFirstInningStats";
 import type {
   ByProp,
   FeaturedSection,
@@ -121,6 +122,20 @@ function gradeTextColor(g: LeanGrade): string {
   return g === "win" ? "text-emerald-400" : g === "loss" ? "text-red-400" : "text-slate-200";
 }
 
+// Whether a prop's actual can no longer change (so a sub-line result is decided,
+// not "alive"). Most props lock only at final; the 1st-inning props lock the
+// moment the 1st inning ends — even while the game continues — so their result
+// shows as soon as the game reaches the 2nd.
+const FIRST_INNING_PROPS = new Set<PropType>([
+  "pitcher_first_inning_pitches",
+  "pitcher_first_inning_strikeouts",
+]);
+function actualLocked(prop: PropType, status: GameStatus | undefined): boolean {
+  if (status?.state === "final") return true;
+  if (FIRST_INNING_PROPS.has(prop)) return (status?.currentInning ?? 0) >= 2;
+  return false;
+}
+
 // Map each SIMPLE prop type to the StatLine field it reads. Fantasy-score
 // props are computed across multiple StatLine fields, not mapped 1:1 here —
 // handled in liveActualFor below.
@@ -151,7 +166,19 @@ function liveActualFor(
   propType: PropType,
   stat: StatLine | undefined,
   isFinal: boolean,
+  firstInning?: FirstInningGame,
+  playerId?: number,
 ): number | undefined {
+  // 1st-inning pitcher props come from the play-by-play (the boxscore carries
+  // only game totals), keyed by personId in the firstInning map. Checked before
+  // the StatLine guard so they work even when a player has no boxscore line yet.
+  if (propType === "pitcher_first_inning_pitches") {
+    return playerId !== undefined ? firstInning?.pitches.get(playerId) : undefined;
+  }
+  if (propType === "pitcher_first_inning_strikeouts") {
+    return playerId !== undefined ? firstInning?.strikeouts.get(playerId) : undefined;
+  }
+
   if (!stat) return undefined;
 
   if (propType === "hitter_fantasy_score") {
@@ -200,12 +227,12 @@ function ProjectionBadge({
   pitcher,
   unit,
   liveActual,
-  status,
+  locked,
 }: {
   pitcher: Pitcher;
   unit: string;
   liveActual: number | undefined;
-  status: GameStatus | undefined;
+  locked: boolean;
 }) {
   if (liveActual === undefined) {
     return (
@@ -216,11 +243,11 @@ function ProjectionBadge({
   }
   // Color the actual by whether the projection's lean vs the line is winning
   // (same grading as /results), not by raw actual-vs-projection — so a high ER
-  // on an under lean reads red, not green.
-  const isFinal = status?.state === "final";
+  // on an under lean reads red, not green. `locked` = the actual can't change
+  // anymore (game final, or 1st inning over for the 1st-inning props).
   const g =
     pitcher.line !== undefined
-      ? gradeLean(pitcher.projection, pitcher.line, liveActual, !!isFinal)
+      ? gradeLean(pitcher.projection, pitcher.line, liveActual, locked)
       : "none";
   const color = g === "win" ? "text-emerald-400" : g === "loss" ? "text-red-400" : "text-slate-300";
   return (
@@ -907,14 +934,14 @@ function PropChip({
   prop,
   row,
   live,
-  isFinal,
+  locked,
   active,
   onTap,
 }: {
   prop: PropType;
   row: Pitcher;
   live: number | undefined;
-  isFinal: boolean;
+  locked: boolean;       // actual can't change anymore (final, or 1st inning over)
   active: boolean;       // this chip's inline detail is open
   onTap: () => void;
 }) {
@@ -961,7 +988,7 @@ function PropChip({
     valueText = fmt(live);
     if (hasLine) {
       const line = row.line as number;
-      const g = gradeLean(row.projection, line, live, isFinal);
+      const g = gradeLean(row.projection, line, live, locked);
       valueColor = gradeTextColor(g);
       trailing = (
         <>
@@ -1011,6 +1038,7 @@ function InlinePropDetail({
   prop,
   gameStats,
   status,
+  firstInning,
   homeTeam,
   windSpeed,
   windDirDeg,
@@ -1021,6 +1049,7 @@ function InlinePropDetail({
   prop: PropType;
   gameStats: Map<number, StatLine> | undefined;
   status: GameStatus | undefined;
+  firstInning?: FirstInningGame;
   homeTeam: string;
   windSpeed?: number | null;
   windDirDeg?: number | null;
@@ -1033,7 +1062,13 @@ function InlinePropDetail({
   const meta = PROP_META[prop];
   const showActual = status?.state === "live" || status?.state === "final";
   const liveActual = showActual
-    ? liveActualFor(prop, gameStats?.get(player.player_id), status?.state === "final")
+    ? liveActualFor(
+        prop,
+        gameStats?.get(player.player_id),
+        status?.state === "final",
+        firstInning,
+        player.player_id,
+      )
     : undefined;
 
   return (
@@ -1046,7 +1081,7 @@ function InlinePropDetail({
             </span>
             {!isHitter && <SharpBadge sharp={row.sharpAgreement} />}
           </div>
-          <EdgeDetail pitcher={row} actual={liveActual} isFinal={status?.state === "final"} />
+          <EdgeDetail pitcher={row} actual={liveActual} isFinal={actualLocked(prop, status)} />
           <ConfidenceBar confidence={row.confidence} />
           <TrendRow trends={row.trends} />
           {prop === "strikeouts" && <OppContextLine kRate={row.oppContext?.kRate} />}
@@ -1060,7 +1095,12 @@ function InlinePropDetail({
           )}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <ProjectionBadge pitcher={row} unit={meta.unit} liveActual={liveActual} status={status} />
+          <ProjectionBadge
+            pitcher={row}
+            unit={meta.unit}
+            liveActual={liveActual}
+            locked={actualLocked(prop, status)}
+          />
           <button
             type="button"
             onClick={onViewAll}
@@ -1079,6 +1119,7 @@ function PlayerChipsRow({
   propKeys,
   gameStats,
   status,
+  firstInning,
   openDetail,
   onToggleDetail,
   onViewAll,
@@ -1091,6 +1132,7 @@ function PlayerChipsRow({
   propKeys: PropType[];
   gameStats: Map<number, StatLine> | undefined;
   status: GameStatus | undefined;
+  firstInning?: FirstInningGame;
   openDetail: string | null;             // `${playerId}|${prop}` open board-wide
   onToggleDetail: (key: string) => void;
   onViewAll: (p: PropType) => void;
@@ -1119,7 +1161,9 @@ function PlayerChipsRow({
       <div className="text-sm text-slate-100">{player.name}</div>
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {chips.map(({ prop, row }) => {
-          const live = showActual ? liveActualFor(prop, stat, !!isFinal) : undefined;
+          const live = showActual
+            ? liveActualFor(prop, stat, !!isFinal, firstInning, player.player_id)
+            : undefined;
           const key = `${player.player_id}|${prop}`;
           return (
             <PropChip
@@ -1127,7 +1171,7 @@ function PlayerChipsRow({
               prop={prop}
               row={row}
               live={live}
-              isFinal={!!isFinal}
+              locked={actualLocked(prop, status)}
               active={openDetail === key}
               onTap={() => onToggleDetail(key)}
             />
@@ -1140,6 +1184,7 @@ function PlayerChipsRow({
           prop={openProp}
           gameStats={gameStats}
           status={status}
+          firstInning={firstInning}
           homeTeam={homeTeam}
           windSpeed={windSpeed}
           windDirDeg={windDirDeg}
@@ -1161,6 +1206,7 @@ function FocusedPlayerCard({
   unit,
   gameStats,
   status,
+  firstInning,
   homeTeam,
   windSpeed,
   windDirDeg,
@@ -1172,6 +1218,7 @@ function FocusedPlayerCard({
   unit: string;
   gameStats: Map<number, StatLine> | undefined;
   status: GameStatus | undefined;
+  firstInning?: FirstInningGame;
   homeTeam: string;
   windSpeed?: number | null;
   windDirDeg?: number | null;
@@ -1179,7 +1226,13 @@ function FocusedPlayerCard({
 }) {
   const showActual = status?.state === "live" || status?.state === "final";
   const liveActual = showActual
-    ? liveActualFor(prop, gameStats?.get(row.player_id), status?.state === "final")
+    ? liveActualFor(
+        prop,
+        gameStats?.get(row.player_id),
+        status?.state === "final",
+        firstInning,
+        row.player_id,
+      )
     : undefined;
 
   return (
@@ -1206,7 +1259,7 @@ function FocusedPlayerCard({
         pitcher={row}
         unit={unit}
         liveActual={liveActual}
-        status={status}
+        locked={actualLocked(prop, status)}
       />
     </li>
   );
@@ -1221,6 +1274,7 @@ function GameCard({
   onToggle,
   focus,
   gameStats,
+  firstInning,
   date,
   onFocus,
   openDetail,
@@ -1233,6 +1287,7 @@ function GameCard({
   onToggle: () => void;
   focus: PropType | "all";
   gameStats: Map<number, StatLine> | undefined;
+  firstInning?: FirstInningGame;
   date: string;
   onFocus: (p: PropType) => void;
   openDetail: string | null;
@@ -1310,16 +1365,40 @@ function GameCard({
             )}
             {gv.firstInningRuns != null && (() => {
               const p = gv.firstInningRuns;          // P(YRFI), 0-1
-              const yrfi = p >= 0.5;
-              const shown = Math.round((yrfi ? p : 1 - p) * 100);
+              const modelYrfi = p >= 0.5;
+              const sep = parkShown || wc ? (
+                <span className="text-[10px] text-slate-600">·</span>
+              ) : null;
+              // Once the 1st inning is complete (final, or game has reached the
+              // 2nd), show the ACTUAL NRFI/YRFI outcome + whether the model's
+              // lean was right — same grading idea as the prop chips.
+              const settled =
+                status?.state === "final" || (status?.currentInning ?? 0) >= 2;
+              const fiRuns = firstInning?.runs;
+              if (settled && fiRuns != null) {
+                const actualYrfi = fiRuns >= 1;
+                const correct = actualYrfi === modelYrfi;
+                return (
+                  <>
+                    {sep}
+                    <span
+                      title={`1st-inning runs: ${fiRuns} — model leaned ${modelYrfi ? "YRFI" : "NRFI"} (${correct ? "correct" : "miss"})`}
+                      className={`text-[11px] font-medium tabular-nums ${correct ? "text-emerald-400" : "text-red-400"}`}
+                    >
+                      {actualYrfi ? "YRFI" : "NRFI"} {fiRuns}R {correct ? "✓" : "✗"}
+                    </span>
+                  </>
+                );
+              }
+              const shown = Math.round((modelYrfi ? p : 1 - p) * 100);
               return (
                 <>
-                  {(parkShown || wc) && <span className="text-[10px] text-slate-600">·</span>}
+                  {sep}
                   <span
                     title={`Model: ${Math.round(p * 100)}% chance a run scores in the 1st inning`}
-                    className={`text-[11px] font-medium tabular-nums ${yrfi ? "text-amber-400" : "text-sky-400"}`}
+                    className={`text-[11px] font-medium tabular-nums ${modelYrfi ? "text-amber-400" : "text-sky-400"}`}
                   >
-                    {yrfi ? "YRFI" : "NRFI"} {shown}%
+                    {modelYrfi ? "YRFI" : "NRFI"} {shown}%
                   </span>
                 </>
               );
@@ -1343,6 +1422,7 @@ function GameCard({
                       propKeys={PITCHER_PROP_KEYS}
                       gameStats={gameStats}
                       status={status}
+                      firstInning={firstInning}
                       openDetail={openDetail}
                       onToggleDetail={onToggleDetail}
                       onViewAll={onFocus}
@@ -1371,6 +1451,7 @@ function GameCard({
                         propKeys={HITTER_PROP_KEYS}
                         gameStats={gameStats}
                         status={status}
+                        firstInning={firstInning}
                         openDetail={openDetail}
                         onToggleDetail={onToggleDetail}
                         onViewAll={onFocus}
@@ -1407,6 +1488,7 @@ function GameCard({
                 unit={focusUnit}
                 gameStats={gameStats}
                 status={status}
+                firstInning={firstInning}
                 homeTeam={homeTeam}
                 windSpeed={gv.windSpeed}
                 windDirDeg={gv.windDirDeg}
@@ -1461,11 +1543,24 @@ export default function PropBoard({
   const liveStatus = useLiveGameStatus(date);
   const liveGamePks: number[] = [];
   const finalGamePks: number[] = [];
+  // Live + final games with their current inning, for the 1st-inning hook (it
+  // freezes a game once its 1st is complete; see useFirstInningStats).
+  const firstInningInput: {
+    gamePk: number;
+    currentInning: number | null;
+    isFinal: boolean;
+  }[] = [];
   for (const [gid, s] of liveStatus) {
-    if (s.state === "live") liveGamePks.push(gid);
-    else if (s.state === "final") finalGamePks.push(gid);
+    if (s.state === "live") {
+      liveGamePks.push(gid);
+      firstInningInput.push({ gamePk: gid, currentInning: s.currentInning, isFinal: false });
+    } else if (s.state === "final") {
+      finalGamePks.push(gid);
+      firstInningInput.push({ gamePk: gid, currentInning: s.currentInning, isFinal: true });
+    }
   }
   const liveStats = useLiveBoxScores(liveGamePks, finalGamePks);
+  const firstInningStats = useFirstInningStats(firstInningInput);
 
   // Invert prop->game->players into game->{pitchers,hitters}; chronological.
   const games = useMemo(() => buildGameViews(byProp), [byProp]);
@@ -1588,6 +1683,7 @@ export default function PropBoard({
                 }
                 focus={focus}
                 gameStats={liveStats.get(gv.game_id)}
+                firstInning={firstInningStats.get(gv.game_id)}
                 date={date}
                 onFocus={selectFocus}
                 openDetail={openDetail}

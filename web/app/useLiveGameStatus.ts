@@ -58,6 +58,7 @@ export function useLiveGameStatus(date: string | null): Map<number, GameStatus> 
               homeScore: g.teams?.home?.score ?? null,
               inningOrdinal: g.linescore?.currentInningOrdinal ?? null,
               inningHalf: g.linescore?.inningHalf ?? null,
+              currentInning: g.linescore?.currentInning ?? null,
               startTimeET,
               detailedState: detailed,
             });

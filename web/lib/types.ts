@@ -266,6 +266,7 @@ export type GameStatus = {
   homeScore: number | null;
   inningOrdinal: string | null;   // "3rd"
   inningHalf: string | null;      // "Top" | "Bottom"
+  currentInning: number | null;   // 3  (numeric; used to tell when the 1st is done)
   startTimeET: string | null;     // "1:05 PM ET"
   detailedState: string;          // raw "In Progress" / "Scheduled" / "Final"
 };
