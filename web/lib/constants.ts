@@ -139,7 +139,9 @@ export const FEATURED_MIN_LINE: Partial<Record<PropType, number>> = {
   pitcher_fantasy_score: 6.0,   // PrizePicks DFS; floor excludes short relief
   pitcher_first_inning_pitches:    8.5,   // PrizePicks DFS (~13-18)
   pitcher_first_inning_strikeouts: 0.5,   // real two-sided ParlayAPI line (main 0.5)
-  hitter_hits:           0.5,
+  hitter_hits:           1.5,   // 2+ hits — the 0.5 "1+ hit" line de-vigs to a
+                                 // broken ~0.31 consensus fair (base-rate junk),
+                                 // faking +0.4 edges; the 1.5 line is reliable.
   hitter_total_bases:    1.5,
   hitter_hits_runs_rbis: 1.5,
   hitter_fantasy_score:  4.0,   // PrizePicks DFS; floor excludes bench/pinch

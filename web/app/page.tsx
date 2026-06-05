@@ -20,13 +20,40 @@ import StaleBanner from "./StaleBanner";
 // be against an artificial baseline. The featured section requires a real
 // book to anchor the claim.
 // Books that can anchor a featured edge. Sharp two-sided books de-vig to a real
-// market fair; 'prizepicks' is included so DFS-only props (HFS/PFS/1st-inning)
-// — which edge.py now scores against a PrizePicks-fair (~0.5) — can be featured.
-// (REAL_BOOKS in @/lib/constants stays sharp-only: the board still renders a
-// prizepicks edge as a muted/soft number, never a colored structural edge.)
+// market fair; 'consensus' is edge.py's de-vigged average of DraftKings/FanDuel
+// two-sided lines (a real edge, just synthetic — used so the hitting section has
+// non-fantasy candidates to diversify with); 'prizepicks' is included so DFS-only
+// props (HFS/PFS/1st-inning) — which edge.py scores against a PrizePicks-fair
+// (~0.5) — can be featured. (REAL_BOOKS in @/lib/constants stays sharp-only: the
+// board still renders a prizepicks/consensus edge muted, never a colored edge.)
 const FEATURED_BOOKS: ReadonlySet<string> = new Set([
-  "pinnacle", "draftkings", "fanduel", "bet365", "caesars", "prizepicks",
+  "pinnacle", "draftkings", "fanduel", "bet365", "caesars", "consensus", "prizepicks",
 ]);
+
+// Rank weights so the strongest TRUSTWORTHY edge leads. A sharp two-sided book
+// (1.0) > a de-vigged consensus of DK/FD (0.9, synthetic) > a soft DFS pick'em
+// (0.85). Applied to ORDERING only — the gate uses the raw |edge|, and the
+// displayed edge is unchanged.
+const BOOK_RANK_WEIGHT = (book?: string): number =>
+  book === "prizepicks" ? DFS_RANK_DISCOUNT : book === "consensus" ? 0.9 : 1;
+
+// Max plays of the SAME prop type a section may show, so a section is never
+// 3-of-a-kind (e.g. 3 hitter-fantasy unders). The 3rd slot goes to the next
+// best DIFFERENT prop; if none qualifies, the section shows fewer than 3.
+const FEATURED_MAX_PER_PROP = 2;
+
+// Pick up to `n` plays from a ranked list, at most `maxPerProp` of any one prop.
+function pickDiverse(plays: FeaturedPlay[], n: number, maxPerProp: number): FeaturedPlay[] {
+  const out: FeaturedPlay[] = [];
+  const counts: Record<string, number> = {};
+  for (const p of plays) {
+    if (out.length >= n) break;
+    if ((counts[p.propType] ?? 0) >= maxPerProp) continue;
+    out.push(p);
+    counts[p.propType] = (counts[p.propType] ?? 0) + 1;
+  }
+  return out;
+}
 
 // Section 1 (PITCHING EDGES) props — EVERY pitcher prop with a real or DFS line,
 // ranked by |edge|, top-3. Expansion (2026-06-05): added walks, earned_runs, the
@@ -897,6 +924,10 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         // unnamed pitcher batting) — never feature it.
         const playerName = proj.players?.full_name;
         if (!playerName) return null;
+        // A 0.0 (or negative) projection is a no-data sentinel, not a forecast —
+        // it fakes a huge under-edge vs any line (e.g. a 0.0 walks / earned-runs
+        // proj for a pitcher with no recent data). Never feature it.
+        if (proj.projection <= 0) return null;
         if (Math.abs(proj.projection - e.line) < FEATURED_MIN_LEAN) return null;
         // Sanity ceiling: drop implausible (thin/spiky baseline) projections so
         // a fake 4.0-TB edge can't headline the section.
@@ -963,17 +994,14 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         };
       })
       .filter((p): p is FeaturedPlay => p !== null)
-      // Rank by edge, discounting DFS (PrizePicks) edges so an equal sharp edge
-      // sorts ahead. Gate already used the RAW |edge|; this only orders them.
-      .sort((a, b) => {
-        const rank = (p: FeaturedPlay) =>
-          (p.bookmaker === "prizepicks" ? DFS_RANK_DISCOUNT : 1) * (p.edge ?? 0);
-        return rank(b) - rank(a);
-      });
+      // Rank by edge, weighted by book trust (sharp > consensus > DFS) so a more
+      // reliable edge sorts ahead. Gate already used the RAW |edge|; this only
+      // orders them.
+      .sort((a, b) => BOOK_RANK_WEIGHT(b.bookmaker) * (b.edge ?? 0) - BOOK_RANK_WEIGHT(a.bookmaker) * (a.edge ?? 0));
   // NOTE: no longer sliced here — callers slice to top-3 AFTER any min-sample
   // gate so a thin-history outlier can't consume a top-3 slot.
 
-  const pitchingPlays = buildEdgePlays(FEATURED_PITCHER_PROPS).slice(0, 3);
+  const pitchingPlays = pickDiverse(buildEdgePlays(FEATURED_PITCHER_PROPS), 3, FEATURED_MAX_PER_PROP);
 
   // HITTING EDGES: gate out thin-history hitters BEFORE the top-3 cut. A hitter
   // with ~0 graded games gets a baseline projection that just echoes one recent
@@ -1014,13 +1042,15 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
       hitterGateAvailable = ok;
     }
   }
-  const hittingPlays = (
+  const hittingPlays = pickDiverse(
     hitterGateAvailable
       ? hittingCandidates.filter(
           (p) => (hitterGradedByPlayer.get(p.playerId) ?? 0) >= HITTER_MIN_GAMES_TRACKED,
         )
-      : hittingCandidates
-  ).slice(0, 3);
+      : hittingCandidates,
+    3,
+    FEATURED_MAX_PER_PROP,
+  );
 
   // ── Section 3: HR MATCHUPS (matchup-ranked, not edge-based) ──────────────
   // Rank tonight's projected hitters by park-adjusted HR projection:
