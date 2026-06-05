@@ -1120,6 +1120,11 @@ function PropChip({
     >
       <span className="text-slate-500">{meta.short}</span>
       <span className={`font-semibold ${valueColor}`}>{valueText}</span>
+      {/* pre-game: show the line next to the projection so the board reads as
+          proj-vs-line at a glance (live/final already show actual·line). */}
+      {live === undefined && hasLine && (
+        <span className="text-slate-500">· {fmt(row.line as number)}</span>
+      )}
       {trailing}
     </button>
   );

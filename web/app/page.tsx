@@ -474,29 +474,25 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     }
   }
 
-  // ── PrizePicks DFS lines (line-only display) ────────────────────────────
-  // The two fantasy_score props AND 1st-inning pitches are PrizePicks DFS
-  // markets that the edges table never carries — edge.py excludes DFS books
-  // from seeding a de-vig baseline, so a PrizePicks-only prop never produces an
-  // edge row. The other prop tabs read their line off the edges join; these
-  // DFS tabs have no edge, so we fetch the PP line directly here and surface it
-  // (with the model's lean vs that line) the same way every other tab shows
-  // "Line X · lean". ISOLATED + failure-tolerant: on any error the map stays
-  // empty and these tabs just don't show a line — never a broken board. Volume
-  // is tiny (~125 rows for a full slate), well under the 1000-row cap, so no
-  // pagination needed.
+  // ── PrizePicks DFS lines (soft-book value, ALL props) ───────────────────
+  // PrizePicks is a soft DFS book the model beats far more often than the sharp
+  // two-sided books — so its line is the highest-value thing to surface where a
+  // prop has no de-vigged sharp edge. edge.py never carries DFS books, so the
+  // board reads the PP line directly here and shows it (with the model's lean
+  // vs that line — the same proj-vs-line signal /results grades on) wherever a
+  // prop lacks a sharp/consensus edge row (the line fallback `e?.line ??
+  // ppLineByKey` keeps the de-vigged sharp line whenever one exists). Fetches
+  // EVERY PrizePicks prop, not just fantasy/1st-inning, so the board reflects
+  // the full soft-book slate instead of a flat projection. ISOLATED +
+  // failure-tolerant: on any error the map stays empty and the board just shows
+  // fewer lines — never broken. Volume ~500 rows, under the 1000-row cap.
   const ppLineByKey = new Map<string, number>();
   {
     const { data: ppRows, error: ppErr } = await supabase
       .from("lines")
       .select("player_id, prop_type, line")
       .eq("game_date", selectedDate)
-      .eq("bookmaker", "prizepicks")
-      .in("prop_type", [
-        "pitcher_fantasy_score",
-        "hitter_fantasy_score",
-        "pitcher_first_inning_pitches",
-      ]);
+      .eq("bookmaker", "prizepicks");
     if (ppErr) {
       console.log(
         `[home-diag] prizepicks DFS lines fetch skipped (${String(ppErr)})`,
