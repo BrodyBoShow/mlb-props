@@ -4066,6 +4066,43 @@ PrizePicks-direct proxy retry — fixes intermittent 403 (this session):
   Actions secret) rather than redeploying, or switch the proxy to a sticky-session
   endpoint.
 
+1st-inning prop RESULTS on the board — play-by-play live overlay (this session):
+- USER: the 1-inning props (1st-inning pitches/Ks) only showed the PROJECTION on
+  live/final games, never the actual result — "make it so every prop shows the
+  result so 1-inning pitch count gets compared." ROOT CAUSE: the live overlay
+  (useLiveBoxScores) reads the MLB BOXSCORE, which carries only GAME totals, not
+  per-inning data — so liveActualFor returned undefined for the 1st-inning props.
+- FIX (frontend-only; engine/model/FEATURE_COLS=11 untouched):
+  * web/app/useFirstInningStats.ts (NEW hook): fetches the MLB play-by-play
+    (game/{pk}/playByPlay) and counts inning-1 pitches/strikeouts per pitcher +
+    total 1st-inning runs, mirroring engine/grade.py's _first_inning_* EXACTLY
+    (verified vs live games: Wheeler 9 P/2 K, Giolito 9/0; runs via the
+    score-after-last-1st-play method == grader's linescore.innings[0] sum).
+    EFFICIENCY: the 1st inning is fixed once a game is past it, so each game is
+    fetched ONCE and FROZEN at final OR currentInning>=2; only games still in
+    their 1st keep polling (~0-2 fetches/min, not one-per-game-per-min). Never
+    throws -> failed fetch leaves the game absent -> projection-only fallback.
+  * GameStatus gains currentInning (numeric) — populated in useLiveGameStatus
+    from linescore.currentInning — so the hook + grading know when the 1st is done.
+  * liveActualFor extended: the two 1st-inning pitcher props read from the
+    play-by-play map (keyed by personId), checked BEFORE the StatLine guard.
+    firstInning (per-game FirstInningGame) threaded GameCard -> PlayerChipsRow /
+    InlinePropDetail / FocusedPlayerCard, parallel to gameStats.
+  * actualLocked(prop, status): KEY correctness nuance — a 1st-inning prop locks
+    the moment the 1st inning ENDS (game reaches the 2nd), NOT at game-final. So
+    an under (e.g. Imanaga 9 P vs 15.5) shows ✓ immediately instead of "alive"
+    for hours. Replaces the raw isFinal flag in PropChip/ProjectionBadge/
+    EdgeDetail grading (gradeLean's 4th arg = "actual is locked"). ProjectionBadge
+    now takes `locked` instead of deriving from status; PropChip's isFinal param
+    renamed locked.
+  * NRFI/YRFI header tag flips from the model % to the ACTUAL outcome (runs + ✓/✗
+    vs the model's lean) once the 1st is complete (settled = final || inning>=2).
+- VERIFIED vs live 2026-06-04 games: Sale 16 P -> OVER 14.5 (over lean ✓),
+  Imanaga 9 -> UNDER 15.5 (✓), Ginn 20 -> OVER 14.5 (under lean ✗), Teng/Jones
+  25 -> OVER, NRFI/YRFI runs correct (Morris/Lugo 2 R -> YRFI). tsc --noEmit
+  clean; npm run build passes (/ 15.6 kB). Committed + pushed (06cc621).
+  Frontend-only; no engine, no schema, FEATURE_COLS still 11.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
 self-heal count + lined-hitter coverage count). The strikeouts model now trains
