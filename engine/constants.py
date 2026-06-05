@@ -239,6 +239,21 @@ HITTER_LEAGUE_PRIOR = {
     "hitter_home_runs":      0.11,
 }
 
+# Fantasy-score projection regression. The fantasy builders take the MEDIAN of
+# per-game/per-start FP over the recent window, but that median is noisy and
+# systematically LOW when the recent window is sparse (a star with 1-2 quiet
+# recent games medians to ~3 FP, faking a wall of under-edges — e.g. Mookie Betts
+# projected 3.0 vs a 5.5 line, 2026-06-05). Shrink the recency median toward the
+# player's FULL-HISTORY median (a reliable per-player prior from player_game_logs,
+# UNLIKE the count props where a thin recent sample also means thin history —
+# fantasy players have a deep graded+backfilled season). Weight on recency =
+# n/(n+K): a sparse window leans on the prior, a full window (a real slump)
+# survives. Pitchers throw every 5 days so their recent sample is small — a
+# smaller K keeps a genuine recent change visible.
+FANTASY_RECENCY_K_HITTER = 10.0
+FANTASY_RECENCY_K_PITCHER = 4.0
+LEAGUE_AVG_PITCHER_FP = 16.0   # floor when a pitcher has no history at all
+
 # Fallback / defaults
 LEAGUE_AVG_K_PCT = 0.22  # ~22% of MLB plate appearances end in a strikeout
 
@@ -264,6 +279,19 @@ STATCAST_LOOKBACK_DAYS = 30
 # outcomes used by edge._model_over_prob().
 PROP_CV = 0.35
 MIN_STD = 0.5            # floor so a near-zero projection never gives scale=0
+
+# Per-prop coefficient of variation for the FANTASY-score normal approximation.
+# Fantasy points are far more volatile than the 0.35 generic CV (a single HR
+# swings a hitter's score by ~10), so a 0.35 std massively overstated P(over)
+# and inflated DFS fantasy edges. These are the empirically-measured conditional
+# CVs from player_game_logs (HFS: mean 6.34 / std 6.91 -> ~1.09 unconditional,
+# ~1.0 conditional; PFS: mean 23.97 / std 14.17 -> ~0.59 unconditional, ~0.55
+# conditional after removing between-pitcher spread). Used by
+# edge._model_over_prob for the fantasy props only.
+FANTASY_CV = {
+    "hitter_fantasy_score": 1.0,
+    "pitcher_fantasy_score": 0.55,
+}
 
 # How far the model probability must beat the de-vigged book probability to
 # count as a real lean. Display-only in the frontend today; declared here

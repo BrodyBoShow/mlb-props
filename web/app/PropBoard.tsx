@@ -391,23 +391,43 @@ function EdgeDetail({
           <span className="mx-1.5 text-slate-600">·</span>
           {edgeNode}
         </div>
-        {/* De-vig: the market's no-vig fair % for the over vs the book's raw
-            implied % (with vig). The gap is the juice; the edge above is the
-            model vs Fair. Surfaces the de-vig the engine already computes. */}
-        {pitcher.fairOverProb !== undefined && (
-          <div
-            className="mt-0.5 text-[10px] tabular-nums text-slate-500"
-            title="Fair = de-vigged (no-vig) market probability of the over. Book = the over price's raw implied probability (includes the vig)."
-          >
-            Fair{" "}
-            <span className="text-slate-300">{Math.round(pitcher.fairOverProb * 100)}%</span>
-            {pitcher.overPrice !== undefined && (
-              <>
-                <span className="mx-1 text-slate-600">·</span>
-                Book {Math.round(americanToImplied(pitcher.overPrice) * 100)}%
-              </>
-            )}
-          </div>
+        {/* De-vig (sharp books): the market's no-vig fair % for the over vs the
+            book's raw implied % (with vig). The gap is the juice; the edge above
+            is the model vs Fair. For a PrizePicks DFS line the "fair" is a flat
+            ~50% coin flip, so instead of a redundant "Fair 50% · Book 50%" we
+            show the model's no-vig probability of the leaned side. */}
+        {pitcher.bookmaker === "prizepicks" ? (
+          pitcher.modelOverProb !== undefined && (
+            <div
+              className="mt-0.5 text-[10px] tabular-nums text-slate-500"
+              title="Model's no-vig probability of this side. PrizePicks posts a flat pick'em (~50% implied), so the edge is the model beating that coin flip."
+            >
+              model{" "}
+              <span className="text-slate-300">
+                {Math.round(
+                  (edge >= 0 ? pitcher.modelOverProb : 1 - pitcher.modelOverProb) * 100,
+                )}
+                %
+              </span>{" "}
+              {edge >= 0 ? "over" : "under"} PrizePicks line
+            </div>
+          )
+        ) : (
+          pitcher.fairOverProb !== undefined && (
+            <div
+              className="mt-0.5 text-[10px] tabular-nums text-slate-500"
+              title="Fair = de-vigged (no-vig) market probability of the over. Book = the over price's raw implied probability (includes the vig)."
+            >
+              Fair{" "}
+              <span className="text-slate-300">{Math.round(pitcher.fairOverProb * 100)}%</span>
+              {pitcher.overPrice !== undefined && (
+                <>
+                  <span className="mx-1 text-slate-600">·</span>
+                  Book {Math.round(americanToImplied(pitcher.overPrice) * 100)}%
+                </>
+              )}
+            </div>
+          )
         )}
       </>
     );

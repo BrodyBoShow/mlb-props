@@ -19,9 +19,12 @@ if TYPE_CHECKING:
 
 import stats
 from constants import (
+    FANTASY_RECENCY_K_HITTER,
+    FANTASY_RECENCY_K_PITCHER,
     HITTER_LEAGUE_PRIOR,
     HITTER_REGRESSION_K,
     LEAGUE_AVG_HITTER_FP,
+    LEAGUE_AVG_PITCHER_FP,
     LOOKBACK_DAYS,
     OLDER_WEIGHT,
     RECENT_STARTS,
@@ -95,6 +98,34 @@ def _median_projection(values: list[float]) -> float:
     if not values:
         return 0.0
     return round(float(statistics.median(values)), 1)
+
+
+def _blend_fantasy_projection(
+    values: list[float],
+    prior_median: float | None,
+    k: float,
+    floor: float,
+) -> float:
+    """Recency-median fantasy projection shrunk toward the player's full-history
+    median. See constants.FANTASY_RECENCY_K_* for the why.
+
+    weight on recency = n/(n+k). Sparse recent window (noisy, biased low) leans on
+    the stable prior; a full recent window (a genuine slump) keeps its lean.
+    Falls back to the league floor only when there is neither recency nor a prior.
+    """
+    import statistics
+    recency = float(statistics.median(values)) if values else 0.0
+    n = len(values)
+    has_prior = prior_median is not None and prior_median > 0
+    if n == 0 and not has_prior:
+        return floor
+    if n == 0:
+        return round(float(prior_median), 1)
+    if not has_prior:
+        return round(recency, 1) if recency > 0 else floor
+    w = n / (n + k)
+    blended = w * recency + (1.0 - w) * float(prior_median)
+    return round(blended, 1) if blended > 0 else floor
 
 
 # ─── strikeout projections (Statcast via pybaseball) ─────────────────────────
@@ -360,7 +391,9 @@ def build_outs_recorded_projections(
 # ─── pitcher fantasy score (PrizePicks) ──────────────────────────────────────
 
 def build_pitcher_fantasy_score_projections(
-    starters: list[dict], projection_date: date | None = None
+    starters: list[dict],
+    projection_date: date | None = None,
+    prior_medians: dict | None = None,
 ) -> "list[ProjectionRow]":
     """Weighted rolling projection for a pitcher's PrizePicks fantasy score.
 
@@ -379,16 +412,18 @@ def build_pitcher_fantasy_score_projections(
     """
     proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
     proj_date_str = proj_date.strftime("%Y-%m-%d")
+    prior_medians = prior_medians or {}
 
     rows: list[dict] = []
     for s in starters:
         player_id = s["player_id"]
         starts = stats.get_pitcher_starts(player_id, LOOKBACK_DAYS, proj_date)
-        if not starts:
+        prior = prior_medians.get(player_id)
+        if not starts and prior is None:
             print(f"  no recent game-log data for player {player_id}, skipping")
             continue
         per_start_fp: list[float] = []
-        for st in starts:
+        for st in starts or []:
             outs = st["outs_recorded"]
             k = st["strikeouts"]
             er = st["earned_runs"]
@@ -400,9 +435,11 @@ def build_pitcher_fantasy_score_projections(
             if is_quality_start(outs, er):
                 fp += PITCHER_QUALITY_START_PTS
             per_start_fp.append(float(fp))
-        # MEDIAN (not weighted mean) — same right-skew reasoning as the hitter
-        # fantasy-score builder; the PrizePicks line is the ~50% point.
-        projection = _median_projection(per_start_fp)
+        # MEDIAN over the recent starts, shrunk toward the pitcher's full-history
+        # median — a 5-start window is noisy and one rough start biases it low.
+        projection = _blend_fantasy_projection(
+            per_start_fp, prior, FANTASY_RECENCY_K_PITCHER, LEAGUE_AVG_PITCHER_FP
+        )
         rows.append(
             {
                 "game_id": s["game_id"],
@@ -515,7 +552,9 @@ def build_hitter_home_runs_projections(
 
 
 def build_hitter_fantasy_score_projections(
-    lineup_players: list[dict], projection_date: date | None = None
+    lineup_players: list[dict],
+    projection_date: date | None = None,
+    prior_medians: dict | None = None,
 ) -> "list[ProjectionRow]":
     """Weighted rolling projection for a hitter's PrizePicks fantasy score.
 
@@ -525,19 +564,29 @@ def build_hitter_fantasy_score_projections(
     all five extra components alongside the existing five, so there is
     NO cold start -- the baseline works on day one without waiting for
     player_game_logs to accumulate.
+
+    The recent-window median is shrunk toward the player's full-history median
+    (prior_medians) so a sparse/quiet recent window can't bias a star's
+    projection low and fake a wall of under-edges. See
+    constants.FANTASY_RECENCY_K_HITTER.
     """
     proj_date = projection_date or et_today()  # Eastern, not UTC date.today()
     proj_date_str = proj_date.strftime("%Y-%m-%d")
+    prior_medians = prior_medians or {}
 
     rows: list[dict] = []
     for p in lineup_players:
         player_id = p["player_id"]
         games = stats.get_hitter_games(player_id, LOOKBACK_DAYS, proj_date)
+        prior = prior_medians.get(player_id)
         if not games:
-            # Debut / call-up with no game-log history. Never SKIP (the player
-            # is a confirmed starter and must get a projection) and never emit
-            # 0 — fall back to the league-average hitter FP floor.
-            projection = LEAGUE_AVG_HITTER_FP
+            # Debut / call-up with no recent game-log history. Never SKIP (the
+            # player is a confirmed starter and must get a projection) and never
+            # emit 0 — use the player's full-history median if we have one, else
+            # the league-average hitter FP floor.
+            projection = _blend_fantasy_projection(
+                [], prior, FANTASY_RECENCY_K_HITTER, LEAGUE_AVG_HITTER_FP
+            )
             rows.append(
                 {
                     "game_id": p["game_id"],
@@ -547,9 +596,10 @@ def build_hitter_fantasy_score_projections(
                     "projection_date": proj_date_str,
                 }
             )
+            src = "full-history prior" if prior else "league-avg floor"
             print(
-                f"  {p.get('full_name', player_id)}: no history -> "
-                f"{projection} FP (league-avg floor)"
+                f"  {p.get('full_name', player_id)}: no recent history -> "
+                f"{projection} FP ({src})"
             )
             continue
         per_game_fp = [
@@ -566,25 +616,19 @@ def build_hitter_fantasy_score_projections(
             )
             for g in games
         ]
-        # MEDIAN (not weighted mean): PrizePicks fantasy-score lines sit at the
-        # ~50% (median) point, and FP is right-skewed, so the mean over-projects
-        # and leans Over for nearly everyone. See _median_projection.
-        projection = _median_projection(per_game_fp)
-        # A thin sample (1-2 games all scoring 0 FP) yields a 0 projection —
-        # a sentinel, not a real forecast. Floor it to the league average.
-        # Players with real history keep their genuine projection unchanged.
-        if projection <= 0:
-            projection = LEAGUE_AVG_HITTER_FP
-            print(
-                f"  {p.get('full_name', player_id)}: "
-                f"{[round(v, 1) for v in per_game_fp[:5]]} -> 0 (thin sample) "
-                f"-> {projection} FP (league-avg floor)"
-            )
-        else:
-            print(
-                f"  {p.get('full_name', player_id)}: "
-                f"{[round(v, 1) for v in per_game_fp[:5]]} -> {projection} FP"
-            )
+        # MEDIAN over the recent window (PrizePicks lines sit at the ~50% point
+        # and FP is right-skewed, so the mean over-projects), shrunk toward the
+        # player's full-history median so a sparse/quiet window can't bias a
+        # star's projection low. Thin samples that median to 0 fall to the prior
+        # / league floor inside the blend.
+        projection = _blend_fantasy_projection(
+            per_game_fp, prior, FANTASY_RECENCY_K_HITTER, LEAGUE_AVG_HITTER_FP
+        )
+        print(
+            f"  {p.get('full_name', player_id)}: "
+            f"{[round(v, 1) for v in per_game_fp[:5]]} (med {_median_projection(per_game_fp)}, "
+            f"prior {prior}) -> {projection} FP"
+        )
         rows.append(
             {
                 "game_id": p["game_id"],

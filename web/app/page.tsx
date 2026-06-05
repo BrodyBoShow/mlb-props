@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
-import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, FEATURED_PROJ_CAP, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, FEATURED_PROJ_CAP, FEATURED_PROJ_FLOOR, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
 import type { ByProp, FeaturedPlay, FeaturedSection, GameGroup, PropType, Trends, TrendWindow } from "@/lib/types";
 import PropBoard from "./PropBoard";
@@ -19,28 +19,47 @@ import StaleBanner from "./StaleBanner";
 // the `edge` field doesn't apply to them and any "edge" we'd surface would
 // be against an artificial baseline. The featured section requires a real
 // book to anchor the claim.
+// Books that can anchor a featured edge. Sharp two-sided books de-vig to a real
+// market fair; 'prizepicks' is included so DFS-only props (HFS/PFS/1st-inning)
+// — which edge.py now scores against a PrizePicks-fair (~0.5) — can be featured.
+// (REAL_BOOKS in @/lib/constants stays sharp-only: the board still renders a
+// prizepicks edge as a muted/soft number, never a colored structural edge.)
 const FEATURED_BOOKS: ReadonlySet<string> = new Set([
-  "pinnacle", "draftkings", "fanduel", "bet365", "caesars",
+  "pinnacle", "draftkings", "fanduel", "bet365", "caesars", "prizepicks",
 ]);
 
-// Section 1 (PITCHING EDGES) props. Clean pitcher props only — we exclude
-// walks/earned_runs (thin two-sided coverage, fragile de-vig) and the
-// PrizePicks-only fantasy score (no two-sided baseline).
+// Section 1 (PITCHING EDGES) props — EVERY pitcher prop with a real or DFS line,
+// ranked by |edge|, top-3. Expansion (2026-06-05): added walks, earned_runs, the
+// PrizePicks fantasy score, and both 1st-inning markets so any pitcher prop with
+// a meaningful edge can headline — not just strikeouts/hits/outs. The per-prop
+// floor (FEATURED_MIN_LINE) + cap (FEATURED_PROJ_CAP) + |edge|>=0.12 gate quality.
 const FEATURED_PITCHER_PROPS: ReadonlySet<PropType> = new Set([
-  "strikeouts", "hits_allowed", "outs_recorded",
+  "strikeouts", "hits_allowed", "outs_recorded", "walks", "earned_runs",
+  "pitcher_fantasy_score",
+  "pitcher_first_inning_pitches", "pitcher_first_inning_strikeouts",
 ]);
 
-// Section 2 (HITTING EDGES) props. Hitter props can carry a systemic under-lean
-// bias (the Model Tracker surfaces this); the AI insight is written to be honest
-// about the signal rather than filtering these out — the user wants them shown.
+// Section 2 (HITTING EDGES) props — hitter props with a real or DFS line, top-3.
+// Adds hitter_fantasy_score (PrizePicks DFS) to the existing hits/TB/HRR. We
+// OMIT hitter_rbis / hitter_runs (consensus 0.5-line base-rate noise, documented)
+// and hitter_home_runs (its own composite HR MATCHUPS section).
 const FEATURED_HITTER_PROPS: ReadonlySet<PropType> = new Set([
   "hitter_hits", "hitter_total_bases", "hitter_hits_runs_rbis",
+  "hitter_fantasy_score",
 ]);
 
 // Edge threshold is set ABOVE the regular display threshold (0.10) so we
 // don't promote borderline calls. 0.12 = a clear vote for one side after
 // vig is removed.
 const FEATURED_MIN_EDGE = 0.12;
+
+// DFS (PrizePicks) edges are measured vs a soft ~50/50 pick'em line, not a
+// de-vigged efficient sharp market, so a DFS edge of magnitude X is a weaker
+// signal than a sharp edge of the same X. We still gate on the RAW |edge|
+// (>= FEATURED_MIN_EDGE) — DFS props qualify on their own merit — but RANK them
+// at a small discount so an equal sharp edge sorts ahead and DFS plays never
+// bury the more-reliable sharp ones in the top-3. Display value is unchanged.
+const DFS_RANK_DISCOUNT = 0.85;
 
 // |projection - line| floor. The model can be technically "leaning over"
 // while sitting 0.05 away from the line — that's not a meaningful call,
@@ -879,6 +898,10 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         // a fake 4.0-TB edge can't headline the section.
         const cap = FEATURED_PROJ_CAP[propType];
         if (cap !== undefined && proj.projection > cap) return null;
+        // Projection floor — drops broken thin-sample LOW projections (e.g. a
+        // 7.0 first-inning-pitches proj) that fake a huge under-edge.
+        const projFloor = FEATURED_PROJ_FLOOR[propType];
+        if (projFloor !== undefined && proj.projection < projFloor) return null;
 
         const lean: "over" | "under" =
           proj.projection > e.line ? "over" : "under";
@@ -936,7 +959,13 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         };
       })
       .filter((p): p is FeaturedPlay => p !== null)
-      .sort((a, b) => (b.edge ?? 0) - (a.edge ?? 0));
+      // Rank by edge, discounting DFS (PrizePicks) edges so an equal sharp edge
+      // sorts ahead. Gate already used the RAW |edge|; this only orders them.
+      .sort((a, b) => {
+        const rank = (p: FeaturedPlay) =>
+          (p.bookmaker === "prizepicks" ? DFS_RANK_DISCOUNT : 1) * (p.edge ?? 0);
+        return rank(b) - rank(a);
+      });
   // NOTE: no longer sliced here — callers slice to top-3 AFTER any min-sample
   // gate so a thin-history outlier can't consume a top-3 slot.
 
@@ -1146,10 +1175,16 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
     strikeouts:         "actual_strikeouts",
     hits_allowed:       "actual_hits_allowed",
     outs_recorded:      "actual_outs_recorded",
+    walks:              "actual_walks",
+    earned_runs:        "actual_earned_runs",
+    pitcher_fantasy_score: "actual_pitcher_fantasy_score",
+    pitcher_first_inning_pitches:    "actual_first_inning_pitches",
+    pitcher_first_inning_strikeouts: "actual_first_inning_strikeouts",
     hitter_hits:        "actual_hits",
     hitter_total_bases: "actual_total_bases",
     hitter_hits_runs_rbis: "actual_hits_runs_rbis",
     hitter_home_runs:   "actual_home_runs",
+    hitter_fantasy_score:  "actual_hitter_fantasy_score",
   };
   const allFeaturedPlays = [...pitchingPlays, ...hittingPlays, ...hrMatchups];
   const featuredPlayerIds = [...new Set(allFeaturedPlays.map((p) => p.playerId))];

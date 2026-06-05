@@ -119,13 +119,30 @@ export const SHARP_MIN_LINE: Partial<Record<PropType, number>> = {
 //     still won't surface on the board because pinnacle posts no two-sided
 //     hitter_hits line, so edge.py only emits a `consensus` baseline that
 //     FEATURED_BOOKS excludes — a SEPARATE cause, deliberately not forced in.
+// Every prop here is eligible for the curated Featured Plays sections (pitching
+// + hitting), ranked by |edge|, top-3 each. EXPANSION (2026-06-05): added the
+// remaining pitcher props + both fantasy props + 1st-inning props so HFS / PFS /
+// 1st-inning / walks / earned_runs can be featured — not just strikeouts / hits /
+// total bases. DFS-only props (fantasy + 1st-inning) now carry an edge because
+// edge.py computes a PrizePicks-fair (~0.5) DFS edge for them; FEATURED_BOOKS in
+// page.tsx includes 'prizepicks' so they qualify. Floors are each prop's real
+// main market (gate out alts / short outings / bench appearances).
+//   DELIBERATELY OMITTED: hitter_rbis / hitter_runs (consensus 0.5-line base-rate
+//   noise — documented exclusion; they pollute the hit rate without real signal)
+//   and hitter_home_runs (has its own composite HR MATCHUPS section).
 export const FEATURED_MIN_LINE: Partial<Record<PropType, number>> = {
   strikeouts:            3.5,
   hits_allowed:          2.5,
   outs_recorded:         10.5,
+  walks:                 1.5,   // main walk line (excludes 0.5 alts)
+  earned_runs:           1.5,   // pinnacle-backed; excludes 0.5 alts
+  pitcher_fantasy_score: 6.0,   // PrizePicks DFS; floor excludes short relief
+  pitcher_first_inning_pitches:    8.5,   // PrizePicks DFS (~13-18)
+  pitcher_first_inning_strikeouts: 0.5,   // real two-sided ParlayAPI line (main 0.5)
   hitter_hits:           0.5,
   hitter_total_bases:    1.5,
   hitter_hits_runs_rbis: 1.5,
+  hitter_fantasy_score:  4.0,   // PrizePicks DFS; floor excludes bench/pinch
 };
 
 // Per-prop projection sanity ceiling for the curated Featured Plays. A thin/spiky
@@ -138,10 +155,27 @@ export const FEATURED_PROJ_CAP: Partial<Record<PropType, number>> = {
   strikeouts: 13,
   hits_allowed: 9,
   outs_recorded: 24,
+  walks: 4,                          // a walk projection > 4 is a thin-sample blowup
+  earned_runs: 6,
+  pitcher_fantasy_score: 45,         // an ace projects ~35; 45 is generous headroom
+  pitcher_first_inning_pitches: 30,  // a 1st inning rarely exceeds ~25 pitches
+  pitcher_first_inning_strikeouts: 3,
   hitter_hits: 2.3,
   hitter_total_bases: 3.2,
   hitter_hits_runs_rbis: 3.8,
   hitter_home_runs: 0.8,
+  hitter_fantasy_score: 18,          // a strong hitter projects ~10-12
+};
+
+// Per-prop projection FLOOR for the curated Featured Plays — the mirror of the
+// cap, for props where a too-LOW projection is a known thin-sample failure mode
+// that posts a fake under-edge. Today only 1st-inning pitches needs it: a real
+// 1st inning averages ~13-18 pitches, so a 7.0 projection (seen 2026-06-05) is a
+// broken thin Statcast sample — vs a 16.5 line it fakes a huge under. 12 keeps
+// legit modest unders (14 vs 16.5) while dropping the broken ones. The prop still
+// shows on its own tab; this only gates the curated top-3.
+export const FEATURED_PROJ_FLOOR: Partial<Record<PropType, number>> = {
+  pitcher_first_inning_pitches: 12,
 };
 
 // How many cards each Featured Plays section shows per day (top-N by edge). The

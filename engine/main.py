@@ -42,6 +42,19 @@ import weather
 from constants import BLEND_BASELINE_WEIGHT, BLEND_MODEL_WEIGHT, LOOKBACK_DAYS, et_today
 
 
+# Full-history fantasy medians (the fantasy-score regression prior). Fetched
+# lazily once per cron process and reused by both the pitcher (PFS) and hitter
+# (HFS) fantasy builders, so a run never pays the ~20k-row read twice.
+_FANTASY_PRIORS: dict | None = None
+
+
+def _fantasy_priors() -> dict:
+    global _FANTASY_PRIORS
+    if _FANTASY_PRIORS is None:
+        _FANTASY_PRIORS = db.get_fantasy_history_medians()
+    return _FANTASY_PRIORS
+
+
 # ─── blend helper (unchanged, just imports constants now) ────────────────────
 
 def _blend(base_rows: list[dict], model_rows: list[dict]) -> list[dict]:
@@ -341,7 +354,10 @@ def _run_pitcher_pipeline(
         (baseline.build_pitcher_fantasy_score_projections, "pitcher_fantasy_score"),
     ]:
         print(f"Building {label} projections...")
-        rows = builder(starters, projection_date=et_today())
+        if label == "pitcher_fantasy_score":
+            rows = builder(starters, projection_date=et_today(), prior_medians=_fantasy_priors())
+        else:
+            rows = builder(starters, projection_date=et_today())
         other_prop_rows.extend(rows)
         n = db.upsert_projections(rows)
         print(f"  upserted {n} {label} projections")
@@ -614,7 +630,10 @@ def _build_and_upsert_hitters(
         (baseline.build_hitter_fantasy_score_projections, "hitter_fantasy_score"),
     ]:
         print(f"Building {label} projections...")
-        rows = builder(players, projection_date=today)
+        if label == "hitter_fantasy_score":
+            rows = builder(players, projection_date=today, prior_medians=_fantasy_priors())
+        else:
+            rows = builder(players, projection_date=today)
         if label == "hitter_hits":
             hitter_hit_rows = rows
         # Attach display/ranking context to the HR rows only (never to the model).

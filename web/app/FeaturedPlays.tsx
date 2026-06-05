@@ -10,10 +10,16 @@ const PROP_LABEL: Partial<Record<PropType, string>> = {
   strikeouts:         "STRIKEOUTS",
   hits_allowed:       "HITS ALLOWED",
   outs_recorded:      "OUTS RECORDED",
+  walks:              "WALKS",
+  earned_runs:        "EARNED RUNS",
+  pitcher_fantasy_score: "PITCHER FANTASY",
+  pitcher_first_inning_pitches:    "1ST INN PITCHES",
+  pitcher_first_inning_strikeouts: "1ST INN KS",
   hitter_hits:        "HITS",
   hitter_total_bases: "TOTAL BASES",
   hitter_hits_runs_rbis: "HITS+RUNS+RBIS",
   hitter_home_runs:   "HOME RUNS",
+  hitter_fantasy_score:  "HITTER FANTASY",
 };
 
 // Per-section one-line framing so a user knows what each list measures without
@@ -309,18 +315,30 @@ function FeaturedPlayCard({
             </span>
           </div>
 
-          {/* de-vig math: proj + model% vs market% (framed to the leaned side) */}
+          {/* math row: proj + model% vs market%. Sharp books show the de-vigged
+              market % ("model 64% vs mkt 52%"). DFS pick'em lines (PrizePicks)
+              are flat ~50%, so a redundant "vs mkt 50%" is dropped in favor of
+              the model's conviction to clear the line. */}
           <div className="mt-1.5 text-[11px] tabular-nums text-slate-500">
             proj <span className="text-slate-300">{fmt(play.projection)}</span>
-            {modelLean != null && marketLean != null && (
-              <span title="No-vig probability the model assigns this side vs the de-vigged book line">
-                <span className="mx-1.5 text-slate-700">·</span>
-                model{" "}
-                <span className="font-semibold text-slate-200">{Math.round(modelLean * 100)}%</span>
-                <span className="mx-1 text-slate-600">vs</span>
-                mkt {Math.round(marketLean * 100)}%
-              </span>
-            )}
+            {modelLean != null &&
+              (play.bookmaker === "prizepicks" ? (
+                <span title="No-vig probability the model assigns this side of the PrizePicks pick'em line (which sits at the projected ~median, an implied coin flip).">
+                  <span className="mx-1.5 text-slate-700">·</span>
+                  model{" "}
+                  <span className="font-semibold text-slate-200">{Math.round(modelLean * 100)}%</span>
+                  <span className="mx-1 text-slate-600">{isOver ? "over" : "under"}</span>
+                  PrizePicks line
+                </span>
+              ) : marketLean != null ? (
+                <span title="No-vig probability the model assigns this side vs the de-vigged book line">
+                  <span className="mx-1.5 text-slate-700">·</span>
+                  model{" "}
+                  <span className="font-semibold text-slate-200">{Math.round(modelLean * 100)}%</span>
+                  <span className="mx-1 text-slate-600">vs</span>
+                  mkt {Math.round(marketLean * 100)}%
+                </span>
+              ) : null)}
           </div>
 
           {/* conviction: recent form · sharp agreement · sample */}

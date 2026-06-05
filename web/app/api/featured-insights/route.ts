@@ -17,6 +17,7 @@ type PlayCtx = {
   line?: number;
   edge?: number;
   lean?: "over" | "under";
+  book?: string;        // bookmaker — 'prizepicks' = a soft DFS pick'em line
   parkFactor?: number;
   oppKRate?: number;
   oppTeam?: string;     // team the pitcher faces — the owner of oppKRate
@@ -53,10 +54,16 @@ const PROP_NOUN: Record<string, string> = {
   strikeouts:         "strikeouts",
   hits_allowed:       "hits allowed",
   outs_recorded:      "outs recorded",
+  walks:              "walks",
+  earned_runs:        "earned runs",
+  pitcher_fantasy_score: "PrizePicks fantasy points",
+  pitcher_first_inning_pitches:    "first-inning pitches",
+  pitcher_first_inning_strikeouts: "first-inning strikeouts",
   hitter_hits:        "hits",
   hitter_total_bases: "total bases",
   hitter_hits_runs_rbis: "hits + runs + RBIs",
   hitter_home_runs:   "home runs",
+  hitter_fantasy_score:  "PrizePicks fantasy points",
 };
 
 function matchupTeams(matchup: string): { away: string; home: string } {
@@ -103,10 +110,16 @@ function describePlay(p: PlayCtx, n: number): string {
 
   const noun = PROP_NOUN[p.prop] ?? p.prop;
   const lean = p.lean === "over" ? "OVER" : "UNDER";
+  const isDfs = p.book === "prizepicks";
+  // DFS pick'em lines (PrizePicks) sit at the projected ~median (an implied coin
+  // flip), so the edge is the model beating that soft line, not a de-vigged sharp
+  // market. Frame it that way so the read doesn't overstate it as a sharp edge.
+  const edgeClause = isDfs
+    ? `an ${lean} lean on the soft PrizePicks pick'em line (edge ${(p.edge ?? 0).toFixed(2)} over the line's implied coin flip; ~0.15+ is strong for a DFS line)`
+    : `an ${lean} lean (model-vs-market edge ${(p.edge ?? 0).toFixed(2)}, where ~0.12+ is strong)`;
   const bits = [
     `${n}. SECTION ${p.section} — ${p.player}, ${teams}`,
-    `${noun}: model projects ${p.proj?.toFixed(1)} against a ${p.line?.toFixed(1)} line, ` +
-      `an ${lean} lean (model-vs-market edge ${(p.edge ?? 0).toFixed(2)}, where ~0.12+ is strong)`,
+    `${noun}: model projects ${p.proj?.toFixed(1)} against a ${p.line?.toFixed(1)} line, ${edgeClause}`,
   ];
   if (p.oppKRate !== undefined) {
     // Name the OPPONENT so the LLM attributes the K-rate to the right team — it
@@ -215,6 +228,7 @@ export async function POST(req: Request) {
         line: p.line,
         edge: p.edge,
         lean: p.lean,
+        book: p.bookmaker,
         parkFactor: p.parkFactor,
         oppKRate: p.oppKRate,
         oppTeam: p.oppTeam,

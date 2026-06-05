@@ -468,6 +468,46 @@ def get_players_with_sweet_spot(date_str: str) -> set[int]:
         return set()
 
 
+def get_fantasy_history_medians() -> dict[int, float]:
+    """Per-player full-history median fantasy score from player_game_logs.
+
+    The regression prior for the fantasy-score baselines: a sparse recent window
+    biases a star's median projection LOW (faking under-edges), so the builder
+    shrinks the recency median toward this stable full-history median. Covers BOTH
+    the hitter and pitcher fantasy columns in one dict (a player is one or the
+    other, so player_ids don't collide). Includes backfilled rows — they make the
+    prior deeper/more stable. Paginated past the 1000-row cap. Returns {} on any
+    error so the baselines simply fall back to recency-only (no regression).
+    """
+    import statistics
+    try:
+        client = _client()
+        by_player: dict[int, list[float]] = {}
+        for col in ("actual_hitter_fantasy_score", "actual_pitcher_fantasy_score"):
+            for page in range(60):
+                start = page * 1000
+                resp = (
+                    client.table("player_game_logs")
+                    .select(f"player_id, {col}")
+                    .not_.is_(col, "null")
+                    .range(start, start + 999)
+                    .execute()
+                )
+                batch = resp.data or []
+                for r in batch:
+                    v = r.get(col)
+                    if v is not None:
+                        by_player.setdefault(int(r["player_id"]), []).append(float(v))
+                if len(batch) < 1000:
+                    break
+        medians = {pid: float(statistics.median(vals)) for pid, vals in by_player.items() if vals}
+        print(f"  fantasy history priors: {len(medians)} players")
+        return medians
+    except Exception as exc:
+        print(f"  could not fetch fantasy history medians ({exc}) — recency-only")
+        return {}
+
+
 _PITCHER_PROP_TYPES = (
     "strikeouts", "hits_allowed", "walks", "earned_runs",
     "outs_recorded", "pitcher_first_inning_pitches",

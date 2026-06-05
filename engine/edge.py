@@ -23,7 +23,7 @@ import math
 
 from scipy.stats import norm, poisson
 
-from constants import MIN_STD, PROP_CV
+from constants import FANTASY_CV, MIN_STD, PROP_CV
 
 if TYPE_CHECKING:
     from schemas import EdgeRow, LineRow, ProjectionContextRow
@@ -33,6 +33,21 @@ if TYPE_CHECKING:
 # they never seed the baseline. Caesars is NOT ingested by lines.py so it
 # would never appear in book_lines — kept out of the list.
 CONSENSUS_BOOKS = ["draftkings", "fanduel"]
+
+# Props for which PrizePicks is the ONLY market — no sportsbook posts a two-sided
+# line, so there's nothing to de-vig. These are the only props that get a DFS
+# fallback edge (model vs the ~0.5 pick'em fair). Props with real sportsbook
+# markets (strikeouts, hits, total bases, RBIs, earned runs, ...) must NOT fall
+# back to a PrizePicks line: PrizePicks posts goblin/demon ALT rungs for those
+# (e.g. a 5.5 earned-runs or 4.5 hits+runs+RBIs alt), and de-vigging the model
+# against an alt produces a huge fake under-edge. Those props get a sharp /
+# consensus edge or nothing.
+_DFS_ONLY_PROPS = {
+    "hitter_fantasy_score",
+    "pitcher_fantasy_score",
+    "pitcher_first_inning_pitches",
+    "pitcher_first_inning_strikeouts",
+}
 
 # PROP_CV (coefficient of variation for the normal approximation) and MIN_STD
 # (scale floor) now live in engine/constants.py so the same values can be
@@ -93,7 +108,10 @@ def _model_over_prob(projection: float, line: float, prop_type: str | None = Non
     calibration data accumulates. Poisson is the right first correction.)
     """
     if prop_type and prop_type.endswith("fantasy_score"):
-        std = max(projection * PROP_CV, MIN_STD)
+        # Fantasy points are far more volatile than the generic 0.35 CV; use the
+        # measured per-prop fantasy CV so DFS fantasy edges aren't inflated.
+        cv = FANTASY_CV.get(prop_type, PROP_CV)
+        std = max(projection * cv, MIN_STD)
         return float(1.0 - norm.cdf(line - 0.5, loc=projection, scale=std))
     mu = max(projection, 1e-6)  # Poisson mean must be > 0
     return float(poisson.sf(math.floor(line), mu))
@@ -171,6 +189,7 @@ def compute_edges(
     edges: list[dict] = []
     skipped_no_line = 0
     skipped_no_baseline = 0
+    dfs_edges = 0
 
     for proj in projections:
         player_id = proj["player_id"]
@@ -184,10 +203,32 @@ def compute_edges(
 
         baseline = _fair_over_prob(book_lines)
         if baseline is None:
-            skipped_no_baseline += 1
-            continue
-
-        source_book, source_row, fair_over_prob = baseline
+            # DFS fallback: a PrizePicks (soft pick'em) line with no sharp
+            # two-sided book to de-vig. PrizePicks sets the line at its own
+            # projected ~median, so the fair over-prob is ~0.5 — we de-vig its
+            # prices when present (which is exactly 0.5 for the flat pick'em).
+            # The model's edge is its calibrated over-prob vs that fair. This lets
+            # DFS-only props (hitter/pitcher fantasy score, 1st-inning markets,
+            # and any prop a sharp book didn't post) carry an edge so they can be
+            # ranked + featured alongside the sharp-book edges. The board still
+            # treats prizepicks as a non-sharp book (such an edge renders muted,
+            # never a colored structural edge) — only Featured Plays elevates it.
+            # ONLY for DFS-only props: other props would de-vig the model against
+            # a PrizePicks goblin/demon ALT line and post a fake edge.
+            if prop_type not in _DFS_ONLY_PROPS:
+                skipped_no_baseline += 1
+                continue
+            pp = book_lines.get("prizepicks")
+            if pp is None or pp.get("line") is None:
+                skipped_no_baseline += 1
+                continue
+            dfs_fair = _devig_over_prob(pp.get("over_price"), pp.get("under_price"))
+            if dfs_fair is None:
+                dfs_fair = 0.5
+            source_book, source_row, fair_over_prob = "prizepicks", pp, dfs_fair
+            dfs_edges += 1
+        else:
+            source_book, source_row, fair_over_prob = baseline
         line = float(source_row["line"])
         model_proj = float(proj["projection"])
         model_over_prob = _model_over_prob(model_proj, line, prop_type)
@@ -219,7 +260,7 @@ def compute_edges(
         })
 
     print(
-        f"  edges: {len(edges)} computed, "
+        f"  edges: {len(edges)} computed ({dfs_edges} DFS/PrizePicks-fair), "
         f"{skipped_no_line} skipped (no line), "
         f"{skipped_no_baseline} skipped (no de-viggable baseline)"
     )
