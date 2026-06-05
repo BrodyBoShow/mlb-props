@@ -185,6 +185,18 @@ def _price_balance(row: dict) -> float:
     return abs(oi - ui)
 
 
+# Props with a CANONICAL main-market line value (mirrors the frontend
+# MAIN_LINE_VALUE). The dedup prefers the rung at this value before the balance
+# heuristic — needed for the combo props that trade on 1.5 where the 0.5 "1+"
+# alt rung competes on balance and would otherwise be stored (landing the edge
+# on the wrong market + churning run-to-run). Pitcher props are NOT here — they
+# trade at a per-pitcher line, so the balance heuristic is correct for them.
+_MAIN_LINE_VALUE = {
+    "hitter_total_bases": 1.5,
+    "hitter_hits_runs_rbis": 1.5,
+}
+
+
 # PrizePicks' own projections API returns each fantasy line tagged with
 # odds_type ('standard' | 'goblin' | 'demon') — the discriminator ParlayAPI
 # strips when it normalizes DFS payouts. We read the STANDARD rung directly so
@@ -472,22 +484,45 @@ def fetch_prop_lines(
         per_prop[prop_type] += 1
 
     # Deduplicate to ONE row per (player_id, prop_type, bookmaker, game_date) by
-    # selecting the MAIN-market rung deterministically: the rung whose two-sided
-    # pricing is most BALANCED (over/under implied probs closest to 50/50, via
-    # _price_balance). The main line sits near the projected median (balanced
-    # juice); alt rungs are off-median with skewed prices. This replaces the old
-    # "keep the first row" pick, which was order-unstable across crons — the
-    # stored line jumped between main and alt rungs, corrupting edges, /results
-    # grading, and (newly) open->close line-movement. A stable main line makes the
-    # opening and current snapshots like-for-like, so movement is REAL rather than
-    # an alt-vs-main artifact. Rows without prices keep first-seen (DFS books post
-    # a single rung). The two PrizePicks fantasy props are overridden below with
-    # the PrizePicks-direct standard, so their pick here doesn't matter.
+    # selecting the MAIN-market rung deterministically. Two tiers:
+    #   1) If the prop has a CANONICAL main line value (_MAIN_LINE_VALUE — e.g.
+    #      total bases trades on 1.5), PREFER the rung at that value. The balance
+    #      heuristic alone is NOT enough here: for total bases the 0.5 alt ("1+
+    #      TB") is often just as balanced as the 1.5 main, so balance would store
+    #      the alt, land the edge on the wrong market (Featured filters to the
+    #      main line -> it vanishes), and churn run-to-run as the two balances
+    #      flip. Pinning the canonical value makes it stable + correct.
+    #   2) Otherwise (pitcher props, which trade at a per-pitcher line; or no
+    #      rung at the canonical value), pick the rung whose two-sided pricing is
+    #      most BALANCED (over/under implied probs closest to 50/50, via
+    #      _price_balance) — the main line sits near the projected median with
+    #      balanced juice; alt rungs are off-median with skewed prices.
+    # Replaces the old order-unstable "keep first row" pick (which jumped between
+    # main and alt rungs across crons, corrupting edges, /results grading, and
+    # line-movement). Rows without prices keep first-seen (DFS books post a single
+    # rung). The two PrizePicks fantasy props are overridden below with the
+    # PrizePicks-direct standard, so their pick here doesn't matter.
     best_rung: dict[tuple, dict] = {}
     for r in rows:
         key = (r["player_id"], r["prop_type"], r["bookmaker"], r["game_date"])
         cur = best_rung.get(key)
-        if cur is None or _price_balance(r) < _price_balance(cur):
+        if cur is None:
+            best_rung[key] = r
+            continue
+        main = _MAIN_LINE_VALUE.get(r["prop_type"])
+        if main is not None:
+            try:
+                r_main = float(r["line"]) == main
+                c_main = float(cur["line"]) == main
+            except (TypeError, ValueError):
+                r_main = c_main = False
+            if r_main != c_main:
+                # exactly one is the canonical main line -> prefer it
+                if r_main:
+                    best_rung[key] = r
+                continue
+            # both or neither are the main line -> fall through to balance
+        if _price_balance(r) < _price_balance(cur):
             best_rung[key] = r
     rows = list(best_rung.values())
 
