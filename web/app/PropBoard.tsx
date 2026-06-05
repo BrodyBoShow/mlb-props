@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { useWatchlist } from "./useWatchlist";
 import DateNav from "./DateNav";
 import FeaturedPlays from "./FeaturedPlays";
 import ParkTag from "./ParkTag";
@@ -83,6 +84,44 @@ const LINE_LEAN_THRESHOLD = 0.1;
 // surface this many so the hitting lineup is never fully hidden (the lineup must
 // be visible in the card, not one click away). The rest stay behind the expander.
 const DEFAULT_HITTER_COUNT = 3;
+
+// ── Watchlist (localStorage, no accounts) ────────────────────────────────────
+// Cross-cutting user state shared via context so the star toggles + the filter
+// don't need to be threaded through every component.
+type WatchlistApi = {
+  has: (id: number) => boolean;
+  toggle: (id: number) => void;
+  onlyWatched: boolean; // the "★ Watchlist" filter is active
+};
+const WatchlistCtx = createContext<WatchlistApi>({
+  has: () => false,
+  toggle: () => {},
+  onlyWatched: false,
+});
+
+// A star toggle for a player. stopPropagation so it never opens a row/drawer.
+function StarButton({ playerId, className }: { playerId: number; className?: string }) {
+  const { has, toggle } = useContext(WatchlistCtx);
+  const watched = has(playerId);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        toggle(playerId);
+      }}
+      aria-label={watched ? "Remove from watchlist" : "Add to watchlist"}
+      title={watched ? "Watching — click to remove" : "Add to watchlist"}
+      className={[
+        "shrink-0 leading-none transition-colors",
+        watched ? "text-amber-400" : "text-slate-600 hover:text-amber-400/70",
+        className ?? "",
+      ].join(" ")}
+    >
+      {watched ? "★" : "☆"}
+    </button>
+  );
+}
 
 // Grade the PROJECTION'S LEAN against the line vs the actual — i.e. if you'd
 // bet the side the projection points to (over if proj > line, under if proj <
@@ -1218,7 +1257,10 @@ function PlayerChipsRow({
 
   return (
     <li className="px-5 py-2.5">
-      <div className="text-sm text-slate-100">{player.name}</div>
+      <div className="flex items-center gap-1.5 text-sm text-slate-100">
+        <StarButton playerId={player.player_id} />
+        <span>{player.name}</span>
+      </div>
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {chips.map(({ prop, row }) => {
           const live = showActual
@@ -1299,6 +1341,7 @@ function FocusedPlayerCard({
     <li className="flex items-start justify-between px-5 py-3">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
+          <StarButton playerId={row.player_id} />
           <span className="text-slate-100">{row.name}</span>
           {!isHitter && <SharpBadge sharp={row.sharpAgreement} />}
         </div>
@@ -1370,15 +1413,20 @@ function GameCard({
   // straight to them); a team-only match shows the whole game. Force the card
   // open while searching so the matches are visible.
   const q = (query ?? "").trim().toLowerCase();
-  const isSearching = q.length > 0;
-  const playerMatch = (pl: PlayerRow) => pl.name.toLowerCase().includes(q);
-  const matchedPitchers = isSearching ? gv.pitchers.filter(playerMatch) : gv.pitchers;
-  const matchedHitters = isSearching ? gv.hitters.filter(playerMatch) : gv.hitters;
+  const { has: isWatched, onlyWatched } = useContext(WatchlistCtx);
+  // A player passes the active filters (search AND/OR watchlist). When either
+  // filter is on, the card narrows to passing players and force-opens.
+  const filtering = q.length > 0 || onlyWatched;
+  const playerVisible = (pl: PlayerRow) =>
+    (!q || pl.name.toLowerCase().includes(q)) &&
+    (!onlyWatched || isWatched(pl.player_id));
+  const matchedPitchers = filtering ? gv.pitchers.filter(playerVisible) : gv.pitchers;
+  const matchedHitters = filtering ? gv.hitters.filter(playerVisible) : gv.hitters;
   const playerSearchHit =
-    isSearching && (matchedPitchers.length > 0 || matchedHitters.length > 0);
+    filtering && (matchedPitchers.length > 0 || matchedHitters.length > 0);
   const pitchersShown = playerSearchHit ? matchedPitchers : gv.pitchers;
   const hittersAll = playerSearchHit ? matchedHitters : gv.hitters;
-  const open = expanded || isSearching;
+  const open = expanded || filtering;
 
   const edgeHitters = hittersAll.filter(playerHasEdge);
   // Default-visible hitters: when searching, ALL matches (no folding); otherwise
@@ -1638,6 +1686,7 @@ function BoardTable({
   const [sortCol, setSortCol] = useState<BoardSortCol>("edge");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [edgesOnly, setEdgesOnly] = useState(false);
+  const { has: isWatched, onlyWatched } = useContext(WatchlistCtx);
 
   const q = query.trim().toLowerCase();
 
@@ -1654,6 +1703,7 @@ function BoardTable({
     const matchupHit = q ? gv.matchup.toLowerCase().includes(q) : false;
     const status = liveStatus.get(gv.game_id);
     const consider = (player: PlayerRow, keys: PropType[]) => {
+      if (onlyWatched && !isWatched(player.player_id)) return;
       if (q && !matchupHit && !player.name.toLowerCase().includes(q)) return;
       for (const prop of keys) {
         const row = player.props[prop];
@@ -1801,8 +1851,11 @@ function BoardTable({
                     }
                     className="cursor-pointer border-t border-slate-800/70 hover:bg-slate-900/60"
                   >
-                      <td className="max-w-[150px] truncate px-2 py-1.5 text-slate-100">
-                        {e.player.name}
+                      <td className="px-2 py-1.5 text-slate-100">
+                        <span className="flex items-center gap-1">
+                          <StarButton playerId={e.player.player_id} />
+                          <span className="max-w-[130px] truncate">{e.player.name}</span>
+                        </span>
                       </td>
                       <td className="whitespace-nowrap px-2 py-1.5 text-slate-400">
                         {PROP_META[e.prop].short}
@@ -2009,6 +2062,7 @@ function PlayerDrawer({
         <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-slate-800 bg-slate-950/95 px-5 py-4 backdrop-blur">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
+              <StarButton playerId={player.player_id} className="text-lg" />
               <h3 className="truncate text-base font-semibold text-slate-100">{player.name}</h3>
               {!isHitter && <SharpBadge sharp={row.sharpAgreement} />}
             </div>
@@ -2217,6 +2271,12 @@ export default function PropBoard({
   const [view, setView] = useState<"games" | "board">("games");
   // Player detail drawer (deep-dive side panel) — null when closed.
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
+  // Watchlist (★) — starred player_ids in localStorage + the "only watched" filter.
+  const watchlist = useWatchlist();
+  const [watchlistOnly, setWatchlistOnly] = useState(false);
+  // Only RESTRICT once hydrated AND at least one star exists — else toggling it on
+  // an empty / SSR list would blank the board.
+  const wlActive = watchlistOnly && watchlist.hydrated && watchlist.count > 0;
 
   // Poll the MLB Stats API for live game status + box scores (unchanged).
   const liveStatus = useLiveGameStatus(date);
@@ -2255,9 +2315,17 @@ export default function PropBoard({
           (HITTER_PROPS.has(focus) ? gv.hitters : gv.pitchers).some((pl) => pl.props[focus]),
         );
 
-  // Search filter (player name or either team).
+  // Search + watchlist filters (player name / team / starred).
   const q = query.trim().toLowerCase();
-  const queried = q ? visibleByFocus.filter((gv) => gameMatchesQuery(gv, q)) : visibleByFocus;
+  const queried = visibleByFocus.filter((gv) => {
+    if (q && !gameMatchesQuery(gv, q)) return false;
+    if (
+      wlActive &&
+      ![...gv.pitchers, ...gv.hitters].some((pl) => watchlist.has(pl.player_id))
+    )
+      return false;
+    return true;
+  });
 
   // Decorate with summary + status, then sort by the selected mode (default:
   // chronological by start time). Edge / count sorts surface value faster.
@@ -2294,7 +2362,9 @@ export default function PropBoard({
     ].join(" ");
 
   return (
-    <>
+    <WatchlistCtx.Provider
+      value={{ has: watchlist.has, toggle: watchlist.toggle, onlyWatched: wlActive }}
+    >
       {/* date navigation */}
       <DateNav currentDate={date} prevDate={prevDate} nextDate={nextDate} />
 
@@ -2354,6 +2424,29 @@ export default function PropBoard({
           )}
         </div>
 
+        {/* watchlist filter toggle */}
+        <button
+          type="button"
+          onClick={() => setWatchlistOnly((v) => !v)}
+          title={
+            watchlist.count > 0
+              ? "Show only your starred players"
+              : "Star players (☆) to build a watchlist"
+          }
+          className={[
+            "flex shrink-0 items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+            wlActive
+              ? "border-amber-500/50 bg-amber-500/10 text-amber-300"
+              : "border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200",
+          ].join(" ")}
+        >
+          <span>★</span>
+          <span>
+            Watchlist
+            {watchlist.hydrated && watchlist.count > 0 ? ` (${watchlist.count})` : ""}
+          </span>
+        </button>
+
         {view === "games" && (
           <div className="flex items-center gap-1 text-sm">
             <span className="mr-0.5 text-slate-500">Sort</span>
@@ -2401,6 +2494,14 @@ export default function PropBoard({
             );
           })()}
       </div>
+
+      {watchlistOnly && watchlist.hydrated && watchlist.count === 0 && (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-200/80">
+          Your watchlist is empty — tap the{" "}
+          <span className="text-amber-400">☆</span> next to any player to add them,
+          then this shows just your players.
+        </div>
+      )}
 
       {view === "board" && (
         <BoardTable
@@ -2493,6 +2594,6 @@ export default function PropBoard({
       )}
 
       <PlayerDrawer target={drawer} date={date} onClose={() => setDrawer(null)} />
-    </>
+    </WatchlistCtx.Provider>
   );
 }
