@@ -176,6 +176,11 @@ export const FEATURED_PROJ_CAP: Partial<Record<PropType, number>> = {
 // shows on its own tab; this only gates the curated top-3.
 export const FEATURED_PROJ_FLOOR: Partial<Record<PropType, number>> = {
   pitcher_first_inning_pitches: 12,
+  // A real hitter projects >= ~2 fantasy points; a 0.6 HFS proj on a player with
+  // many GP is a pitcher-batting / non-hitter data row (it faked a +0.31 under on
+  // a 4.5 line, 2026-06-05). A real starter projects >= ~8 PFS.
+  hitter_fantasy_score: 2.0,
+  pitcher_fantasy_score: 8.0,
 };
 
 // How many cards each Featured Plays section shows per day (top-N by edge). The

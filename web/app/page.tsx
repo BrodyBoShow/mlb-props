@@ -893,6 +893,10 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
 
         const proj = projIndex.get(`${e.player_id}|${e.prop_type}`);
         if (!proj) return null;
+        // A play with no resolvable player name is a data-issue row (e.g. an
+        // unnamed pitcher batting) — never feature it.
+        const playerName = proj.players?.full_name;
+        if (!playerName) return null;
         if (Math.abs(proj.projection - e.line) < FEATURED_MIN_LEAN) return null;
         // Sanity ceiling: drop implausible (thin/spiky baseline) projections so
         // a fake 4.0-TB edge can't headline the section.
@@ -936,7 +940,7 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
 
         return {
           playerId: e.player_id,
-          playerName: proj.players?.full_name ?? "Unknown player",
+          playerName,
           propType,
           projection: proj.projection,
           line: e.line,
