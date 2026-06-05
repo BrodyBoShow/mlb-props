@@ -9,7 +9,11 @@ import { getParkProfile } from "@/lib/constants";
 import { windClause } from "@/lib/windTag";
 import { useLiveGameStatus } from "./useLiveGameStatus";
 import { useLiveBoxScores } from "./useLiveBoxScores";
-import { useFirstInningStats, type FirstInningGame } from "./useFirstInningStats";
+import {
+  useFirstInningStats,
+  type FirstInningGame,
+  type FirstInningMap,
+} from "./useFirstInningStats";
 import type {
   ByProp,
   FeaturedSection,
@@ -795,6 +799,7 @@ type GameSummary = {
   bestPlay: BestPlay | null; // strongest qualifying play (null = none qualify)
   qualifyingCount: number;
   hasAnyLine: boolean;
+  topMagnitude: number; // strongest qualifying |edge| in the game (0 = none) — for sorting
 };
 
 // Summarize a game for its collapsed row. In "all" mode this scans every prop
@@ -841,7 +846,53 @@ function summarizeGameView(gv: GameView, focus: PropType | "all"): GameSummary {
     }
   }
 
-  return { bestPlay, qualifyingCount, hasAnyLine };
+  return { bestPlay, qualifyingCount, hasAnyLine, topMagnitude: Math.max(bestMag, 0) };
+}
+
+// Does a game match the search query (player name or either team)?
+function gameMatchesQuery(gv: GameView, q: string): boolean {
+  if (!q) return true;
+  if (gv.matchup.toLowerCase().includes(q)) return true;
+  return [...gv.pitchers, ...gv.hitters].some((pl) =>
+    pl.name.toLowerCase().includes(q),
+  );
+}
+
+// Today's live model record across FINAL games on this slate — counts each
+// graded prop (line present + final actual) as a win/loss via the same gradeLean
+// the chips use. Pushes/no-lean are excluded. Returns null when nothing is
+// graded yet so the banner stays hidden.
+function computeSlateRecord(
+  games: GameView[],
+  liveStatus: Map<number, GameStatus>,
+  liveStats: Map<number, Map<number, StatLine>>,
+  firstInningStats: FirstInningMap,
+): { wins: number; losses: number } | null {
+  let wins = 0;
+  let losses = 0;
+  for (const gv of games) {
+    if (liveStatus.get(gv.game_id)?.state !== "final") continue;
+    const stats = liveStats.get(gv.game_id);
+    const fi = firstInningStats.get(gv.game_id);
+    for (const pl of [...gv.pitchers, ...gv.hitters]) {
+      for (const prop of PROPS) {
+        const row = pl.props[prop.key];
+        if (!row || row.line === undefined) continue;
+        const actual = liveActualFor(
+          prop.key,
+          stats?.get(pl.player_id),
+          true,
+          fi,
+          pl.player_id,
+        );
+        if (actual === undefined) continue;
+        const g = gradeLean(row.projection, row.line, actual, true);
+        if (g === "win") wins += 1;
+        else if (g === "loss") losses += 1;
+      }
+    }
+  }
+  return wins + losses > 0 ? { wins, losses } : null;
 }
 
 // Default open/closed: a game with a qualifying edge starts EXPANDED (its plays
@@ -1279,6 +1330,7 @@ function GameCard({
   onFocus,
   openDetail,
   onToggleDetail,
+  query,
 }: {
   gv: GameView;
   summary: GameSummary;
@@ -1292,6 +1344,7 @@ function GameCard({
   onFocus: (p: PropType) => void;
   openDetail: string | null;
   onToggleDetail: (key: string) => void;
+  query?: string;
 }) {
   const [showAllHitters, setShowAllHitters] = useState(false);
 
@@ -1304,20 +1357,37 @@ function GameCard({
   });
   const parkShown = !!homeTeam && getParkProfile(homeTeam).direction !== "neutral";
 
-  const edgeHitters = gv.hitters.filter(playerHasEdge);
-  // Default-visible hitters: those with a real edge, or (if none) the top few so
-  // the lineup is never an empty section. `gv.hitters` is already sorted
-  // strongest-edge-first. The rest fold behind the "Show N more" expander.
-  const defaultHitters =
-    edgeHitters.length > 0 ? edgeHitters : gv.hitters.slice(0, DEFAULT_HITTER_COUNT);
-  const hittersToShow = showAllHitters ? gv.hitters : defaultHitters;
-  const moreHitters = gv.hitters.length - defaultHitters.length;
+  // Search: when a player name matches, narrow the lists to the matches (jump
+  // straight to them); a team-only match shows the whole game. Force the card
+  // open while searching so the matches are visible.
+  const q = (query ?? "").trim().toLowerCase();
+  const isSearching = q.length > 0;
+  const playerMatch = (pl: PlayerRow) => pl.name.toLowerCase().includes(q);
+  const matchedPitchers = isSearching ? gv.pitchers.filter(playerMatch) : gv.pitchers;
+  const matchedHitters = isSearching ? gv.hitters.filter(playerMatch) : gv.hitters;
+  const playerSearchHit =
+    isSearching && (matchedPitchers.length > 0 || matchedHitters.length > 0);
+  const pitchersShown = playerSearchHit ? matchedPitchers : gv.pitchers;
+  const hittersAll = playerSearchHit ? matchedHitters : gv.hitters;
+  const open = expanded || isSearching;
+
+  const edgeHitters = hittersAll.filter(playerHasEdge);
+  // Default-visible hitters: when searching, ALL matches (no folding); otherwise
+  // those with a real edge, or (if none) the top few so the lineup is never an
+  // empty section. The rest fold behind the "Show N more" expander.
+  const defaultHitters = playerSearchHit
+    ? hittersAll
+    : edgeHitters.length > 0
+      ? edgeHitters
+      : hittersAll.slice(0, DEFAULT_HITTER_COUNT);
+  const hittersToShow = showAllHitters ? hittersAll : defaultHitters;
+  const moreHitters = hittersAll.length - defaultHitters.length;
 
   const isHitterFocus = focus !== "all" && HITTER_PROPS.has(focus);
   const focusedPlayers =
     focus === "all"
       ? []
-      : (isHitterFocus ? gv.hitters : gv.pitchers).filter((pl) => pl.props[focus]);
+      : (isHitterFocus ? hittersAll : pitchersShown).filter((pl) => pl.props[focus]);
   const focusUnit = focus !== "all" ? PROP_META[focus].unit : "";
 
   return (
@@ -1326,7 +1396,7 @@ function GameCard({
       <div
         role="button"
         tabIndex={0}
-        aria-expanded={expanded}
+        aria-expanded={open}
         onClick={onToggle}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -1336,12 +1406,12 @@ function GameCard({
         }}
         className={[
           "cursor-pointer px-5 py-3 transition-colors hover:bg-slate-900",
-          expanded ? "border-b border-slate-800 bg-slate-900" : "",
+          open ? "border-b border-slate-800 bg-slate-900" : "",
         ].join(" ")}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-start gap-2">
-            <Chevron expanded={expanded} />
+            <Chevron expanded={open} />
             <div className="min-w-0">
               <h2 className="font-semibold text-slate-200">{gv.matchup}</h2>
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
@@ -1405,17 +1475,17 @@ function GameCard({
             })()}
           </div>
         </div>
-        {!expanded && <CollapsedSummary summary={summary} />}
+        {!open && <CollapsedSummary summary={summary} />}
       </div>
 
-      {expanded &&
+      {open &&
         (focus === "all" ? (
           <div>
-            {gv.pitchers.length > 0 && (
+            {pitchersShown.length > 0 && (
               <>
                 <SectionLabel>Pitchers</SectionLabel>
                 <ul className="divide-y divide-slate-800/60">
-                  {gv.pitchers.map((pl) => (
+                  {pitchersShown.map((pl) => (
                     <PlayerChipsRow
                       key={pl.player_id}
                       player={pl}
@@ -1435,12 +1505,14 @@ function GameCard({
                 </ul>
               </>
             )}
-            {gv.hitters.length > 0 && (
+            {hittersAll.length > 0 && (
               <>
                 <SectionLabel>
-                  {!showAllHitters && moreHitters > 0 && edgeHitters.length > 0
-                    ? "Hitters with edges"
-                    : "Hitters"}
+                  {playerSearchHit
+                    ? "Hitters"
+                    : !showAllHitters && moreHitters > 0 && edgeHitters.length > 0
+                      ? "Hitters with edges"
+                      : "Hitters"}
                 </SectionLabel>
                 {hittersToShow.length > 0 && (
                   <ul className="divide-y divide-slate-800/60">
@@ -1539,6 +1611,10 @@ export default function PropBoard({
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const overrideKey = (gid: number) => `${focus}:${gid}`;
 
+  // Slate toolbar: free-text search (player or team) + sort mode.
+  const [query, setQuery] = useState("");
+  const [sortMode, setSortMode] = useState<"time" | "edge" | "count">("time");
+
   // Poll the MLB Stats API for live game status + box scores (unchanged).
   const liveStatus = useLiveGameStatus(date);
   const liveGamePks: number[] = [];
@@ -1562,31 +1638,39 @@ export default function PropBoard({
   const liveStats = useLiveBoxScores(liveGamePks, finalGamePks);
   const firstInningStats = useFirstInningStats(firstInningInput);
 
-  // Invert prop->game->players into game->{pitchers,hitters}; chronological.
+  // Invert prop->game->players into game->{pitchers,hitters}.
   const games = useMemo(() => buildGameViews(byProp), [byProp]);
-  const ordered = useMemo(
-    () =>
-      [...games].sort((a, b) => {
-        const ta = a.startTime ? Date.parse(a.startTime) : Number.POSITIVE_INFINITY;
-        const tb = b.startTime ? Date.parse(b.startTime) : Number.POSITIVE_INFINITY;
-        return ta - tb;
-      }),
-    [games],
-  );
 
-  // In focused mode, only show games that actually have a player for that prop.
-  const visible =
+  // Today's live model record across FINAL games (scorecard banner).
+  const slateRecord = computeSlateRecord(games, liveStatus, liveStats, firstInningStats);
+
+  // Focus filter: in single-prop mode, only games with a player for that prop.
+  const visibleByFocus =
     focus === "all"
-      ? ordered
-      : ordered.filter((gv) =>
+      ? games
+      : games.filter((gv) =>
           (HITTER_PROPS.has(focus) ? gv.hitters : gv.pitchers).some((pl) => pl.props[focus]),
         );
 
-  const decorated = visible.map((gv) => ({
-    gv,
-    summary: summarizeGameView(gv, focus),
-    status: liveStatus.get(gv.game_id),
-  }));
+  // Search filter (player name or either team).
+  const q = query.trim().toLowerCase();
+  const queried = q ? visibleByFocus.filter((gv) => gameMatchesQuery(gv, q)) : visibleByFocus;
+
+  // Decorate with summary + status, then sort by the selected mode (default:
+  // chronological by start time). Edge / count sorts surface value faster.
+  const decorated = queried
+    .map((gv) => ({
+      gv,
+      summary: summarizeGameView(gv, focus),
+      status: liveStatus.get(gv.game_id),
+    }))
+    .sort((a, b) => {
+      if (sortMode === "edge") return b.summary.topMagnitude - a.summary.topMagnitude;
+      if (sortMode === "count") return b.summary.qualifyingCount - a.summary.qualifyingCount;
+      const ta = a.gv.startTime ? Date.parse(a.gv.startTime) : Number.POSITIVE_INFINITY;
+      const tb = b.gv.startTime ? Date.parse(b.gv.startTime) : Number.POSITIVE_INFINITY;
+      return ta - tb;
+    });
 
   const isExpanded = (gid: number, summary: GameSummary, status: GameStatus | undefined) =>
     overrides[overrideKey(gid)] ?? defaultExpanded(summary, status);
@@ -1626,6 +1710,74 @@ export default function PropBoard({
         ))}
       </div>
 
+      {/* slate toolbar — search · sort · today's model record */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[170px] flex-1 sm:max-w-xs">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search player or team…"
+            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 pr-7 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors focus:border-slate-500"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 transition-colors hover:text-slate-300"
+            >
+              ×
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1 text-sm">
+          <span className="mr-0.5 text-slate-500">Sort</span>
+          {(
+            [
+              ["time", "Time"],
+              ["edge", "Best edge"],
+              ["count", "Most edges"],
+            ] as const
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setSortMode(k)}
+              className={[
+                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                sortMode === k
+                  ? "bg-slate-700 text-slate-100"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-slate-200",
+              ].join(" ")}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {slateRecord &&
+          (() => {
+            const total = slateRecord.wins + slateRecord.losses;
+            const pct = Math.round((slateRecord.wins / total) * 100);
+            const tone =
+              pct >= 55 ? "text-emerald-400" : pct >= 45 ? "text-amber-400" : "text-red-400";
+            return (
+              <div
+                title="Model record across finished games today (line vs. actual, same grading as /results)"
+                className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs tabular-nums"
+              >
+                <span className="text-slate-500">Model today</span>
+                <span className="font-semibold text-slate-100">
+                  {slateRecord.wins}/{total}
+                </span>
+                <span className={`font-semibold ${tone}`}>· {pct}%</span>
+              </div>
+            );
+          })()}
+      </div>
+
       {/* legend */}
       <p className="mb-6 text-xs leading-relaxed text-slate-500">
         {focus === "all" ? (
@@ -1655,7 +1807,13 @@ export default function PropBoard({
         <>
           <div className="mb-3 flex items-center justify-between gap-3">
             <p className="text-xs text-slate-500">
-              Games in start-time order · tap a game to expand
+              {q
+                ? `Filtered to “${query.trim()}” · ${decorated.length} game${decorated.length === 1 ? "" : "s"}`
+                : sortMode === "edge"
+                  ? "Sorted by strongest edge · tap a game to expand"
+                  : sortMode === "count"
+                    ? "Sorted by most edges · tap a game to expand"
+                    : "Games in start-time order · tap a game to expand"}
             </p>
             <button
               type="button"
@@ -1688,6 +1846,7 @@ export default function PropBoard({
                 onFocus={selectFocus}
                 openDetail={openDetail}
                 onToggleDetail={toggleDetail}
+                query={q}
               />
             ))}
           </div>
