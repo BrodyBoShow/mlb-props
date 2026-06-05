@@ -4182,11 +4182,39 @@ Prop-UI upgrade batch 2 — Board table view (this session, SHIPPED 3d5858d):
   projection history. The board table + game cards already have a "drawer-lite"
   expandable detail, so the dedicated drawer adds the game log + per-book lines.
   (b) line-movement engine fix (see above) + tag.
-- BIGGER-VISION ROADMAP (sequenced): (1) line-movement engine fix + tag; (2) Board
-  table view [DONE 3d5858d]; (3) expandable player drawer (deep data: game log,
-  book-by-book lines, matchup/park/weather, projection history); (4) best-available-line
-  shopping (per-book lines already in the `lines` table); (5) freshness/confidence
-  badges + mobile bottom-sheet filters. Build as focused increments, verify each.
+Prop-UI upgrade batch 3 — wider layout + player drawer (this session, f152c23):
+- WIDTH: page.tsx + results/page.tsx were max-w-3xl (768px) -> max-w-7xl (1280px)
+  after the user flagged huge empty desktop margins. The Board table + game cards
+  now use the screen.
+- PLAYER DRAWER (web/app/PropBoard.tsx): clicking a Board-table row opens a
+  slide-in side panel (replaces the inline row-expand) — key numbers (line/proj/
+  edge-or-actual ✓/✗), reused detail (EdgeDetail Fair/Book, ConfidenceBar,
+  TrendRow, SharpBadge, OppContextLine, WindCardLine), BOOK-BY-BOOK lines (line
+  shopping: each book's line + o/u prices), and RECENT RESULTS (last 12 graded
+  actuals vs tonight's line, O/U). Both deep-data sets fetched ON DEMAND on open.
+  * KEY perf decision: used a lightweight RAW PostgREST fetch (supaRest helper,
+    anon key, same pattern as the live MLB hooks) instead of getSupabaseClient —
+    importing supabase-js into this CLIENT component ballooned the page bundle
+    18->80kB; raw fetch keeps it at 19.9kB. Queries verified vs live DB.
+  * BoardTable: dropped openKey/inline-expand + onFocus; row -> onOpenDrawer.
+    PropBoard owns the drawer state + renders <PlayerDrawer>. Closes on overlay
+    click / Esc. DrawerTarget carries the precomputed liveActual + locked.
+  * (Game-view player-name -> drawer is a future add; V1 is Board-row -> drawer.)
+  Frontend-only; engine/FEATURE_COLS (11) untouched. tsc clean; build passes.
+- STATUS of the user's 3 picks: Board table [DONE 3d5858d], player drawer [DONE
+  f152c23], line-movement [STILL PENDING — needs the engine clean-opening-main-
+  line fix; see the line_opens finding above].
+- BIGGER-VISION ROADMAP (sequenced): (1) line-movement engine fix + tag [PENDING];
+  (2) Board table view [DONE 3d5858d]; (3) player drawer [DONE f152c23];
+  (4) best-available-line shopping (partly in the drawer's book-by-book now;
+  a board-level "best line" column is the remaining piece); (5) freshness/
+  confidence badges + mobile bottom-sheet filters. Build as focused increments.
+- FOLLOW-UP confirmed (not chased): the batter-strikeout pollution is REAL —
+  hitters (Taylor Ward, Eric Haase, Kyle Manzardo) carry prop_type='strikeouts'
+  lines from bet365 (ParlayAPI player_strikeouts = batter Ks mapped to our
+  pitcher strikeouts prop). Harmless to the board/drawer (keyed by player_id; a
+  hitter has no strikeouts projection to join) but it inflates the strikeouts
+  lines table. Fix = a separate hitter/pitcher market split in lines.py.
 
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
