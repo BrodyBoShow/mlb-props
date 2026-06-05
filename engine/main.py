@@ -840,7 +840,17 @@ def _run_lines_and_edges(
 
         print("Computing edges...")
         all_lines = db.get_lines_for_date(today_str)
-        edge_rows = edge.compute_edges(all_projections, all_lines)
+        # Fit isotonic over-prob calibrators from graded history (defensive:
+        # None on any failure -> raw probs). They pull the model's overconfident-
+        # at-the-extremes probabilities down to their realized over-rate, killing
+        # fake edges (validated: lowers out-of-sample Brier across props).
+        try:
+            import calibrate_probs
+            calibrators = calibrate_probs.fit_over_prob_calibrators()
+        except Exception as exc:
+            print(f"  over-prob calibration skipped ({exc}) -- raw probs")
+            calibrators = None
+        edge_rows = edge.compute_edges(all_projections, all_lines, calibrators)
         n_edges = db.upsert_edges(edge_rows)
         print(f"  computed {n_edges} edges")
     except Exception as exc:

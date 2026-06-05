@@ -139,12 +139,20 @@ def _fair_over_prob(book_lines: dict) -> tuple[str, dict, float] | None:
 def compute_edges(
     projections: "list[ProjectionContextRow]",
     lines: "list[LineRow]",
+    calibrators: dict | None = None,
 ) -> "list[EdgeRow]":
     """Compute over-edge rows by comparing projections to de-vigged market lines.
 
     projections: rows with player_id, prop_type, projection, projection_date.
     lines:       rows with player_id, prop_type, game_date, bookmaker, line,
                  over_price, under_price.
+    calibrators: optional {'per_prop': {prop: IsotonicRegression}, 'pooled': ...}
+                 from calibrate_probs.fit_over_prob_calibrators(). When present,
+                 the raw model_over_prob is mapped to its calibrated value
+                 (realized over-rate) BEFORE the edge is taken — this kills the
+                 overconfident-at-the-extremes fake edges (e.g. a prop the model
+                 calls 76% over that historically hits 58%). None -> raw probs
+                 (the prior behavior; a fit failure degrades here, no regression).
 
     Returns one edge row per (player_id, prop_type, game_date) that has a usable
     baseline line. Projections with no matching line are skipped — sparse line
@@ -183,6 +191,17 @@ def compute_edges(
         line = float(source_row["line"])
         model_proj = float(proj["projection"])
         model_over_prob = _model_over_prob(model_proj, line, prop_type)
+        # Isotonic calibration: map the raw over-prob to its realized over-rate
+        # so an overconfident prediction (e.g. 0.76) is pulled to what it
+        # actually hits (~0.58) before the edge is taken. Defensive — any hiccup
+        # falls back to the raw prob.
+        if calibrators:
+            cal = calibrators.get("per_prop", {}).get(prop_type) or calibrators.get("pooled")
+            if cal is not None:
+                try:
+                    model_over_prob = float(cal.predict([model_over_prob])[0])
+                except Exception:
+                    pass
         edge = model_over_prob - fair_over_prob
 
         edges.append({
