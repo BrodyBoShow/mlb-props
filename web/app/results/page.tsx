@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { unstable_cache } from "next/cache";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
 import { ALL_PROP_TYPES, FEATURED_MIN_LINE, FEATURED_PER_SECTION, FEATURED_PROJ_CAP, MAIN_LINE_VALUE, MIN_LINE, REAL_BOOKS, TRACKER_PROPS } from "@/lib/constants";
 import type {
@@ -821,6 +822,15 @@ function formatDate(iso: string): string {
   });
 }
 
+// The whole graded-results computation (every query + in-memory join) is cached
+// for 5 minutes and SHARED across all visitors. Graded rows only change a few
+// times a day as games finish + the cron grades them, so a 5-min cache makes the
+// 2nd+ visits instant while staying fresh. Without this the page re-ran ~150k
+// rows of paginated reads on every single request (the "slow every time" bug).
+const getResultsCached = unstable_cache(getResults, ["results-data-v2"], {
+  revalidate: 300,
+});
+
 export default async function ResultsPage() {
   const {
     bettingResults,
@@ -829,7 +839,7 @@ export default async function ResultsPage() {
     dateRange,
     trackedFrom,
     weeklyTrend,
-  } = await getResults();
+  } = await getResultsCached();
   const hasAny = bettingResults.length + trackerResults.length > 0;
 
   return (

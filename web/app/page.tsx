@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { unstable_cache } from "next/cache";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
 import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, FEATURED_PROJ_CAP, FEATURED_PROJ_FLOOR, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
@@ -1297,6 +1298,16 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
 // the viewer's local timezone by web/app/LiveUpdated.tsx, so a non-ET viewer
 // sees a time that matches their wall clock + the relative counter.)
 
+// The whole slate computation (projections + edges + the ~17k-row season trend
+// scan + sharp lines) is cached for 3 minutes, SHARED across all visitors and
+// keyed by date. The cron only writes a few times a day, so 3-min staleness is
+// invisible, but it turns every repeat visit + every AutoRefresh from a full
+// 20-query fan-out into a cache hit. Live in-game stats are a separate real-time
+// client poll, unaffected.
+const getSlateCached = unstable_cache(getSlate, ["slate-data-v2"], {
+  revalidate: 180,
+});
+
 export default async function Home({
   searchParams,
 }: {
@@ -1315,7 +1326,7 @@ export default async function Home({
     futureGames,
     featuredSections,
     hasCurrentProjections,
-  } = await getSlate(dateOverride);
+  } = await getSlateCached(dateOverride);
 
   // Stale banner now lives in the client <StaleBanner>, which judges "stale"
   // from the VIEWER'S local date (not Eastern) — so a late-evening West-Coast /
