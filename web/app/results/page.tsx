@@ -110,15 +110,19 @@ type LineRow = {
   game_date: string;
 };
 
-// One edges-table row. The de-vigged `edge` value drives the Featured |edge|
-// gate (line/classify come from the lines join); `bookmaker` applies the same
-// FEATURED_BOOKS gate the board's buildEdgePlays uses.
+// One edges-table row. The edges table is the SINGLE de-vigged main/standard
+// line per (player, prop, date) — what every Betting Edge play is now graded
+// against (see standardLine()). `line` is the standardized line, `fair_over_prob`
+// the de-vigged fair (used to confirm a sportsbook line sits within fair value),
+// `edge` drives the Featured |edge| gate, `bookmaker` is the baseline source.
 type EdgeRow = {
   player_id: number;
   prop_type: string;
   game_date: string;
   edge: number | null;
   bookmaker: string;
+  line: number;
+  fair_over_prob: number | null;
 };
 
 // player_game_logs rows hold every actual column. We index dynamically by
@@ -147,6 +151,63 @@ function classify(projection: number, line: number, actual: number): Verdict {
 function lineQualifies(propType: PropType, lineVal: number, floor: number): boolean {
   const main = MAIN_LINE_VALUE[propType];
   return main !== undefined ? lineVal === main : lineVal >= floor;
+}
+
+// ── STRICT standard-line benchmark for Betting Edge grading ──────────────────
+// Every Betting Edge play is graded against ONE consistent benchmark line per
+// prop — never an alternate — so a user can trust that a prop's hit rate
+// measures the model on the real market, not on cherry-picked alt lines. The
+// benchmark comes from the `edges` table (the engine's de-vigged main line),
+// gated per prop category:
+//   • Fixed-value props (Total Bases, Hits+Runs+RBIs): the exact standard (1.5).
+//   • DFS props (fantasy score, 1st-inning): the PrizePicks STANDARD line — the
+//     middle rung, not a goblin/demon multiplier (edge.py uses the standard).
+//   • Sportsbook per-pitcher props (strikeouts, hits allowed, outs): the
+//     de-vigged MAIN line, accepted ONLY when it sits WITHIN FAIR VALUE
+//     (over-prob 0.35–0.65). That fair-value band is exactly what separates a
+//     main line from a skewed alternate.
+const STANDARD_LINE_VALUE: Partial<Record<PropType, number>> = {
+  hitter_total_bases:    1.5,
+  hitter_hits_runs_rbis: 1.5,
+};
+const DFS_STANDARD_PROPS: ReadonlySet<PropType> = new Set([
+  "pitcher_fantasy_score", "hitter_fantasy_score",
+  "pitcher_first_inning_pitches", "pitcher_first_inning_strikeouts",
+]);
+const FAIR_VALUE_PROPS: ReadonlySet<PropType> = new Set([
+  "strikeouts", "hits_allowed", "outs_recorded",
+]);
+const FAIR_VALUE_MIN = 0.35;
+const FAIR_VALUE_MAX = 0.65;
+
+// A short human label for which benchmark a prop is graded against — shown on
+// the page so the standard is transparent.
+const BENCHMARK_LABEL: Partial<Record<PropType, string>> = {
+  hitter_total_bases:    "1.5 main line",
+  hitter_hits_runs_rbis: "1.5 main line",
+  pitcher_fantasy_score:  "PrizePicks standard",
+  hitter_fantasy_score:   "PrizePicks standard",
+  pitcher_first_inning_pitches:    "PrizePicks standard",
+  pitcher_first_inning_strikeouts: "PrizePicks standard",
+  strikeouts:   "main line (fair value)",
+  hits_allowed: "main line (fair value)",
+  outs_recorded:"main line (fair value)",
+};
+
+type EdgeLine = { line: number; fair_over_prob: number | null; bookmaker: string };
+
+// The standard benchmark line to grade `prop` against, or null to EXCLUDE the
+// play (no trustworthy standard line exists for it).
+function standardLine(prop: PropType, edge: EdgeLine | undefined): number | null {
+  if (!edge) return null;
+  const fixed = STANDARD_LINE_VALUE[prop];
+  if (fixed !== undefined) return edge.line === fixed ? fixed : null;
+  if (DFS_STANDARD_PROPS.has(prop)) return edge.line; // PrizePicks standard line
+  if (FAIR_VALUE_PROPS.has(prop)) {
+    const f = edge.fair_over_prob;
+    return f != null && f >= FAIR_VALUE_MIN && f <= FAIR_VALUE_MAX ? edge.line : null;
+  }
+  return null; // not a Betting Edge prop
 }
 
 // ── data fetch ───────────────────────────────────────────────────────────────
@@ -293,19 +354,22 @@ async function getResults(): Promise<{
     // Edges for the same 7-day window, scoped to the Featured props. Powers the
     // |edge| ≥ 0.12 gate for the Featured Plays hit-rate section (the de-vigged
     // edge lives ONLY here). Paginated like every other multi-row query.
+    // The edges table is the de-vigged standard-line source for ALL Betting Edge
+    // grading (not just Featured). One row per (player, prop, date); far smaller
+    // than the raw lines table.
     fetchAllPages<EdgeRow>(
       (from, to) =>
         supabase
           .from("edges")
-          .select("player_id, prop_type, game_date, edge, bookmaker")
+          .select("player_id, prop_type, game_date, edge, bookmaker, line, fair_over_prob")
           .gte("game_date", startDate)
           .lte("game_date", endDate)
-          .in("prop_type", [...FEATURED_RESULT_PROPS] as string[])
+          .in("prop_type", Object.keys(MIN_LINE) as string[])
           .range(from, to) as unknown as PromiseLike<{
             data: EdgeRow[] | null;
             error: unknown;
           }>,
-      "featured-edges",
+      "betting-edges",
     ),
   ]);
 
@@ -379,6 +443,19 @@ async function getResults(): Promise<{
     }
   }
 
+  // ── edges keyed by (player, prop, date) — the de-vigged STANDARD line + fair
+  //    that every Betting Edge play is now graded against (one row per key). ──
+  const edgeMap = new Map<string, EdgeLine & { edge: number | null }>();
+  for (const e of edgeData) {
+    const key = `${e.player_id}|${e.prop_type}|${e.game_date}`;
+    if (!edgeMap.has(key)) {
+      edgeMap.set(key, {
+        line: e.line, fair_over_prob: e.fair_over_prob,
+        bookmaker: e.bookmaker, edge: e.edge,
+      });
+    }
+  }
+
   // ── logs keyed by (player, date) — we extract actuals per prop_type ────
   const logsByKey = new Map<string, LogRow>();
   for (const l of logs) {
@@ -438,15 +515,15 @@ async function getResults(): Promise<{
       continue;
     }
 
-    // ── Section 1 (Betting Edge) — needs line + actual.
-    const minLine = MIN_LINE[propType];
-    if (minLine === undefined) continue;   // prop not on either side -- excluded
+    // ── Section 1 (Betting Edge) — graded ONLY against the STRICT standard line
+    //    from the edges table (never an alt). noLine = no edge / no standard;
+    //    belowMin = an edge exists but its line isn't the standard benchmark.
+    if (MIN_LINE[propType] === undefined) continue;   // not a Betting Edge prop
 
-    const line = linesByKey.get(
-      `${p.player_id}|${p.prop_type}|${p.projection_date}`
-    );
-    if (!line) { trackDrop(propType, "noLine"); continue; }
-    if (!lineQualifies(propType, line.line, minLine)) { trackDrop(propType, "belowMin"); continue; }
+    const edge = edgeMap.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
+    if (!edge) { trackDrop(propType, "noLine"); continue; }
+    const stdLine = standardLine(propType, edge);
+    if (stdLine === null) { trackDrop(propType, "belowMin"); continue; }
 
     const log = logsByKey.get(`${p.player_id}|${p.projection_date}`);
     if (!log) { trackDrop(propType, "noLog"); continue; }
@@ -460,7 +537,7 @@ async function getResults(): Promise<{
     if (!Number.isFinite(actual)) continue;
     trackDrop(propType, "survived");
 
-    const verdict = classify(p.projection, line.line, actual);
+    const verdict = classify(p.projection, stdLine, actual);
     bettingResults.push({
       gameId: p.game_id,
       matchup,
@@ -469,10 +546,10 @@ async function getResults(): Promise<{
       propType,
       gameDate: p.projection_date,
       projection: p.projection,
-      line: line.line,
-      bookmaker: line.bookmaker,
+      line: stdLine,
+      bookmaker: edge.bookmaker,
       actual,
-      lean: p.projection > line.line ? "over" : p.projection < line.line ? "under" : "none",
+      lean: p.projection > stdLine ? "over" : p.projection < stdLine ? "under" : "none",
       verdict,
     });
   }
@@ -623,7 +700,7 @@ async function getResults(): Promise<{
   const trendStart = trendStartObj.toISOString().slice(0, 10);
   const BETTING_PROPS = Object.keys(MIN_LINE) as PropType[];
 
-  const [trendProj, trendLines, trendLogs] = await Promise.all([
+  const [trendProj, trendEdges, trendLogs] = await Promise.all([
     fetchAllPages<ProjectionRow>(
       (from, to) =>
         supabase
@@ -641,19 +718,19 @@ async function getResults(): Promise<{
           }>,
       "trend-projections",
     ),
-    fetchAllPages<LineRow>(
+    fetchAllPages<EdgeRow>(
       (from, to) =>
         supabase
-          .from("lines")
-          .select("player_id, prop_type, bookmaker, line, game_date")
+          .from("edges")
+          .select("player_id, prop_type, game_date, edge, bookmaker, line, fair_over_prob")
           .gte("game_date", trendStart)
           .lte("game_date", endDate)
           .in("prop_type", BETTING_PROPS as string[])
           .range(from, to) as unknown as PromiseLike<{
-            data: LineRow[] | null;
+            data: EdgeRow[] | null;
             error: unknown;
           }>,
-      "trend-lines",
+      "trend-edges",
     ),
     fetchAllPages<LogRow>(
       (from, to) =>
@@ -671,23 +748,13 @@ async function getResults(): Promise<{
     ),
   ]);
 
-  // Reduce trend lines to one per (player, prop, date) by book preference —
-  // identical to the main join (reuses the same bookRank).
-  const trendLineByKey = new Map<string, LineRow>();
-  for (const l of trendLines) {
-    const key = `${l.player_id}|${l.prop_type}|${l.game_date}`;
-    const existing = trendLineByKey.get(key);
-    if (!existing) { trendLineByKey.set(key, l); continue; }
-    // Same main-line preference as the 7-day path (so TB grades on 1.5, not alts).
-    const main = MAIN_LINE_VALUE[l.prop_type as PropType];
-    if (main !== undefined) {
-      const lMain = l.line === main;
-      const eMain = existing.line === main;
-      if (lMain && !eMain) { trendLineByKey.set(key, l); continue; }
-      if (!lMain && eMain) continue;
-    }
-    if (bookRank(l.bookmaker) < bookRank(existing.bookmaker)) {
-      trendLineByKey.set(key, l);
+  // One standard edge-line per (player, prop, date) — identical standardization
+  // to the 7-day main path (so the trend grades on the same benchmark).
+  const trendEdgeMap = new Map<string, EdgeLine>();
+  for (const e of trendEdges) {
+    const key = `${e.player_id}|${e.prop_type}|${e.game_date}`;
+    if (!trendEdgeMap.has(key)) {
+      trendEdgeMap.set(key, { line: e.line, fair_over_prob: e.fair_over_prob, bookmaker: e.bookmaker });
     }
   }
   const trendLogByKey = new Map<string, LogRow>();
@@ -698,13 +765,13 @@ async function getResults(): Promise<{
   const weekAgg = new Map<string, { correct: number; wrong: number; skip: number }>();
   for (const p of trendProj) {
     const propType = p.prop_type as PropType;
-    const minLine = MIN_LINE[propType];
-    if (minLine === undefined) continue;
+    if (MIN_LINE[propType] === undefined) continue;
     const actualCol = ACTUAL_COLUMN[propType];
     if (!actualCol) continue;
 
-    const line = trendLineByKey.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
-    if (!line || !lineQualifies(propType, line.line, minLine)) continue;
+    const edge = trendEdgeMap.get(`${p.player_id}|${p.prop_type}|${p.projection_date}`);
+    const stdLine = standardLine(propType, edge);
+    if (stdLine === null) continue;
     const log = trendLogByKey.get(`${p.player_id}|${p.projection_date}`);
     if (!log) continue;
     const actualRaw = log[actualCol];
@@ -712,7 +779,7 @@ async function getResults(): Promise<{
     const actual = Number(actualRaw);
     if (!Number.isFinite(actual)) continue;
 
-    const verdict = classify(p.projection, line.line, actual);
+    const verdict = classify(p.projection, stdLine, actual);
     const wk = startOfISOWeek(p.projection_date);
     const agg = weekAgg.get(wk) ?? { correct: 0, wrong: 0, skip: 0 };
     agg[verdict] += 1;
