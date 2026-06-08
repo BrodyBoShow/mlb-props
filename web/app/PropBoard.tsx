@@ -928,6 +928,16 @@ function gameMatchesQuery(gv: GameView, q: string): boolean {
 // graded prop (line present + final actual) as a win/loss via the same gradeLean
 // the chips use. Pushes/no-lean are excluded. Returns null when nothing is
 // graded yet so the banner stays hidden.
+// The "Model today" chip counts only the main betting props (the ones /results
+// grades), NOT every prop tab — so it reflects the trustworthy markets, not the
+// noisy ones (raw walks/runs/RBIs at 0.5 alt lines).
+const RECORD_PROPS: ReadonlySet<PropType> = new Set([
+  "strikeouts", "hits_allowed", "outs_recorded",
+  "pitcher_first_inning_pitches", "pitcher_first_inning_strikeouts",
+  "pitcher_fantasy_score",
+  "hitter_total_bases", "hitter_hits_runs_rbis", "hitter_fantasy_score",
+]);
+
 function computeSlateRecord(
   games: GameView[],
   liveStatus: Map<number, GameStatus>,
@@ -942,6 +952,7 @@ function computeSlateRecord(
     const fi = firstInningStats.get(gv.game_id);
     for (const pl of [...gv.pitchers, ...gv.hitters]) {
       for (const prop of PROPS) {
+        if (!RECORD_PROPS.has(prop.key)) continue;
         const row = pl.props[prop.key];
         if (!row || row.line === undefined) continue;
         const actual = liveActualFor(
@@ -2517,7 +2528,7 @@ export default function PropBoard({
               pct >= 55 ? "text-emerald-400" : pct >= 45 ? "text-amber-400" : "text-red-400";
             return (
               <div
-                title="Model record across finished games today (line vs. actual, same grading as /results)"
+                title={`Model's lean vs the line on the main betting props, graded live across today's ${total} finished plays. The full graded track record is on /results.`}
                 className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs tabular-nums"
               >
                 <span className="text-slate-500">Model today</span>
