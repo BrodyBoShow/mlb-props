@@ -1,24 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { WeeklyBucket } from "@/lib/types";
 
-// Weekly Betting Edge hit-rate trend. Hand-rolled (no chart dependency) to stay
-// congruent with the rest of /results, which is all Tailwind. One bar per ISO
-// week; bar height = hit rate %; dashed reference line at 50%; rate-based color.
+// Betting Edge hit-rate trend, rendered as a CUMULATIVE hit-rate LINE (not bars).
+// A running correct/(correct+wrong) line reads as a trajectory — "is the model
+// above water and holding?" — and one noisy week can't dominate it the way a
+// giant bar did. Hand-rolled SVG (no chart dependency), congruent with the rest
+// of /results. Dashed 50% reference = break-even.
 
-const CHART_H = 120; // px
+const W = 320; // virtual viewBox width (stretched to the container)
+const H = 120; // px plot height
 
-// emerald >=55% (beating the market), slate <45% (under water), amber between
-// (the coin-flip / calibrated band).
-function barColor(rate: number): string {
-  if (rate >= 0.55) return "bg-emerald-600";
-  if (rate < 0.45) return "bg-slate-500";
-  return "bg-amber-500";
+function lineColor(rate: number): string {
+  if (rate >= 0.55) return "#34d399"; // emerald-400
+  if (rate < 0.45) return "#94a3b8"; // slate-400
+  return "#fbbf24"; // amber-400
 }
 
-// "2026-05-25" → "May 25". Parsed as LOCAL midnight (T00:00:00) so the label
-// doesn't shift a day in negative-offset timezones.
+// "2026-05-25" → "May 25" (parsed at LOCAL midnight so it never shifts a day).
 function weekLabel(weekKey: string): string {
   return new Date(`${weekKey}T00:00:00`).toLocaleDateString("en-US", {
     month: "short",
@@ -30,7 +30,7 @@ function Card({ children }: { children: React.ReactNode }) {
   return (
     <div className="mb-6 rounded-xl surface p-5">
       <h3 className="text-[10px] uppercase tracking-widest text-slate-400">
-        Weekly Trend
+        Hit-rate trend
       </h3>
       {children}
     </div>
@@ -44,94 +44,130 @@ export default function ResultsTrendChart({
 }) {
   const [hover, setHover] = useState<number | null>(null);
 
-  // Nothing graded yet → render nothing at all.
+  // Running cumulative hit rate after each week — the line we plot.
+  const pts = useMemo(() => {
+    let cc = 0;
+    let cw = 0;
+    return weeklyTrend.map((b) => {
+      cc += b.correct;
+      cw += b.wrong;
+      return {
+        week: b.week,
+        weekRate: b.rate,
+        cum: cc + cw > 0 ? cc / (cc + cw) : 0,
+        correct: b.correct,
+        wrong: b.wrong,
+      };
+    });
+  }, [weeklyTrend]);
+
   if (!weeklyTrend || weeklyTrend.length === 0) return null;
 
-  // A single bar reads like a glitch — wait for a real trend.
   if (weeklyTrend.length < 2) {
+    const only = pts[0];
     return (
       <Card>
-        <p className="mt-3 text-xs text-slate-500">
-          Trend builds as more graded slates accumulate.
+        <p className="mt-2 text-sm text-slate-300">
+          <span className="tabular-nums font-semibold" style={{ color: lineColor(only.cum) }}>
+            {Math.round(only.cum * 100)}%
+          </span>{" "}
+          <span className="text-slate-500">
+            ({only.correct + only.wrong} graded · week of {weekLabel(only.week)})
+          </span>
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          The trend line fills in as more weeks of graded slates accumulate.
         </p>
       </Card>
     );
   }
 
+  const n = pts.length;
+  const last = pts[n - 1];
+  const color = lineColor(last.cum);
+  const totalGraded = pts.reduce((s, p) => s + p.correct + p.wrong, 0);
+  const PAD = 6;
+  const xFor = (i: number) => (n === 1 ? W / 2 : PAD + (i / (n - 1)) * (W - 2 * PAD));
+  const yFor = (r: number) => PAD + (1 - r) * (H - 2 * PAD);
+  const linePoints = pts.map((p, i) => `${xFor(i)},${yFor(p.cum)}`).join(" ");
+
   return (
     <Card>
-      <div className="mt-4 flex gap-2">
-        {/* y axis: 0–100% every 25% */}
+      <div className="mt-1 flex items-baseline gap-2">
+        <span className="text-2xl font-bold tabular-nums" style={{ color }}>
+          {Math.round(last.cum * 100)}%
+        </span>
+        <span className="text-[11px] text-slate-500">
+          cumulative over {n} weeks · {totalGraded} graded plays
+        </span>
+      </div>
+
+      <div className="mt-3 flex gap-2">
+        {/* y axis */}
         <div
-          className="relative flex w-7 shrink-0 flex-col justify-between text-right text-[9px] tabular-nums text-slate-600"
-          style={{ height: CHART_H }}
+          className="flex w-7 shrink-0 flex-col justify-between text-right text-[9px] tabular-nums text-slate-600"
+          style={{ height: H }}
         >
-          {["100%", "75%", "50%", "25%", "0%"].map((t) => (
-            <span key={t} className="-translate-y-1/2 leading-none">
-              {t}
-            </span>
+          {["100%", "50%", "0%"].map((t) => (
+            <span key={t} className="leading-none">{t}</span>
           ))}
         </div>
 
-        {/* plot area */}
-        <div className="flex-1">
-          <div className="relative" style={{ height: CHART_H }}>
-            {/* faint gridlines at 25/75 */}
-            {[0.25, 0.75].map((g) => (
-              <div
-                key={g}
-                className="absolute inset-x-0 border-t border-slate-800/70"
-                style={{ top: CHART_H * (1 - g) }}
+        {/* plot */}
+        <div className="relative flex-1" style={{ height: H }}>
+          <svg
+            width="100%"
+            height={H}
+            viewBox={`0 0 ${W} ${H}`}
+            preserveAspectRatio="none"
+            className="overflow-visible"
+          >
+            {/* 50% break-even reference */}
+            <line
+              x1={0} y1={H / 2} x2={W} y2={H / 2}
+              stroke="#64748b" strokeWidth={1} strokeDasharray="4 4" strokeOpacity={0.6}
+              vectorEffect="non-scaling-stroke"
+            />
+            {/* the cumulative hit-rate line */}
+            <polyline
+              points={linePoints}
+              fill="none" stroke={color} strokeWidth={2}
+              strokeLinejoin="round" strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+            />
+            {/* points */}
+            {pts.map((p, i) => (
+              <circle
+                key={p.week}
+                cx={xFor(i)} cy={yFor(p.cum)} r={hover === i ? 4 : 2.5}
+                fill={color}
+                vectorEffect="non-scaling-stroke"
+                onMouseEnter={() => setHover(i)}
+                onMouseLeave={() => setHover(null)}
+                style={{ cursor: "pointer" }}
               />
             ))}
-            {/* 50% reference line — dashed */}
+          </svg>
+
+          {hover !== null && (
             <div
-              className="absolute inset-x-0 border-t border-dashed border-slate-500/70"
-              style={{ top: CHART_H * 0.5 }}
+              className="pointer-events-none absolute z-10 w-max max-w-[200px] -translate-x-1/2 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] leading-snug text-slate-200 shadow-lg"
+              style={{ left: `${(xFor(hover) / W) * 100}%`, top: -4 }}
             >
-              <span className="absolute right-0 -top-2.5 bg-slate-900/50 pl-1 text-[8px] text-slate-500">
-                50%
-              </span>
+              Week of {weekLabel(pts[hover].week)}: {pts[hover].correct} correct,{" "}
+              {pts[hover].wrong} wrong · {Math.round(pts[hover].weekRate * 100)}% that week
             </div>
-
-            {/* bars */}
-            <div className="absolute inset-0 flex items-end gap-1.5">
-              {weeklyTrend.map((b, i) => (
-                <div
-                  key={b.week}
-                  className="relative flex h-full flex-1 items-end"
-                  onMouseEnter={() => setHover(i)}
-                  onMouseLeave={() => setHover(null)}
-                >
-                  <div
-                    className={`w-full rounded-t transition-opacity ${barColor(b.rate)} ${
-                      hover === null || hover === i ? "opacity-100" : "opacity-40"
-                    }`}
-                    style={{ height: `${Math.max(b.rate * 100, 1)}%` }}
-                  />
-                  {hover === i && (
-                    <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 w-max max-w-[180px] -translate-x-1/2 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] leading-snug text-slate-200 shadow-lg">
-                      Week of {weekLabel(b.week)}: {b.correct} correct, {b.wrong}{" "}
-                      wrong — {Math.round(b.rate * 100)}% hit rate
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* x axis labels */}
-          <div className="mt-1.5 flex gap-1.5">
-            {weeklyTrend.map((b) => (
-              <div
-                key={b.week}
-                className="flex-1 text-center text-[9px] tabular-nums text-slate-500"
-              >
-                {weekLabel(b.week)}
-              </div>
-            ))}
-          </div>
+          )}
         </div>
+      </div>
+
+      {/* x labels */}
+      <div className="mt-1.5 flex pl-9">
+        {pts.map((p) => (
+          <div key={p.week} className="flex-1 text-center text-[9px] tabular-nums text-slate-500">
+            {weekLabel(p.week)}
+          </div>
+        ))}
       </div>
     </Card>
   );

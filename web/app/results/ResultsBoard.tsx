@@ -72,31 +72,63 @@ function avg(xs: number[]): number {
 // SECTION 1 — BETTING EDGE
 // ═════════════════════════════════════════════════════════════════════════════
 
+// Minimum evaluable plays for a prop to count toward the equal-weight headline.
+const MACRO_MIN_SAMPLE = 15;
+
 function BettingOverallCard({ results }: { results: EvaluatedResult[] }) {
   const correct = results.filter((r) => r.verdict === "correct").length;
   const wrong = results.filter((r) => r.verdict === "wrong").length;
   const skip = results.filter((r) => r.verdict === "skip").length;
   const evaluable = correct + wrong;
-  const color = rateColor(correct, evaluable);
+
+  // De-skewed headline: the EQUAL-WEIGHT average of each prop's hit rate, so a
+  // high-volume prop (Total Bases, ~800 rows) can't drown out a low-volume one
+  // (Strikeouts, ~150). Only props with a usable sample count toward it.
+  const perProp = new Map<string, { c: number; e: number }>();
+  for (const r of results) {
+    if (r.verdict === "skip") continue;
+    const m = perProp.get(r.propType) ?? { c: 0, e: 0 };
+    if (r.verdict === "correct") m.c++;
+    m.e++;
+    perProp.set(r.propType, m);
+  }
+  const propRates = [...perProp.values()]
+    .filter((m) => m.e >= MACRO_MIN_SAMPLE)
+    .map((m) => m.c / m.e);
+  const macro = propRates.length ? avg(propRates) : evaluable ? correct / evaluable : 0;
+  const headline = propRates.length
+    ? `${Math.round(macro * 100)}%`
+    : pct(correct, evaluable);
+  const color =
+    macro >= 0.6 ? "text-emerald-400" : macro >= 0.45 ? "text-amber-400" : "text-red-400";
 
   return (
     <div className="mb-5 rounded-xl surface p-5">
-      <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-medium uppercase tracking-wider text-slate-400">
-          Overall hit rate
-        </h3>
-        <span className={`text-3xl font-bold tabular-nums ${color}`}>
-          {pct(correct, evaluable)}
-        </span>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium uppercase tracking-wider text-slate-400">
+            Hit rate
+          </h3>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            {propRates.length
+              ? `Average across ${propRates.length} props — each weighted equally`
+              : "Across all graded plays"}
+          </p>
+        </div>
+        <span className={`text-3xl font-bold tabular-nums ${color}`}>{headline}</span>
       </div>
-      <p className="mt-2 text-sm text-slate-400">
+      <p className="mt-3 text-sm text-slate-400">
         <span className="text-emerald-400 tabular-nums">{correct}</span> correct
         <span className="mx-1.5 text-slate-600">·</span>
         <span className="text-red-400 tabular-nums">{wrong}</span> wrong
         <span className="mx-1.5 text-slate-600">·</span>
         <span className="text-slate-500 tabular-nums">{skip}</span> skipped
         <span className="mx-1.5 text-slate-600">·</span>
-        <span className="text-slate-500 tabular-nums">{results.length}</span> total
+        <span className="text-slate-500 tabular-nums">{results.length}</span> plays
+      </p>
+      <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+        Graded automatically against final box scores · one standard line per prop
+        (no alternates).
       </p>
     </div>
   );
