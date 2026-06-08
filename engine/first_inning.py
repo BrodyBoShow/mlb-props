@@ -28,9 +28,12 @@ actual 1st-inning run TOTAL onto that same home-SP row (actual_first_inning_runs
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 import statsapi
 
@@ -132,6 +135,19 @@ def build_first_inning_runs_projections(
 
     rows: list[dict] = []
     for g in games:
+        # Date guard: only build games that ACTUALLY play on proj_date (Eastern).
+        # NRFI is the one builder that iterates raw `games` (the others use the
+        # today-only `starters` list), so a `games` list polluted with an adjacent
+        # day at the cron's UTC/ET boundary would otherwise stamp yesterday's (or
+        # tomorrow's) games with today's projection_date. Skip anything not on the
+        # slate. Games with no start_time fall through (can't verify -> keep).
+        st = g.get("start_time")
+        if st:
+            try:
+                if datetime.fromisoformat(st).astimezone(_ET).date().isoformat() != proj_date_str:
+                    continue
+            except (ValueError, TypeError):
+                pass
         home_sp = g.get("home_starter_id")
         if not home_sp:
             continue   # no stable carrier
