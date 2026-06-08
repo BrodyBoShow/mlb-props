@@ -42,15 +42,19 @@ const BOOK_RANK_WEIGHT = (book?: string): number =>
 // best DIFFERENT prop; if none qualifies, the section shows fewer than 3.
 const FEATURED_MAX_PER_PROP = 2;
 
-// Pick up to `n` plays from a ranked list, at most `maxPerProp` of any one prop.
+// Pick up to `n` plays from a ranked list: at most `maxPerProp` of any one prop,
+// and each PLAYER at most once (no card showing the same guy on two props).
 function pickDiverse(plays: FeaturedPlay[], n: number, maxPerProp: number): FeaturedPlay[] {
   const out: FeaturedPlay[] = [];
   const counts: Record<string, number> = {};
+  const seenPlayers = new Set<number>();
   for (const p of plays) {
     if (out.length >= n) break;
+    if (seenPlayers.has(p.playerId)) continue;
     if ((counts[p.propType] ?? 0) >= maxPerProp) continue;
     out.push(p);
     counts[p.propType] = (counts[p.propType] ?? 0) + 1;
+    seenPlayers.add(p.playerId);
   }
   return out;
 }
@@ -79,6 +83,10 @@ const FEATURED_HITTER_PROPS: ReadonlySet<PropType> = new Set([
 // don't promote borderline calls. 0.12 = a clear vote for one side after
 // vig is removed.
 const FEATURED_MIN_EDGE = 0.12;
+
+// Upper bound — a de-vigged edge this large is a broken thin-sample projection,
+// not a real market edge (the market isn't off by 40%+ after vig). Skip it.
+const FEATURED_MAX_EDGE = 0.4;
 
 // DFS (PrizePicks) edges are measured vs a soft ~50/50 pick'em line, not a
 // de-vigged efficient sharp market, so a DFS edge of magnitude X is a weaker
@@ -911,6 +919,11 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         if (edge === null || edge === undefined) return null;
         const absEdge = Math.abs(edge);
         if (absEdge < FEATURED_MIN_EDGE) return null;
+        // Ceiling: a de-vigged edge above ~0.40 is not a real market
+        // mispricing — it's a broken thin-sample projection (e.g. a 2.0
+        // hits-allowed proj vs a 5.5 line reads a fake -0.55). The market is
+        // rarely off by 40%+ after vig; skip these instead of headlining them.
+        if (absEdge > FEATURED_MAX_EDGE) return null;
         // Featured-Plays-specific floor (NOT the shared MIN_LINE). MIN_LINE has
         // no hitter_hits/hitter_total_bases entry, so using it dropped every
         // hitter play here; FEATURED_MIN_LINE adds the hitter main-market floors
@@ -938,8 +951,15 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         const projFloor = FEATURED_PROJ_FLOOR[propType];
         if (projFloor !== undefined && proj.projection < projFloor) return null;
 
-        const lean: "over" | "under" =
-          proj.projection > e.line ? "over" : "under";
+        // Lean = the EDGE's direction (the de-vigged signal), not raw
+        // proj-vs-line. They usually agree, but when they don't — the model
+        // projects above the line yet is LESS bullish than the market (a
+        // negative edge) — showing "OVER" next to an under-edge is a
+        // contradiction. Require agreement and take the edge's side, so the
+        // card's bet direction always matches its edge.
+        const projLean: "over" | "under" = proj.projection > e.line ? "over" : "under";
+        const lean: "over" | "under" = edge > 0 ? "over" : "under";
+        if (projLean !== lean) return null;
 
         // Recent-form backing (props.cash-style): how often the player landed on
         // THIS lean's side over the last ≤10 graded games vs THIS line. From the
