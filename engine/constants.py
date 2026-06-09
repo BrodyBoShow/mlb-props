@@ -239,6 +239,25 @@ HITTER_LEAGUE_PRIOR = {
     "hitter_home_runs":      0.11,
 }
 
+# Stabilized "talent blend" weights — REDUCES RECENCY BIAS on the noise-dominated
+# props. The old baseline weighted the last-5 games 2x, which over-reacts to
+# hot/cold streaks. This blends a stable talent estimate (the full recent window)
+# + a medium window (last 20) + a SMALL recent-form signal (last 5), then
+# regresses to the league prior. Validated in validate_talent.py: lower RMSE than
+# the recency-heavy baseline on every hitter prop + hits_allowed/walks/earned_runs
+# (~0.6-2.3%), while keeping projections far more stable. DELIBERATELY NOT applied
+# to strikeouts (skill-driven, uses the XGBoost model) or outs_recorded (workload/
+# leash is genuinely recency-driven) — both test WORSE with talent-weighting.
+TALENT_W_SEASON = 0.70   # full recent window (the stable talent estimate)
+TALENT_W_MID = 0.20      # last ~20 games
+TALENT_W_FORM = 0.10     # last 5 games — a small form signal, not the whole model
+TALENT_REGRESSION_K = 5.0
+PITCHER_LEAGUE_PRIOR = {
+    "hits_allowed": 5.0,
+    "walks":        2.0,
+    "earned_runs":  2.5,
+}
+
 # Fantasy-score projection regression. The fantasy builders take the MEDIAN of
 # per-game/per-start FP over the recent window, but that median is noisy and
 # systematically LOW when the recent window is sparse (a star with 1-2 quiet

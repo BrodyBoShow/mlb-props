@@ -27,9 +27,14 @@ from constants import (
     LEAGUE_AVG_PITCHER_FP,
     LOOKBACK_DAYS,
     OLDER_WEIGHT,
+    PITCHER_LEAGUE_PRIOR,
     RECENT_STARTS,
     RECENT_WEIGHT,
     STRIKEOUT_EVENTS,
+    TALENT_REGRESSION_K,
+    TALENT_W_FORM,
+    TALENT_W_MID,
+    TALENT_W_SEASON,
     et_today,
 )
 from fantasy_score import (
@@ -80,6 +85,29 @@ def _regressed_projection(
     sw = sum(weights)
     wsum = sum(w * v for w, v in zip(weights, values_newest_first))
     return round((wsum + k * prior) / (sw + k), 1)
+
+
+def _stabilized_projection(values_newest_first: list[float], prior: float) -> float:
+    """Talent-weighted blend that REDUCES RECENCY BIAS — the successor to the
+    recency-heavy _regressed_projection on noise-dominated props.
+
+    Instead of weighting the last 5 games 2x (which chases hot/cold streaks),
+    blends a stable talent estimate (the full recent window) + a medium window
+    (last 20) + a SMALL recent-form signal (last 5), then regresses to the league
+    prior. Validated in engine/validate_talent.py: lower RMSE than the recency
+    baseline on every hitter prop + hits_allowed/walks/earned_runs, with far
+    steadier projections. NOT for strikeouts / outs_recorded (recency-driven).
+    """
+    import statistics
+    n = len(values_newest_first)
+    if n == 0:
+        return round(prior, 1)
+    season = statistics.mean(values_newest_first)
+    mid = statistics.mean(values_newest_first[:20])
+    form = statistics.mean(values_newest_first[:5])
+    blend = TALENT_W_SEASON * season + TALENT_W_MID * mid + TALENT_W_FORM * form
+    eff = min(n, 25)
+    return round((eff * blend + TALENT_REGRESSION_K * prior) / (eff + TALENT_REGRESSION_K), 1)
 
 
 def _median_projection(values: list[float]) -> float:
@@ -346,7 +374,15 @@ def _build_from_starts(
             print(f"  no recent game-log data for player {player_id}, skipping")
             continue
         values = [float(sp[field]) for sp in starts]
-        projection = _weighted_projection(values)
+        # Stabilized talent blend for the noise-dominated props (hits_allowed,
+        # walks, earned_runs); outs_recorded keeps recency-weighting (its
+        # workload/leash is genuinely recency-driven — validated WORSE with the
+        # blend). A prop's presence in PITCHER_LEAGUE_PRIOR is the switch.
+        prior = PITCHER_LEAGUE_PRIOR.get(prop_type)
+        projection = (
+            _stabilized_projection(values, prior) if prior is not None
+            else _weighted_projection(values)
+        )
         rows.append(
             {
                 "game_id": s["game_id"],
@@ -485,12 +521,14 @@ def _build_hitter_from_games(
             print(f"  no recent game-log data for hitter {player_id}, skipping")
             continue
         values = [float(g[field]) for g in games]
-        # Regress toward the league prior (Marcel-style) so a thin/spiky recent
-        # window doesn't over-project; deep samples are barely touched. Falls back
-        # to the plain weighted mean for any prop without a configured prior.
+        # Stabilized talent blend (season + medium + small recent-form, regressed
+        # to the league prior) — reduces the recency bias of the old last-5 2x
+        # weighting on these noise-dominated hitter props. Validated to lower RMSE
+        # + steady the projections. Falls back to the plain weighted mean for any
+        # prop without a configured prior.
         prior = HITTER_LEAGUE_PRIOR.get(prop_type)
         projection = (
-            _regressed_projection(values, prior)
+            _stabilized_projection(values, prior)
             if prior is not None
             else _weighted_projection(values)
         )
