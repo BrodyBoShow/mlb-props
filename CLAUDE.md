@@ -4397,6 +4397,38 @@ Hitter matchup model — Stage 1 SHADOW (this session, the symmetric matchup-K):
   run db/migrations/add_hitter_matchup.sql. Until then projections are unaffected
   and the shadow write skips gracefully.
 
+Bet Tracker — "track this play" + My Plays panel (this session):
+- The #1 retention feature after the watchlist. Frontend-only, localStorage, NO
+  accounts / NO DB writes (respects one-writer — the frontend only READS). Mirrors
+  the useWatchlist pattern + reuses the drawer's supaRest fetch + grading.
+- web/app/useBetTracker.ts (NEW): localStorage hook (key mlb-props:bets:v1).
+  TrackedPlay {key=`playerId|prop|date`, playerId, playerName, prop, line, side,
+  date, matchup, addedAt}; has/toggle/remove/count/hydrated. trackKey() helper.
+- web/app/PropBoard.tsx (all additions inline, reusing supaRest/PROP_META/fmt/
+  formatShortDate/DRAWER_ACTUAL_COL):
+  * BetTrackerCtx (like WatchlistCtx) + TrackButton ("+ Track this play" /
+    "✓ Tracking", shows the side+line it saves). Placed in the PlayerDrawer body
+    after the key-numbers grid — the deep view where you decide on a play. The
+    saved SIDE = the model's lean (proj >= line -> over, else under). Only renders
+    when a line exists.
+  * gradeSide(side, line, actual): win/loss/push — grades the EXACT saved side
+    (distinct from gradeLean which grades the model's lean). Unit-tested.
+  * MyPlays slide-in panel (mirrors PlayerDrawer): on open, fetches graded actuals
+    from player_game_logs (one supaRest query per prop family, player_id+game_date
+    in.() filters, backfill rows excluded via or=(backfilled.is.null,eq.false)),
+    grades each play, shows a record header (W-L[-P] + hit% toned + N pending) and
+    a list (player/matchup, side+line+prop, status chip win/loss/push/pending,
+    actual, remove ×). Pending first then settled by date desc. Honest empty state
+    + "graded automatically vs final box scores, saved on this device only" footer.
+  * Toolbar "📋 My Plays (N)" button (next to Watchlist, both views); count gated
+    on hydrated to avoid SSR mismatch. BetTrackerCtx.Provider wraps the board;
+    <MyPlays> mounted next to <PlayerDrawer>.
+- Zero engine/DB/schema change; FEATURE_COLS untouched (11). Verified: gradeSide
+  unit cases all pass; tsc --noEmit clean; npm run build passes (/ 18.3 -> 22.8 kB).
+- FOLLOW-UPS (not done): a "Track" affordance on the inline all-props detail (V1
+  is drawer-only); optional live (pre-final) grading via the box-score hooks;
+  an over/under side toggle (V1 saves the model's lean side).
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + hitter-matchup + CLV + calibration
 scorecards + self-heal count + lined-hitter coverage count). The strikeouts model

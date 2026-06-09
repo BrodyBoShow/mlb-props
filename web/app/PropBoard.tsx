@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useWatchlist } from "./useWatchlist";
+import { useBetTracker, trackKey, type TrackedPlay } from "./useBetTracker";
 import DateNav from "./DateNav";
 import FeaturedPlays from "./FeaturedPlays";
 import ParkTag from "./ParkTag";
@@ -121,6 +122,55 @@ function StarButton({ playerId, className }: { playerId: number; className?: str
       {watched ? "★" : "☆"}
     </button>
   );
+}
+
+// ── Bet tracker (localStorage, no accounts) ──────────────────────────────────
+// The user's saved plays, shared via context so a TrackButton deep in the
+// drawer doesn't need props threaded to it (same pattern as the watchlist).
+type BetTrackerApi = {
+  has: (key: string) => boolean;
+  toggle: (play: TrackedPlay) => void;
+};
+const BetTrackerCtx = createContext<BetTrackerApi>({
+  has: () => false,
+  toggle: () => {},
+});
+
+// "Track this play" toggle — saves the model's pick (player + prop + side +
+// line) so the My Plays panel can grade it vs the actual. stopPropagation so it
+// never bubbles to a row/drawer click.
+function TrackButton({ play, className }: { play: TrackedPlay; className?: string }) {
+  const { has, toggle } = useContext(BetTrackerCtx);
+  const tracking = has(play.key);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        toggle(play);
+      }}
+      className={[
+        "flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+        tracking
+          ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
+          : "border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100",
+        className ?? "",
+      ].join(" ")}
+    >
+      <span>{tracking ? "✓ Tracking" : "+ Track this play"}</span>
+      <span className="text-xs font-normal text-slate-500 tabular-nums">
+        {play.side === "over" ? "Over" : "Under"} {fmt(play.line)}
+      </span>
+    </button>
+  );
+}
+
+// Grade a tracked play's SIDE vs the line and actual (final/graded only). Unlike
+// gradeLean (which grades the model's lean) this grades the exact side the user
+// saved. push when actual === line.
+function gradeSide(side: "over" | "under", line: number, actual: number): "win" | "loss" | "push" {
+  if (actual === line) return "push";
+  return (side === "over") === (actual > line) ? "win" : "loss";
 }
 
 // Grade the PROJECTION'S LEAN against the line vs the actual — i.e. if you'd
@@ -2169,6 +2219,24 @@ function PlayerDrawer({
             </div>
           </div>
 
+          {/* track this play — saves the model's pick (side from proj vs line) */}
+          {line !== undefined &&
+            (() => {
+              const side: "over" | "under" = row.projection >= line ? "over" : "under";
+              const play: TrackedPlay = {
+                key: trackKey(player.player_id, prop, date),
+                playerId: player.player_id,
+                playerName: player.name,
+                prop,
+                line,
+                side,
+                date,
+                matchup: gv.matchup,
+                addedAt: Date.now(),
+              };
+              return <TrackButton play={play} />;
+            })()}
+
           {/* edge / result + context (reused leaf components) */}
           <div>
             <EdgeDetail pitcher={row} actual={liveActual} isFinal={locked} />
@@ -2262,6 +2330,223 @@ function PlayerDrawer({
   );
 }
 
+// ── My Plays panel (bet tracker) ─────────────────────────────────────────────
+
+type GradedPlay = TrackedPlay & {
+  actual: number | null;
+  result: "win" | "loss" | "push" | "pending";
+};
+
+function MyPlays({
+  open,
+  plays,
+  onRemove,
+  onClose,
+}: {
+  open: boolean;
+  plays: TrackedPlay[];
+  onRemove: (key: string) => void;
+  onClose: () => void;
+}) {
+  const [actuals, setActuals] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(false);
+
+  // Stable signature of the tracked set — refetch actuals only when it changes.
+  const sig = plays
+    .map((p) => p.key)
+    .sort()
+    .join(",");
+
+  // On open, fetch the graded actuals for every tracked play straight from
+  // player_game_logs (read-only anon, one query per prop family, backfill rows
+  // excluded). Never throws — a play with no actual yet just stays "pending".
+  useEffect(() => {
+    if (!open || plays.length === 0) {
+      setActuals({});
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      const byCol: Record<string, TrackedPlay[]> = {};
+      for (const p of plays) {
+        const col = DRAWER_ACTUAL_COL[p.prop];
+        if (col) (byCol[col] ??= []).push(p);
+      }
+      const map: Record<string, number> = {};
+      await Promise.all(
+        Object.entries(byCol).map(async ([col, ps]) => {
+          const ids = [...new Set(ps.map((p) => p.playerId))].join(",");
+          const dates = [...new Set(ps.map((p) => p.date))].join(",");
+          const rows = await supaRest(
+            `player_game_logs?select=player_id,game_date,${col}` +
+              `&player_id=in.(${ids})&game_date=in.(${dates})` +
+              `&${col}=not.is.null&or=(backfilled.is.null,backfilled.eq.false)`,
+          );
+          for (const r of rows) {
+            const v = Number(r[col]);
+            if (Number.isFinite(v)) map[`${r.player_id}|${r.game_date}|${col}`] = v;
+          }
+        }),
+      );
+      if (!cancelled) {
+        setActuals(map);
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sig]);
+
+  if (!open) return null;
+
+  const graded: GradedPlay[] = plays.map((p) => {
+    const col = DRAWER_ACTUAL_COL[p.prop];
+    const actual = col ? actuals[`${p.playerId}|${p.date}|${col}`] : undefined;
+    const result = actual === undefined ? "pending" : gradeSide(p.side, p.line, actual);
+    return { ...p, actual: actual ?? null, result };
+  });
+  // Pending (active) first, then settled — each newest slate first.
+  graded.sort((a, b) => {
+    const ap = a.result === "pending" ? 0 : 1;
+    const bp = b.result === "pending" ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return b.date.localeCompare(a.date);
+  });
+
+  const wins = graded.filter((g) => g.result === "win").length;
+  const losses = graded.filter((g) => g.result === "loss").length;
+  const pushes = graded.filter((g) => g.result === "push").length;
+  const pending = graded.filter((g) => g.result === "pending").length;
+  const settled = wins + losses;
+  const pct = settled > 0 ? Math.round((wins / settled) * 100) : null;
+  const pctTone =
+    pct === null
+      ? "text-slate-400"
+      : pct >= 55
+        ? "text-emerald-400"
+        : pct >= 45
+          ? "text-amber-400"
+          : "text-red-400";
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative h-full w-full max-w-md overflow-y-auto border-l border-slate-800 bg-slate-950 shadow-2xl"
+      >
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-slate-800 bg-slate-950/95 px-5 py-4 backdrop-blur">
+          <div>
+            <h3 className="text-base font-semibold text-slate-100">My Plays</h3>
+            <p className="mt-0.5 text-xs text-slate-400">
+              {plays.length === 0 ? (
+                "Your tracked plays"
+              ) : (
+                <>
+                  <span className="font-semibold text-slate-200 tabular-nums">
+                    {wins}-{losses}
+                    {pushes > 0 ? `-${pushes}` : ""}
+                  </span>
+                  {pct !== null && (
+                    <span className={`ml-1.5 font-semibold tabular-nums ${pctTone}`}>{pct}%</span>
+                  )}
+                  {pending > 0 && (
+                    <span className="ml-1.5 text-slate-500">· {pending} pending</span>
+                  )}
+                </>
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md border border-slate-700 px-2 py-1 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="space-y-2 px-5 py-4">
+          {graded.length === 0 ? (
+            <div className="surface rounded-xl px-4 py-8 text-center text-sm text-slate-400">
+              No tracked plays yet.
+              <div className="mt-1 text-xs text-slate-500">
+                Tap a player to open their detail, then{" "}
+                <span className="text-emerald-400">+ Track this play</span> to build your card.
+              </div>
+            </div>
+          ) : (
+            graded.map((g) => {
+              const meta = PROP_META[g.prop];
+              const chip =
+                g.result === "win"
+                  ? { t: "✓ Win", c: "text-emerald-400 border-emerald-500/40 bg-emerald-500/10" }
+                  : g.result === "loss"
+                    ? { t: "✗ Loss", c: "text-red-400 border-red-500/40 bg-red-500/10" }
+                    : g.result === "push"
+                      ? { t: "Push", c: "text-slate-300 border-slate-600 bg-slate-800/40" }
+                      : { t: "Pending", c: "text-slate-400 border-slate-700 bg-slate-900" };
+              return (
+                <div
+                  key={g.key}
+                  className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-slate-100">
+                        {g.playerName}
+                      </div>
+                      <div className="mt-0.5 truncate text-xs text-slate-400">{g.matchup}</div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span
+                        className={`rounded-md border px-2 py-0.5 text-[11px] font-medium tabular-nums ${chip.c}`}
+                      >
+                        {chip.t}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onRemove(g.key)}
+                        aria-label="Remove play"
+                        className="leading-none text-slate-600 transition-colors hover:text-red-400"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between gap-2 text-xs tabular-nums">
+                    <span className="truncate text-slate-300">
+                      <span className={g.side === "over" ? "text-emerald-400" : "text-red-400"}>
+                        {g.side === "over" ? "Over" : "Under"}
+                      </span>{" "}
+                      {fmt(g.line)} {meta.unit} · {meta.label}
+                    </span>
+                    <span className="shrink-0 text-slate-500">
+                      {g.actual !== null ? `${fmt(g.actual)} ${meta.unit}` : formatShortDate(g.date)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })
+          )}
+          {loading && plays.length > 0 && (
+            <div className="pt-1 text-center text-xs text-slate-600">Grading…</div>
+          )}
+        </div>
+
+        <div className="border-t border-slate-800 px-5 py-3 text-[11px] leading-relaxed text-slate-500">
+          Graded automatically against final box scores. Saved on this device only — no account
+          needed.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── component ─────────────────────────────────────────────────────────────────
 
 export default function PropBoard({
@@ -2310,6 +2595,9 @@ export default function PropBoard({
   // Watchlist (★) — starred player_ids in localStorage + the "only watched" filter.
   const watchlist = useWatchlist();
   const [watchlistOnly, setWatchlistOnly] = useState(false);
+  // Bet tracker (📋) — saved plays in localStorage + the My Plays slide-in panel.
+  const betTracker = useBetTracker();
+  const [myPlaysOpen, setMyPlaysOpen] = useState(false);
   // Only RESTRICT once hydrated AND at least one star exists — else toggling it on
   // an empty / SSR list would blank the board.
   const wlActive = watchlistOnly && watchlist.hydrated && watchlist.count > 0;
@@ -2393,6 +2681,7 @@ export default function PropBoard({
     <WatchlistCtx.Provider
       value={{ has: watchlist.has, toggle: watchlist.toggle, onlyWatched: wlActive }}
     >
+      <BetTrackerCtx.Provider value={{ has: betTracker.has, toggle: betTracker.toggle }}>
       {/* date navigation */}
       <DateNav currentDate={date} prevDate={prevDate} nextDate={nextDate} />
 
@@ -2490,6 +2779,25 @@ export default function PropBoard({
           <span>
             Watchlist
             {watchlist.hydrated && watchlist.count > 0 ? ` (${watchlist.count})` : ""}
+          </span>
+        </button>
+
+        {/* my plays (bet tracker) */}
+        <button
+          type="button"
+          onClick={() => setMyPlaysOpen(true)}
+          title="Your tracked plays, graded automatically against final box scores"
+          className={[
+            "flex shrink-0 items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+            betTracker.hydrated && betTracker.count > 0
+              ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-300/90 hover:bg-emerald-500/10"
+              : "border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200",
+          ].join(" ")}
+        >
+          <span>📋</span>
+          <span>
+            My Plays
+            {betTracker.hydrated && betTracker.count > 0 ? ` (${betTracker.count})` : ""}
           </span>
         </button>
 
@@ -2640,6 +2948,13 @@ export default function PropBoard({
       )}
 
       <PlayerDrawer target={drawer} date={date} onClose={() => setDrawer(null)} />
+      <MyPlays
+        open={myPlaysOpen}
+        plays={betTracker.plays}
+        onRemove={betTracker.remove}
+        onClose={() => setMyPlaysOpen(false)}
+      />
+      </BetTrackerCtx.Provider>
     </WatchlistCtx.Provider>
   );
 }
