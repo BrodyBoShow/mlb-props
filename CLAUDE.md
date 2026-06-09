@@ -4397,6 +4397,39 @@ Hitter matchup model — Stage 1 SHADOW (this session, the symmetric matchup-K):
   run db/migrations/add_hitter_matchup.sql. Until then projections are unaffected
   and the shadow write skips gracefully.
 
+Featured Plays — chalk gate (skewed/"demon-like" line fix) (this session):
+- USER (PickFinder screenshot of Alika Williams TB): "why is a demon line on the
+  featured plays?" The board featured "Alika Williams UNDER 1.5 total bases"
+  (proj 0.6, +0.13 edge). DIAGNOSED (live DB): 1.5 is the standard SPORTSBOOK TB
+  line (bet365/caesars/pinnacle/underdog all post 1.5 two-sided) — NOT a literal
+  PrizePicks demon (PP lists her standard at 0.5; sleeper posts 0.5). BUT the
+  effect matches the user's instinct: for a 0.6-proj hitter the 1.5 line is juiced
+  -208 to the under, so its de-vigged fair_under ≈ 0.63. Betting the UNDER there
+  is the side the sharp market ALREADY heavily favors = a base-rate/chalk lean, not
+  a real mispricing. (The edge used pinnacle's de-vigged 1.5, not a DFS demon.)
+- KEY DISTINCTION (why a symmetric "skewed line" gate is WRONG): Kai-Wei Teng
+  strikeouts UNDER 4.5 has fair_over 0.596 (market favors the OVER) but we bet
+  UNDER — a CONTRARIAN edge against the market favorite, which is GOOD. A symmetric
+  fair-in-[0.40,0.60] gate would wrongly kill Teng. The real problem is only
+  chalk: the side WE recommend already being a heavy favorite.
+- FIX (frontend-only, web/app/page.tsx buildEdgePlays): new FEATURED_MAX_LEAN_FAIR
+  = 0.60. After the lean is set, compute the lean's OWN-side de-vigged fair prob
+  (lean=="over" ? fair_over : 1-fair_over) and DROP if > 0.60. Asymmetric on
+  purpose — keeps contrarian plays (lean side an underdog) + competitive lines,
+  drops only chalk. DFS pick'em props (fair ≈ 0.5) always pass. Skipped when
+  fair_over_prob is null (don't over-drop on missing data).
+- VERIFIED (live 2026-06-09): Alika -> CHALK-DROP (lean-under fair 0.626 > 0.60);
+  the entire screenshot pitching trio KEEPS (Peralta hits-allowed OVER 4.5 fair
+  0.466; Teng strikeouts UNDER 4.5 fair-under 0.404; Rogers pitcher-fantasy UNDER
+  fair 0.5) + the fantasy plays. Alika was the lone hitting candidate, so HITTING
+  EDGES now honestly shows nothing rather than a chalk play (fills when a real
+  competitive-line hitter edge exists). tsc clean; build passes; engine/DB
+  untouched; FEATURE_COLS 11.
+- FOLLOW-UP (not done): apply the same chalk gate to the /results "Featured Plays"
+  hit-rate row so the board↔/results featured sets stay aligned (the /results
+  featured selection would need fair_over_prob threaded into edgeByKey). Minor
+  drift until then.
+
 Unstable pagination — doubled /results rows + skipped edges (this session):
 - USER report: /results showed every player row TWICE (identical), and Featured
   "Hitting Edges" had only one card. DIAGNOSED (live DB, read-only): the data is

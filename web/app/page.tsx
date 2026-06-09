@@ -103,6 +103,17 @@ const DFS_RANK_DISCOUNT = 0.85;
 // visibly off the line.
 const FEATURED_MIN_LEAN = 0.3;
 
+// CHALK gate. Don't feature a play where the side we're RECOMMENDING is already
+// a heavy favorite by the sharp de-vig — that's a base-rate lean on a skewed
+// line, not a real mispricing. The motivating case: "UNDER 1.5 total bases" for
+// a 0.6-projection hitter, where the sportsbook 1.5 line is juiced -208 to the
+// under (fair_under ≈ 0.63). Betting the side the market already loves has no
+// value — it's effectively a demon-style line. We keep CONTRARIAN edges (betting
+// AGAINST the market's favorite, e.g. a strong under on a line the market leans
+// over) and competitive lines. Asymmetric on purpose: only the lean's OWN side
+// being a >60% favorite is chalk. DFS pick'em props (fair ≈ 0.5) always pass.
+const FEATURED_MAX_LEAN_FAIR = 0.6;
+
 // FEATURED_PROJ_CAP (per-prop projection sanity ceiling) now lives in
 // @/lib/constants as the single source of truth — shared with the /results
 // Featured-Plays hit-rate so the board and results agree on which plays count.
@@ -978,6 +989,16 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         const projLean: "over" | "under" = proj.projection > e.line ? "over" : "under";
         const lean: "over" | "under" = edge > 0 ? "over" : "under";
         if (projLean !== lean) return null;
+
+        // CHALK gate: drop if the side we're recommending is already a heavy
+        // favorite per the sharp de-vig (a base-rate lean on a skewed/"demon"
+        // line, e.g. UNDER 1.5 TB where the under is a 63% favorite at -208).
+        // Keeps contrarian edges (betting against the market favorite). DFS
+        // pick'em props (fair ≈ 0.5) pass. Skip the gate only if fair is missing.
+        if (e.fair_over_prob != null) {
+          const leanFair = lean === "over" ? e.fair_over_prob : 1 - e.fair_over_prob;
+          if (leanFair > FEATURED_MAX_LEAN_FAIR) return null;
+        }
 
         // Recent-form backing (props.cash-style): how often the player landed on
         // THIS lean's side over the last ≤10 graded games vs THIS line. From the
