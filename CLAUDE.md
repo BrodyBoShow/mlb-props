@@ -4329,6 +4329,64 @@ on the full backfilled season (Stage-2 flip) — watch the calibration scorecard
 for strikeouts to confirm it holds. Run db/migrations/add_first_inning.sql in
 Supabase to persist the new 1-inning actuals (projections already work).
 
+/results trust + perf overhaul (this session):
+- STRICT standard-line grading (the trust fix): /results Betting Edge now grades
+  against the `edges` table (the engine's single de-vigged main/standard line per
+  player/prop/date), via standardLine() — fixed props (Total Bases, Hits+Runs+RBIs)
+  require the exact 1.5 standard (the 2.5/3.5 alts that leaked via the >= floor are
+  gone — verified 776 TB + 364 HRR rows ALL at 1.5); sportsbook props (K/hits
+  allowed/outs) require the de-vigged MAIN line within fair value (fair_over_prob
+  0.35-0.65, which also drops the bet365/underdog batter-K pollution); DFS props
+  (fantasy, 1st-inning) use the PrizePicks STANDARD. Applied to the 7-day main join
+  + the 42-day weekly trend (now reads the small edges table, not a full lines scan).
+- PERF (slow first AND second visit): both pages were force-dynamic with ZERO
+  caching, re-running ~150k+ rows/request. Wrapped getResults()/getSlate() in
+  unstable_cache (results 300s, slate 180s, shared across visitors, keyed by date).
+- DE-SKEW: the Hit Rate headline is now the EQUAL-WEIGHT average of each prop's rate
+  (props >= 15 evaluable) so high-volume hitter props don't drown out pitcher props.
+- CHART: replaced the 2-giant-bar weekly chart with a CUMULATIVE hit-rate LINE (SVG,
+  no lib). TRUST COPY added. Board "Model today" chip scoped to RECORD_PROPS (was
+  every tab) + honest tooltip.
+- Commits 57451f8 (lines), 646f465 (perf), b5d8c61 (de-skew+chart+copy), 9e3f09f
+  (chip). Frontend-only; FEATURE_COLS untouched (11).
+
+Matchup-aware projection rebuild (this session) — the user's "too much recency, not
+enough matchup" concern, fixed the disciplined (validate-first) way:
+- DIAGNOSIS: only strikeouts used matchup context (XGBoost); every other prop was a
+  pure recency-weighted rolling avg (last-5 2x) regressed to LEAGUE mean.
+- KEY VALIDATIONS (read-only, backfilled season): (a) park/opp context has WEAK
+  single-game signal for HITTER props (corr ~0.05, RMSE ~0.000) — variance
+  dominates; (b) PITCH-LEVEL granularity tested WORSE than the overall lineup
+  matchup (0.19 vs 0.205 corr) — noisy + redundant, so use Statcast for STABLE
+  regressed skills, not tiny splits (the user's synthesis); (c) the OVERALL lineup
+  matchup beats recency for strikeouts (0.205 vs 0.184).
+- STEP 1 SHIPPED (reduce recency bias): baseline._stabilized_projection — talent
+  blend (season 0.70 + last-20 0.20 + last-5 0.10, regressed k5) replaces the
+  recency-heavy weighting on the NOISE-dominated props (all hitter count props +
+  hits_allowed/walks/earned_runs). NOT strikeouts/outs_recorded (recency-driven —
+  test WORSE). Recency weight is now chosen per prop's noise profile. Validated
+  ~0.6-2.3% RMSE (engine/validate_talent.py). constants TALENT_W_*/
+  PITCHER_LEAGUE_PRIOR. Commit 04d7f89.
+- STEPS 2-3-5 SHIPPED (matchup-K flipped to primary): strikeouts now project as
+  0.55*matchup-K + 0.45*baseline at the POST-LINEUP step (_run_matchup_shadow now
+  rewrites the live projection, not just the shadow column). matchup_k.py (log5
+  lineup-vs-pitcher, regressed batter K% + CSW + platoon) validated: offline 63% vs
+  recency (validate_matchup_backtest.py), online 57% vs the live XGBoost on 171
+  graded starts w/ better Brier (0.280 vs 0.291); weight 0.55 from the in-sample
+  sweep (RMSE bottoms ~0.6, hedged). Commit 99ef059.
+  * IDEMPOTENCY: the matchup step runs every post-lineup refresh, so a naive
+    re-blend would drift toward pure matchup-K. New projections.proj_baseline column
+    stores the original pre-flip baseline; the flip ALWAYS blends from it (verified
+    no drift). db.update_strikeout_projection + get_strikeout_flip_rows; PGRST204
+    strip-and-warn pre-migration. db/migrations/add_proj_baseline.sql — APPLIED. The
+    pre-migration cron's 14 flipped rows had proj_baseline recovered algebraically
+    (B=(proj-0.55*M)/0.45) so they hold the clean blend.
+  * Edges flow: flip runs before _run_lines_and_edges; main() clears all_projections
+    after a flip so edges re-read the flipped values. Scorecard still grades pure
+    matchup-K (shadow column untouched).
+- REMAINING (optional next): tune the 0.55 weight up toward 0.6 as starts
+  accumulate; extend the lineup-matchup machinery to other props with signal.
+
 ## Keeping this file current
 At the end of each session, update the "Current status" section and record any
 new decisions or conventions, so the next session stays in sync.
