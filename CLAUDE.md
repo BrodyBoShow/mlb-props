@@ -4425,9 +4425,12 @@ Bet Tracker — "track this play" + My Plays panel (this session):
     <MyPlays> mounted next to <PlayerDrawer>.
 - Zero engine/DB/schema change; FEATURE_COLS untouched (11). Verified: gradeSide
   unit cases all pass; tsc --noEmit clean; npm run build passes (/ 18.3 -> 22.8 kB).
-- FOLLOW-UPS (not done): a "Track" affordance on the inline all-props detail (V1
-  is drawer-only); optional live (pre-final) grading via the box-score hooks;
-  an over/under side toggle (V1 saves the model's lean side).
+- Track button now in BOTH the Board-view drawer AND the games-view inline detail
+  (InlinePropDetail), fed date+matchup threaded through PlayerChipsRow from
+  GameCard (commit c5db8a7). Also dropped the empty-watchlist banner (kept the ☆
+  filter) per user (671889a).
+- FOLLOW-UPS (not done): optional live (pre-final) grading via the box-score
+  hooks; an over/under side toggle (V1 saves the model's lean side).
 
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
 WARNING lines (incl. the daily matchup-K + hitter-matchup + CLV + calibration
