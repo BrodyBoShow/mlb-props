@@ -162,6 +162,12 @@ create table if not exists projections (
     player_id        integer not null references players(player_id),
     prop_type        text    not null,   -- hits, total_bases, strikeouts, walks, rbis
     projection       numeric not null,   -- model's projected number
+    -- Pre-flip baseline projection, set ONLY on strikeouts rows by the matchup-K
+    -- flip (engine/main.py). The post-lineup flip re-runs every refresh, so it
+    -- ALWAYS blends matchup-K with this stable baseline (not the already-flipped
+    -- value) — without it, strikeout projections drift toward pure matchup-K each
+    -- run. See db/migrations/add_proj_baseline.sql.
+    proj_baseline    numeric,
     confidence       numeric,            -- optional: calibrated probability (0–1)
     projection_date  date    not null,   -- which slate date this belongs to
     -- Opposing-lineup season K rate (0–1), set ONLY on strikeouts rows (the
