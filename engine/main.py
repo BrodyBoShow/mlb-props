@@ -39,7 +39,14 @@ import model as mlb_model
 import stats
 import sweet_spot
 import weather
-from constants import BLEND_BASELINE_WEIGHT, BLEND_MODEL_WEIGHT, LOOKBACK_DAYS, et_today
+from constants import (
+    BLEND_BASELINE_WEIGHT,
+    BLEND_MODEL_WEIGHT,
+    LOOKBACK_DAYS,
+    MATCHUP_K_PRIMARY_WEIGHT,
+    MATCHUP_K_REGULARIZER_WEIGHT,
+    et_today,
+)
 
 
 # Full-history fantasy medians (the fantasy-score regression prior). Fetched
@@ -709,7 +716,7 @@ def _fill_in_lined_hitters(
     return len(expected)
 
 
-def _run_matchup_shadow(starters: list[dict], games: list[dict]) -> None:
+def _run_matchup_shadow(starters: list[dict], games: list[dict]) -> int:
     """SHADOW MODE: deterministic matchup-expected-K stored ALONGSIDE the live
     strikeout projection (projections.matchup_expected_k). NEVER changes the
     displayed projection / edge / blend — it's logged only, pending calibration
@@ -789,25 +796,62 @@ def _run_matchup_shadow(starters: list[dict], games: list[dict]) -> None:
 
     if not updates:
         print("  matchup-K shadow: no starters with a fully posted opposing lineup")
-        return
+        return 0
 
     n = db.update_matchup_expected_k(updates)
     print(f"  matchup-K shadow: wrote {n} matchup_expected_k values (shadow only)")
 
-    # Diagnostic: matchup-K vs the live strikeout baseline for a few starters.
-    live: dict[int, float] = {}
+    # Read each starter's live strikeouts row: the current projection + the stored
+    # pre-flip baseline (proj_baseline). proj_baseline makes the flip IDEMPOTENT —
+    # the matchup step runs on every post-lineup refresh, so without a stable
+    # baseline a re-blend would drift the projection toward pure matchup-K. We
+    # always blend matchup-K with the ORIGINAL baseline, captured on the first flip.
+    live: dict[int, dict] = {}
     try:
-        for r in db.get_projections_for_date(today_str):
-            if r.get("prop_type") == "strikeouts" and r.get("player_id") is not None:
-                live[r["player_id"]] = r.get("projection")
-    except Exception:
-        pass
+        for r in db.get_strikeout_flip_rows(today_str):
+            if r.get("player_id") is not None:
+                live[r["player_id"]] = r
+    except Exception as exc:
+        print(f"  matchup-K flip: could not read live strikeout rows ({exc})")
     for u in updates[:6]:
-        base = live.get(u["player_id"])
+        row = live.get(u["player_id"]) or {}
         print(
             f"    {name_by_pid.get(u['player_id'])}: matchup-K "
-            f"{u['matchup_expected_k']} vs baseline {base}"
+            f"{u['matchup_expected_k']} vs baseline {row.get('projection')}"
         )
+
+    # FLIP (live): blend matchup-K into the live strikeouts projection. Only the
+    # starters in `updates` are touched — each has a fully-posted opposing lineup
+    # (mk is None was already continue'd). matchup-K PRIMARY + the rolling/XGBoost
+    # baseline as a regularizer (constants.MATCHUP_K_*_WEIGHT, validated). The
+    # shadow column is still written above, so the scorecard keeps grading pure
+    # matchup-K. Blends from proj_baseline (idempotent across same-day re-runs).
+    flip_updates: list[dict] = []
+    for u in updates:
+        row = live.get(u["player_id"])
+        if not row or row.get("projection") is None:
+            continue  # no existing live strikeouts row to blend into
+        # The stable baseline: the stored proj_baseline if a prior flip captured
+        # it this day, else the current projection (first flip = the baseline).
+        bl = row.get("proj_baseline")
+        baseline = float(bl) if bl is not None else float(row["projection"])
+        blended = round(
+            MATCHUP_K_PRIMARY_WEIGHT * u["matchup_expected_k"]
+            + MATCHUP_K_REGULARIZER_WEIGHT * baseline,
+            2,
+        )
+        flip_updates.append({
+            "game_id": u["game_id"], "player_id": u["player_id"],
+            "projection_date": u["projection_date"],
+            "projection": blended, "proj_baseline": baseline,
+        })
+    if flip_updates:
+        nf = db.update_strikeout_projection(flip_updates)
+        print(
+            f"  matchup-K FLIP (live): blended into {nf} strikeout projections "
+            f"({MATCHUP_K_PRIMARY_WEIGHT} matchup / {MATCHUP_K_REGULARIZER_WEIGHT} baseline)"
+        )
+    return len(flip_updates)
 
 
 def _run_lines_and_edges(
@@ -1029,14 +1073,19 @@ def main() -> None:
         # root cause is understood. (See cleanup_misdated_projections.)
         # db.cleanup_misdated_projections()  # re-enable only once the FP is fixed
 
-        # SHADOW: matchup-expected-K (logged onto strikeouts rows, never the
-        # live projection). Decorative + experimental, so any failure is
-        # absorbed and never touches the real pipeline.
-        print("Computing matchup-expected-K (shadow)...")
+        # matchup-expected-K: writes the shadow column (scorecard keeps grading
+        # pure matchup-K) AND now FLIPS it into the LIVE strikeouts projection —
+        # matchup-K primary, baseline a regularizer (validated). Wrapped so any
+        # failure is absorbed and the rest of the pipeline keeps running.
+        print("Computing matchup-K + flipping into live strikeouts projections...")
         try:
-            _run_matchup_shadow(starters, games)
+            if _run_matchup_shadow(starters, games):
+                # The flip rewrote strikeouts projections in the DB; clear the
+                # in-memory list so _run_lines_and_edges re-reads them (the
+                # flipped projections must flow into the edges).
+                all_projections = []
         except Exception as exc:
-            print(f"  matchup-K shadow failed ({exc}) -- skipping")
+            print(f"  matchup-K step failed ({exc}) -- skipping")
 
         # LOG-ONLY daily scorecard: does the shadow matchup-K beat the baseline
         # yet? Prints a FLIP-READY verdict so the validate-then-flip decision is

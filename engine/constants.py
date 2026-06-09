@@ -335,6 +335,17 @@ MATCHUP_K_FLIP_MIN_DIVERGENCES = 40   # graded starts where matchup-K and the
 MATCHUP_K_FLIP_MIN_WINRATE = 0.55     # matchup-K's side must win >= this share
 #                                       of those divergences (50% = coin flip)
 
+# FLIPPED (2026-06-08): matchup-K is now blended into the LIVE strikeouts
+# projection at the post-lineup step. The blend weight was validated on the 171
+# graded shadow starts (engine/validate_matchup_backtest.py + an in-sample sweep):
+# blended = w·matchup-K + (1-w)·current beats both pure-matchup (w=1) and the
+# current model (w=0); RMSE bottoms at w≈0.6 (2.062 vs 2.160 current, ~4.5%).
+# We use 0.55 — matchup-K PRIMARY, the rolling/XGBoost baseline a regularizer —
+# slightly conservative vs the in-sample 0.6 to avoid over-fitting a modest
+# sample. Tune up toward 0.6 as graded starts accumulate. Weights sum to 1.0.
+MATCHUP_K_PRIMARY_WEIGHT = 0.55
+MATCHUP_K_REGULARIZER_WEIGHT = 0.45
+
 # ─── Park factors (grade.py + model.py) ──────────────────────────────────────
 #
 # Park factor = multiplicative effect of the venue on the named outcome.

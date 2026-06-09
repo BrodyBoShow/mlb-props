@@ -825,6 +825,94 @@ def update_matchup_expected_k(updates: list[dict]) -> int:
     return written
 
 
+def get_strikeout_flip_rows(date_str: str) -> list[dict]:
+    """Today's strikeouts rows with the live projection + the stored pre-flip
+    baseline (proj_baseline), for the matchup-K flip. Paginated. Defensive: if
+    proj_baseline isn't migrated yet, retries without it (proj_baseline = None,
+    so the first flip uses the current projection as the baseline)."""
+    client = _client()
+    cols = "player_id, projection, proj_baseline"
+    out: list[dict] = []
+    try:
+        for page in range(20):
+            start = page * 1000
+            r = (client.table("projections").select(cols)
+                 .eq("prop_type", "strikeouts").eq("projection_date", date_str)
+                 .range(start, start + 999).execute().data) or []
+            out += r
+            if len(r) < 1000:
+                break
+        return out
+    except Exception as exc:
+        msg = str(exc)
+        if "proj_baseline" in msg and ("42703" in msg or "does not exist" in msg or "PGRST" in msg):
+            # pre-migration — read without proj_baseline
+            out = []
+            for page in range(20):
+                start = page * 1000
+                r = (client.table("projections").select("player_id, projection")
+                     .eq("prop_type", "strikeouts").eq("projection_date", date_str)
+                     .range(start, start + 999).execute().data) or []
+                out += r
+                if len(r) < 1000:
+                    break
+            return out
+        raise
+
+
+def update_strikeout_projection(updates: list[dict]) -> int:
+    """LIVE: set projections.projection (+ proj_baseline) on existing strikeouts
+    rows — the matchup-K flip (post-lineup re-projection).
+
+    Each update: {game_id, player_id, projection_date, projection, proj_baseline}.
+    A targeted UPDATE (not an upsert) so it ONLY rewrites the live strikeouts
+    projection + its baseline and never disturbs opp_k_rate / matchup_expected_k /
+    other props. proj_baseline stores the original (pre-flip) projection so the
+    flip is idempotent across same-day re-runs. Defensive: if proj_baseline isn't
+    migrated yet (PGRST204), strips it and updates only the projection (the flip
+    still works, just not idempotent until the migration is applied).
+    Per-row round-trips, but a slate is only ~15-18 starters.
+    """
+    if not updates:
+        return 0
+    client = _client()
+    written = 0
+    strip_baseline = False
+    for u in updates:
+        payload = {"projection": u["projection"]}
+        if not strip_baseline and "proj_baseline" in u:
+            payload["proj_baseline"] = u["proj_baseline"]
+        try:
+            (
+                client.table("projections")
+                .update(payload)
+                .eq("game_id", u["game_id"])
+                .eq("player_id", u["player_id"])
+                .eq("prop_type", "strikeouts")
+                .eq("projection_date", u["projection_date"])
+                .execute()
+            )
+            written += 1
+        except Exception as exc:
+            msg = str(exc)
+            if "proj_baseline" in msg and ("PGRST204" in msg or "Could not find" in msg or "42703" in msg):
+                print(
+                    "  WARNING: projections missing proj_baseline column -- flipping "
+                    "without it (run db/migrations/add_proj_baseline.sql for "
+                    "idempotency). Retrying this row."
+                )
+                strip_baseline = True
+                client.table("projections").update(
+                    {"projection": u["projection"]}
+                ).eq("game_id", u["game_id"]).eq("player_id", u["player_id"]).eq(
+                    "prop_type", "strikeouts"
+                ).eq("projection_date", u["projection_date"]).execute()
+                written += 1
+            else:
+                raise
+    return written
+
+
 _GAME_WEATHER_COLS = ("wind_speed_mph", "wind_dir_deg", "is_dome")
 
 
