@@ -4397,6 +4397,55 @@ Hitter matchup model — Stage 1 SHADOW (this session, the symmetric matchup-K):
   run db/migrations/add_hitter_matchup.sql. Until then projections are unaffected
   and the shadow write skips gracefully.
 
+Prefer PrizePicks lines on the board (this session):
+- USER (PickFinder screenshot, Nick Martinez outs): "why is it using 17.5 instead
+  of 16.5?" DIAGNOSED (live DB): we had DK 16.5 + Pinnacle 17.5; edge.py prefers
+  Pinnacle (sharpest) so the board headlined 17.5. PrizePicks (the user's platform)
+  posts a DIFFERENT standard (16.5 then, 17.0 now). User chose (AskUserQuestion)
+  "Prefer PrizePicks": headline the PP line + lean, keep the sharp sportsbook line
+  as a value-check beside it. Same root as the Alika "demon" note — the board was
+  showing sportsbook lines, not the DFS lines the user bets.
+- ENGINE (lines.py): _PP_STAT_TO_PROP was fantasy-only, so PrizePicks-direct never
+  captured outs/K/hits-allowed/etc. (the thin PP lines we had came from ParlayAPI).
+  Extended it with the real PrizePicks stat_type labels (probed live from
+  api.prizepicks.com/projections?league_id=2): 'Pitching Outs'->outs_recorded,
+  'Pitcher Strikeouts'->strikeouts, 'Hits Allowed'->hits_allowed, 'Walks Allowed'
+  ->walks, 'Earned Runs Allowed'->earned_runs, 'Total Bases'/'Hits'/'Hits+Runs+
+  RBIs'/'RBIs'/'Runs'/'Home Runs'->hitter_*. DELIBERATELY NOT mapped: 'Hitter
+  Strikeouts' (would pollute pitcher strikeouts), 'Walks' (batter; our walks is
+  the PITCHER prop = 'Walks Allowed'), singles/doubles/triples/SB/pitches-thrown
+  (no prop). fetch_prop_lines dedup loop now drops the ParlayAPI prizepicks rung
+  when PP-direct covers that (player, prop) so we don't write two prizepicks rows
+  (unique-key collision); sportsbook rows always kept. PP-direct fetch verified:
+  243 standard lines incl. Martinez outs 17.0. The standard filter (odds_type==
+  'standard') already picks the real rung; the parse loop is generic, so only the
+  map needed extending. ADDITIVE + SAFE: edge.py excludes prizepicks from de-vig
+  (edges unchanged); /results grades off the edges table (unchanged); the new
+  prizepicks rows were inert until the frontend reads them.
+- FRONTEND (page.tsx row build): the ppLineByKey query already fetched ALL
+  prizepicks lines, so the new props flow in automatically. Flipped the row line
+  from edge-first (e?.line ?? ppLine) to PP-FIRST. New usePP = ppLine exists AND
+  (no sharp line OR ppLine != sharp line). When usePP: line = PP line, the
+  de-vigged edge/model%/fair%/prices are DROPPED (they're for a different number
+  -> the chip shows the model's proj-vs-PP-line lean), bookmaker='prizepicks', and
+  sharpLine = the sportsbook line (the value check). When PP == sharp (or no PP):
+  full de-vigged edge kept (unchanged). types.ts: Pitcher.sharpLine?. PropBoard
+  EdgeDetail line-only path renders "Line X · ▲/▼ lean · sharp Y" so you see the
+  PrizePicks number you'd bet next to the sharp number (PP 17.0 over vs sharp 17.5
+  = better number = value). trends now key off the displayed line.
+- Unaffected (verified): Featured Plays (buildEdgePlays reads edgeData/the edges
+  table, not the row) still uses sportsbook de-vig edges; sharp badge (REAL_BOOKS,
+  excludes prizepicks) unchanged; /results unchanged. There's now a split (board =
+  your PP lines + lean; Featured = sportsbook de-vig finds) — acceptable; aligning
+  Featured to PP lines is a follow-up.
+- Populated the current slate (242 PP-direct lines, 0 ParlayAPI credits) so it's
+  visible now: Martinez outs DB now = DK 16.5 / Pinnacle 17.5 / PrizePicks 17.0;
+  board headlines 17.0 ▲ Over · sharp 17.5. tsc clean; build passes; FEATURE_COLS
+  11. CI caveat: PP-direct needs the residential proxy (PRIZEPICKS_PROXY_URL) or it
+  403s; uncovered props fall back to the sportsbook line. FOLLOW-UPS: a fuller
+  de-vig-at-PP-line value check (needs engine to compute model_over_prob at the PP
+  line); align Featured Plays + /results featured to PP lines.
+
 Featured Plays — chalk gate (skewed/"demon-like" line fix) (this session):
 - USER (PickFinder screenshot of Alika Williams TB): "why is a demon line on the
   featured plays?" The board featured "Alika Williams UNDER 1.5 total bases"

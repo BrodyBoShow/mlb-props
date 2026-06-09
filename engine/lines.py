@@ -202,8 +202,29 @@ _MAIN_LINE_VALUE = {
 # strips when it normalizes DFS payouts. We read the STANDARD rung directly so
 # the stored fantasy line is the real PrizePicks line, not a random alt rung.
 _PP_STAT_TO_PROP = {
+    # full-game fantasy (PrizePicks-only props)
     "Hitter Fantasy Score":  "hitter_fantasy_score",
     "Pitcher Fantasy Score": "pitcher_fantasy_score",
+    # pitcher props — PrizePicks STANDARD lines (the DFS market the user bets).
+    # 'Pitching Outs' is the prop the Nick Martinez 16.5-vs-sportsbook-17.5
+    # discrepancy was about.
+    "Pitching Outs":         "outs_recorded",
+    "Pitcher Strikeouts":    "strikeouts",
+    "Hits Allowed":          "hits_allowed",
+    "Walks Allowed":         "walks",
+    "Earned Runs Allowed":   "earned_runs",
+    # hitter props
+    "Total Bases":           "hitter_total_bases",
+    "Hits":                  "hitter_hits",
+    "Hits+Runs+RBIs":        "hitter_hits_runs_rbis",
+    "RBIs":                  "hitter_rbis",
+    "Runs":                  "hitter_runs",
+    "Home Runs":             "hitter_home_runs",
+    # DELIBERATELY NOT MAPPED:
+    #   'Hitter Strikeouts' (batter Ks) — would pollute our pitcher `strikeouts`.
+    #   'Walks' (batter walks)         — our `walks` is the PITCHER prop
+    #                                     ('Walks Allowed'); batter walks have no prop.
+    #   'Singles'/'Doubles'/'Triples'/'Stolen Bases'/'Pitches Thrown' — no prop.
 }
 
 
@@ -555,6 +576,13 @@ def fetch_prop_lines(
                 pp_dropped_stale += 1
                 continue   # uncovered: drop (preserve last-good DB line)
             continue       # covered: drop the ParlayAPI rung; replaced authoritatively below
+        # Non-fantasy: when PrizePicks-direct provides an authoritative STANDARD
+        # line for this (player, prop), drop the ParlayAPI prizepicks rung so we
+        # don't write two prizepicks rows (the unique key would collide). The
+        # authoritative row is appended below. Sportsbook rows (pinnacle/dk/etc.)
+        # are always kept; an uncovered prizepicks row keeps its ParlayAPI value.
+        if r["bookmaker"] == "prizepicks" and (r["player_id"], r["prop_type"]) in pp_standard:
+            continue
         kept.append(r)
     for (player_id, prop_type), line in pp_standard.items():
         kept.append({

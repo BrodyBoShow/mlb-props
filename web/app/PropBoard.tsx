@@ -504,6 +504,19 @@ function EdgeDetail({
       <span className="text-slate-500">Line {pitcher.line}</span>
       <span className="mx-1.5 text-slate-600">·</span>
       {leanNode}
+      {/* Value check: the sharp sportsbook line next to the PrizePicks line we're
+          headlining, so you can see if PrizePicks is offering a better number. */}
+      {pitcher.sharpLine !== undefined && pitcher.sharpLine !== pitcher.line && (
+        <>
+          <span className="mx-1.5 text-slate-600">·</span>
+          <span
+            className="text-slate-500"
+            title="Sharp sportsbook line — compare to the PrizePicks line you'd bet"
+          >
+            sharp {pitcher.sharpLine}
+          </span>
+        </>
+      )}
     </div>
   );
 }

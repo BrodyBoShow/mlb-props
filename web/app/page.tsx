@@ -846,26 +846,37 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         }
 
         const e = edgeByKey.get(`${r.player_id}|${r.prop_type}`);
+        const ppLine = ppLineByKey.get(`${r.player_id}|${r.prop_type}`);
+        const sharpLineVal = e?.line;
+        // PREFER the PrizePicks line — the DFS market the user actually bets.
+        // When it DIFFERS from the sharp sportsbook line, the de-vigged edge/
+        // probs are for a different number, so we DON'T attach them (the chip
+        // then shows the model's proj-vs-PP-line lean) and instead surface the
+        // sharp line as a value-check context (`sharpLine`). When the PP line
+        // MATCHES the sharp line — or there's no PP line — keep the full
+        // de-vigged edge. Fantasy props (no edge row) keep their PP line + lean.
+        const usePP =
+          ppLine !== undefined && (sharpLineVal === undefined || ppLine !== sharpLineVal);
+        const displayLine = ppLine ?? sharpLineVal;
         byGame.get(r.game_id)!.pitchers.push({
           player_id: r.player_id,
           name: r.players?.full_name ?? "Unknown player",
           projection: r.projection,
           // NULL until enough graded starts accumulate; undefined = render nothing.
           confidence: r.confidence ?? undefined,
-          // Optional edge fields — undefined when this player has no line.
-          // Fantasy props carry no edge row (PrizePicks-only), so fall back to
-          // the directly-fetched PP line so the fantasy tabs still show "Line X".
-          line: e?.line ?? ppLineByKey.get(`${r.player_id}|${r.prop_type}`),
-          edge: e?.edge ?? undefined,
-          fairOverProb: e?.fair_over_prob ?? undefined,
-          modelOverProb: e?.model_over_prob ?? undefined,
-          overPrice: e?.over_price ?? undefined,
-          underPrice: e?.under_price ?? undefined,
-          bookmaker: e?.bookmaker,
-          // Hit-rate trends (L5/L10/L15/SZN + Diff + Streak) vs the line, for the
-          // focused-card panel. Covers pitcher + hitter props; undefined for
-          // fantasy / no line / no history.
-          trends: trendsFor(r.player_id, propType, e?.line),
+          line: displayLine,
+          edge: usePP ? undefined : e?.edge ?? undefined,
+          fairOverProb: usePP ? undefined : e?.fair_over_prob ?? undefined,
+          modelOverProb: usePP ? undefined : e?.model_over_prob ?? undefined,
+          overPrice: usePP ? undefined : e?.over_price ?? undefined,
+          underPrice: usePP ? undefined : e?.under_price ?? undefined,
+          bookmaker: usePP ? "prizepicks" : e?.bookmaker,
+          // The sharp sportsbook line — shown as a value check when it differs
+          // from the PrizePicks line we're headlining.
+          sharpLine: usePP ? sharpLineVal : undefined,
+          // Hit-rate trends (L5/L10/L15/SZN + Diff + Streak) vs the DISPLAYED
+          // line, for the focused-card panel. undefined for no line / no history.
+          trends: trendsFor(r.player_id, propType, displayLine),
           // Tonight's opposing-lineup context. Attached to every prop's row
           // but only rendered on the Strikeouts tab. undefined when opp_k_rate
           // isn't available (pre-migration or no model run for this pitcher).

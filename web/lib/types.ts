@@ -71,6 +71,10 @@ export type Pitcher = {
   projection: number;
   confidence?: number;   // 0–1 hit rate; undefined = not enough graded history
   line?: number;
+  // The sharp sportsbook line, when the headlined `line` is the (different)
+  // PrizePicks line — shown as an "is this PrizePicks number good value?" check.
+  // undefined when the PP line matches the sharp line, or there's no PP line.
+  sharpLine?: number;
   edge?: number;
   fairOverProb?: number;
   modelOverProb?: number;
