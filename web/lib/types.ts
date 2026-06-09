@@ -71,9 +71,13 @@ export type Pitcher = {
   projection: number;
   confidence?: number;   // 0–1 hit rate; undefined = not enough graded history
   line?: number;
-  // The sharp sportsbook line, when the headlined `line` is the (different)
-  // PrizePicks line — shown as an "is this PrizePicks number good value?" check.
-  // undefined when the PP line matches the sharp line, or there's no PP line.
+  // The DFS app (prizepicks/underdog/sleeper/betr) offering the headlined `line`
+  // — the board line-shops the best line for the model's side across these apps.
+  // undefined when there's no DFS line (the line is the sportsbook edge line).
+  lineBook?: string;
+  // The best sportsbook line for the model's side, shown as an "is this DFS
+  // number good value?" check beside the DFS line. undefined when it matches the
+  // DFS line, or there's no DFS line.
   sharpLine?: number;
   edge?: number;
   fairOverProb?: number;

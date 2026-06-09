@@ -203,14 +203,29 @@ export const REAL_BOOKS: readonly string[] = [
   "caesars",
 ];
 
-// Display names for the real books (tooltips / labels). Keep in sync with
-// REAL_BOOKS above and BOOK_LABEL in web/app/FeaturedPlays.tsx.
+// DFS pick'em apps the user bets — the board shops the BEST line for the
+// model's side across these (line shopping), since these are the markets that
+// are actually bettable on a pick'em app. The sportsbooks (REAL_BOOKS) are used
+// only as a value-check reference, not as a headline line.
+export const DFS_BOOKS: readonly string[] = [
+  "prizepicks",
+  "underdog",
+  "sleeper",
+  "betr",
+];
+
+// Display names for the books (tooltips / labels). Keep in sync with
+// REAL_BOOKS / DFS_BOOKS above and BOOK_LABEL in web/app/FeaturedPlays.tsx.
 export const BOOK_DISPLAY: Record<string, string> = {
   pinnacle:   "Pinnacle",
   draftkings: "DraftKings",
   fanduel:    "FanDuel",
   bet365:     "Bet365",
   caesars:    "Caesars",
+  prizepicks: "PrizePicks",
+  underdog:   "Underdog",
+  sleeper:    "Sleeper",
+  betr:       "Betr",
 };
 
 // ── Park factors ─────────────────────────────────────────────────────────────

@@ -501,17 +501,23 @@ function EdgeDetail({
 
   return (
     <div className="mt-1 text-xs tabular-nums">
-      <span className="text-slate-500">Line {pitcher.line}</span>
+      {/* The best line for the model's side across the DFS apps + which app. */}
+      <span className="text-slate-300">{pitcher.line}</span>
+      {pitcher.lineBook && (
+        <span className="ml-1 text-slate-500">
+          {BOOK_DISPLAY[pitcher.lineBook] ?? pitcher.lineBook}
+        </span>
+      )}
       <span className="mx-1.5 text-slate-600">·</span>
       {leanNode}
-      {/* Value check: the sharp sportsbook line next to the PrizePicks line we're
-          headlining, so you can see if PrizePicks is offering a better number. */}
+      {/* Value check: the best sportsbook line for this side, so you can see if
+          the DFS line you'd bet is a better number than the sharp market. */}
       {pitcher.sharpLine !== undefined && pitcher.sharpLine !== pitcher.line && (
         <>
           <span className="mx-1.5 text-slate-600">·</span>
           <span
             className="text-slate-500"
-            title="Sharp sportsbook line — compare to the PrizePicks line you'd bet"
+            title="Best sportsbook line for this side — compare to the DFS line you'd bet"
           >
             sharp {pitcher.sharpLine}
           </span>

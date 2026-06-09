@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { unstable_cache } from "next/cache";
 import { fetchAllPages, getSupabaseClient, resolveExistingColumns } from "@/lib/supabase";
-import { ALL_PROP_TYPES, EDGE_THRESHOLD, FEATURED_MIN_LINE, FEATURED_PROJ_CAP, FEATURED_PROJ_FLOOR, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
+import { ALL_PROP_TYPES, DFS_BOOKS, EDGE_THRESHOLD, FEATURED_MIN_LINE, FEATURED_PROJ_CAP, FEATURED_PROJ_FLOOR, HITTER_MIN_GAMES_TRACKED, HR_MIN_GAMES_TRACKED, PARK_FACTORS_HITS, REAL_BOOKS, SHARP_MIN_LINE } from "@/lib/constants";
 import { hrComposite } from "@/lib/hrComposite";
 import type { ByProp, FeaturedPlay, FeaturedSection, GameGroup, PropType, Trends, TrendWindow } from "@/lib/types";
 import PropBoard from "./PropBoard";
@@ -102,6 +102,28 @@ const DFS_RANK_DISCOUNT = 0.85;
 // it's noise. 0.3 keeps featured plays to ones where the projection is
 // visibly off the line.
 const FEATURED_MIN_LEAN = 0.3;
+
+// ── line shopping (best line for the model's side across DFS apps) ──────────
+// The model's side is over when the projection sits above the book consensus.
+// We use the LOWER-median line so a single high outlier can't flip the side.
+function medianLine(lines: number[]): number {
+  const s = [...lines].sort((a, b) => a - b);
+  return s[Math.floor((s.length - 1) / 2)];
+}
+// Best line for a side: the LOWEST line for an OVER (easiest to clear) or the
+// HIGHEST for an UNDER. Returns the {book, line} that offers it.
+function bestLineForSide(
+  books: Map<string, number>,
+  side: "over" | "under",
+): { book: string; line: number } | undefined {
+  let best: { book: string; line: number } | undefined;
+  for (const [book, line] of books) {
+    if (!best || (side === "over" ? line < best.line : line > best.line)) {
+      best = { book, line };
+    }
+  }
+  return best;
+}
 
 // CHALK gate. Don't feature a play where the side we're RECOMMENDING is already
 // a heavy favorite by the sharp de-vig — that's a base-rate lean on a skewed
@@ -557,36 +579,39 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
   // ── PrizePicks DFS lines (soft-book value, ALL props) ───────────────────
   // PrizePicks is a soft DFS book the model beats far more often than the sharp
   // two-sided books — so its line is the highest-value thing to surface where a
-  // prop has no de-vigged sharp edge. edge.py never carries DFS books, so the
-  // board reads the PP line directly here and shows it (with the model's lean
-  // vs that line — the same proj-vs-line signal /results grades on) wherever a
-  // prop lacks a sharp/consensus edge row (the line fallback `e?.line ??
-  // ppLineByKey` keeps the de-vigged sharp line whenever one exists). Fetches
-  // EVERY PrizePicks prop, not just fantasy/1st-inning, so the board reflects
-  // the full soft-book slate instead of a flat projection. ISOLATED +
-  // failure-tolerant: on any error the map stays empty and the board just shows
-  // fewer lines — never broken. Volume ~500 rows, under the 1000-row cap.
-  const ppLineByKey = new Map<string, number>();
+  // Per-prop DFS app lines, `${player_id}|${prop_type}` -> Map<book, line>, for
+  // the DFS pick'em apps the user bets (DFS_BOOKS). The board LINE-SHOPS: it
+  // headlines the BEST line for the model's side across these apps (lowest line
+  // for an over, highest for an under) + which app offers it, with the best
+  // sportsbook line shown beside it as a value check. edge.py never de-vigs DFS
+  // books, so these are read directly here. ISOLATED + failure-tolerant +
+  // paginated: on any error the map stays empty and the board falls back to the
+  // sportsbook edge line — never broken.
+  const dfsByKey = new Map<string, Map<string, number>>();
   {
-    const { data: ppRows, error: ppErr } = await supabase
-      .from("lines")
-      .select("player_id, prop_type, line")
-      .eq("game_date", selectedDate)
-      .eq("bookmaker", "prizepicks");
-    if (ppErr) {
-      console.log(
-        `[home-diag] prizepicks DFS lines fetch skipped (${String(ppErr)})`,
-      );
-    } else {
-      for (const r of (ppRows ?? []) as Array<{
-        player_id: number;
-        prop_type: string;
-        line: number | null;
-      }>) {
-        if (r.line !== null && r.line !== undefined) {
-          ppLineByKey.set(`${r.player_id}|${r.prop_type}`, Number(r.line));
-        }
+    type DfsRow = { player_id: number; prop_type: string; bookmaker: string; line: number | null };
+    const dfsRows = await fetchAllPages<DfsRow>(
+      (from, to) =>
+        supabase
+          .from("lines")
+          .select("player_id, prop_type, bookmaker, line")
+          .eq("game_date", selectedDate)
+          .in("bookmaker", DFS_BOOKS as string[])
+          .order("player_id", { ascending: true })
+          .order("prop_type", { ascending: true })
+          .order("bookmaker", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: DfsRow[] | null; error: unknown }>,
+      "dfs-lines",
+    );
+    for (const r of dfsRows) {
+      if (r.line === null || r.line === undefined) continue;
+      const key = `${r.player_id}|${r.prop_type}`;
+      let books = dfsByKey.get(key);
+      if (!books) {
+        books = new Map<string, number>();
+        dfsByKey.set(key, books);
       }
+      if (!books.has(r.bookmaker)) books.set(r.bookmaker, Number(r.line));
     }
   }
 
@@ -846,18 +871,44 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         }
 
         const e = edgeByKey.get(`${r.player_id}|${r.prop_type}`);
-        const ppLine = ppLineByKey.get(`${r.player_id}|${r.prop_type}`);
-        const sharpLineVal = e?.line;
-        // PREFER the PrizePicks line — the DFS market the user actually bets.
-        // When it DIFFERS from the sharp sportsbook line, the de-vigged edge/
-        // probs are for a different number, so we DON'T attach them (the chip
-        // then shows the model's proj-vs-PP-line lean) and instead surface the
-        // sharp line as a value-check context (`sharpLine`). When the PP line
-        // MATCHES the sharp line — or there's no PP line — keep the full
-        // de-vigged edge. Fantasy props (no edge row) keep their PP line + lean.
-        const usePP =
-          ppLine !== undefined && (sharpLineVal === undefined || ppLine !== sharpLineVal);
-        const displayLine = ppLine ?? sharpLineVal;
+        // LINE-SHOP across the DFS apps the user bets: headline the BEST line for
+        // the model's side (lowest for an over, highest for an under) + which app
+        // offers it. The de-vigged edge/probs are for the SHARP line (a different
+        // number), so when we headline a DFS line we DON'T attach them — the chip
+        // shows the model's proj-vs-line lean — and surface the best SPORTSBOOK
+        // line beside it as a value check. No DFS line for this prop → fall back
+        // to the sharp edge line + full de-vigged edge (unchanged).
+        // Drop ALT lines (below the prop's main-market floor) before shopping —
+        // otherwise a stray 0.5 alt (e.g. pinnacle's 0.5 total-bases) wins the
+        // "best" pick and shows a misleading value check. If flooring empties a
+        // set, keep it unfiltered (better a line than none).
+        const floor =
+          SHARP_MIN_LINE[propType as keyof typeof SHARP_MIN_LINE] ??
+          FEATURED_MIN_LINE[propType] ??
+          0;
+        const mainOnly = (m: Map<string, number> | undefined): Map<string, number> | undefined => {
+          if (!m) return undefined;
+          const f = new Map([...m].filter(([, l]) => l >= floor));
+          return f.size > 0 ? f : m;
+        };
+        const dfsBooks = mainOnly(dfsByKey.get(`${r.player_id}|${r.prop_type}`));
+        let displayLine = e?.line;
+        let lineBook: string | undefined;
+        let sharpLineVal: number | undefined;
+        const useDfs = dfsBooks !== undefined && dfsBooks.size > 0;
+        if (useDfs) {
+          const side: "over" | "under" =
+            r.projection > medianLine([...dfsBooks!.values()]) ? "over" : "under";
+          const best = bestLineForSide(dfsBooks!, side)!;
+          displayLine = best.line;
+          lineBook = best.book;
+          // value check: the best (main-market) SPORTSBOOK line for the same side,
+          // else the de-vigged edge's line. Shown only when it differs.
+          const sb = mainOnly(sharpByKey.get(`${r.player_id}|${r.prop_type}`));
+          const sbBest = sb && sb.size > 0 ? bestLineForSide(sb, side) : undefined;
+          const ref = sbBest?.line ?? e?.line;
+          if (ref !== undefined && ref !== best.line) sharpLineVal = ref;
+        }
         byGame.get(r.game_id)!.pitchers.push({
           player_id: r.player_id,
           name: r.players?.full_name ?? "Unknown player",
@@ -865,15 +916,16 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           // NULL until enough graded starts accumulate; undefined = render nothing.
           confidence: r.confidence ?? undefined,
           line: displayLine,
-          edge: usePP ? undefined : e?.edge ?? undefined,
-          fairOverProb: usePP ? undefined : e?.fair_over_prob ?? undefined,
-          modelOverProb: usePP ? undefined : e?.model_over_prob ?? undefined,
-          overPrice: usePP ? undefined : e?.over_price ?? undefined,
-          underPrice: usePP ? undefined : e?.under_price ?? undefined,
-          bookmaker: usePP ? "prizepicks" : e?.bookmaker,
-          // The sharp sportsbook line — shown as a value check when it differs
-          // from the PrizePicks line we're headlining.
-          sharpLine: usePP ? sharpLineVal : undefined,
+          edge: useDfs ? undefined : e?.edge ?? undefined,
+          fairOverProb: useDfs ? undefined : e?.fair_over_prob ?? undefined,
+          modelOverProb: useDfs ? undefined : e?.model_over_prob ?? undefined,
+          overPrice: useDfs ? undefined : e?.over_price ?? undefined,
+          underPrice: useDfs ? undefined : e?.under_price ?? undefined,
+          bookmaker: useDfs ? lineBook : e?.bookmaker,
+          // The DFS app offering the headlined best line (for the line label).
+          lineBook,
+          // The best sportsbook line — shown as a value check beside the DFS line.
+          sharpLine: sharpLineVal,
           // Hit-rate trends (L5/L10/L15/SZN + Diff + Streak) vs the DISPLAYED
           // line, for the focused-card panel. undefined for no line / no history.
           trends: trendsFor(r.player_id, propType, displayLine),

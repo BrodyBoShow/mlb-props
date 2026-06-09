@@ -4397,6 +4397,41 @@ Hitter matchup model — Stage 1 SHADOW (this session, the symmetric matchup-K):
   run db/migrations/add_hitter_matchup.sql. Until then projections are unaffected
   and the shadow write skips gracefully.
 
+Best-DFS-line shopping on the board (this session, supersedes prefer-PrizePicks):
+- USER (after prefer-PrizePicks): "try to make it the best line." Chose
+  (AskUserQuestion) to shop across "DFS apps you bet" (PrizePicks/Underdog/
+  Sleeper/Betr), not all books — so everything shown is bettable on a pick'em app;
+  the sharp sportsbook line is a value-check reference only. Slate coverage
+  confirmed real: PrizePicks 716 / Sleeper 558 / Underdog 404 lines.
+- FRONTEND (page.tsx, frontend-only — engine capture from the prior PP-direct
+  note already lands the DFS lines): replaced the prizepicks-only ppLineByKey with
+  dfsByKey = `${pid}|${prop}` -> Map<book, line> over DFS_BOOKS (new constant in
+  web/lib/constants.ts: prizepicks/underdog/sleeper/betr; BOOK_DISPLAY extended).
+  Row build now LINE-SHOPS: side = proj vs the lower-median DFS line; best line =
+  LOWEST for an over (easiest to clear) / HIGHEST for an under; headline that line
+  + which app (Pitcher.lineBook, new). The de-vigged edge is for the SHARP line (a
+  different number) so it's dropped on a DFS row (chip shows the proj-vs-line
+  lean); the best main-market SPORTSBOOK line for the same side is shown beside it
+  as a value check (Pitcher.sharpLine). No DFS line -> fall back to the sportsbook
+  edge line + full de-vig (unchanged). Helpers medianLine/bestLineForSide at module
+  scope. EdgeDetail renders "<line> <App> · ▲/▼ lean · sharp <Y>".
+- ALT-LINE FLOOR (bug caught in verify): the raw sharpByKey/dfsByKey include alt
+  rungs, so "best for over = lowest" was picking a stray 0.5 (e.g. pinnacle's 0.5
+  total-bases for Josh Naylor) and showing a misleading "sharp 0.5". Fix: mainOnly()
+  floors each book map by SHARP_MIN_LINE[prop] ?? FEATURED_MIN_LINE[prop] ?? 0
+  BEFORE shopping (keeps the set unfiltered if flooring empties it). Verified:
+  Naylor TB 0.5 alt dropped -> "1.5 Sleeper ▲ Over" (no bogus sharp); Martinez outs
+  "17.0 PrizePicks ▲ Over · sharp 16.5" (DK's 16.5 is a better over number, honest
+  value check); Julio TB "1.5 Sleeper ▲ Over".
+- KNOWN LIMITATION: shops by line NUMBER, not payout. DFS apps mostly post the SAME
+  main line (TB 1.5 everywhere) so cross-app number differences are rare — the real
+  DFS edge is payout, which we don't reliably capture (PP-direct stores flat
+  100/-100; ParlayAPI DFS prices are often flat). A high demon rung for an UNDER
+  could still be picked (the floor only catches LOW goblins); uncommon, future
+  refinement. Featured Plays still uses sportsbook de-vig edges (unchanged).
+- Unaffected (verified): edges/de-vig, sharp badge (REAL_BOOKS), /results, engine,
+  FEATURE_COLS (11). tsc clean; build passes (/ 23 kB).
+
 Prefer PrizePicks lines on the board (this session):
 - USER (PickFinder screenshot, Nick Martinez outs): "why is it using 17.5 instead
   of 16.5?" DIAGNOSED (live DB): we had DK 16.5 + Pinnacle 17.5; edge.py prefers
