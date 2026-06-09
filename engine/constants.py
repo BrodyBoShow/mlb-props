@@ -346,6 +346,19 @@ MATCHUP_K_FLIP_MIN_WINRATE = 0.55     # matchup-K's side must win >= this share
 MATCHUP_K_PRIMARY_WEIGHT = 0.55
 MATCHUP_K_REGULARIZER_WEIGHT = 0.45
 
+# ─── Hitter-matchup flip gate (matchup_hitter_scorecard.py) ──────────────────
+# Per-PROP, pre-committed trigger for promoting the SHADOW hitter matchup
+# projection (projections.matchup_projection) to primary for a given prop. Same
+# discipline as the matchup-K gate: the scorecard NEVER auto-flips — it prints a
+# per-prop "FLIP-READY? YES" only when ALL gates hold, at which point a human
+# makes the deliberate, regularizer-backed code change. The OFFLINE backtest
+# (validate_matchup_hitter.py) already showed: hits clears (60% divergence
+# win-rate), total_bases is a shrinkage mirage (43%), home_runs is dead (35%) —
+# so expect hits to flip first, total_bases maybe, home_runs likely never.
+MATCHUP_HITTER_FLIP_MIN_DIVERGENCES = 60   # graded hitter-games where the matchup
+#                                            and baseline leaned OPPOSITE the line
+MATCHUP_HITTER_FLIP_MIN_WINRATE = 0.55     # matchup's side must win >= this share
+
 # ─── Park factors (grade.py + model.py) ──────────────────────────────────────
 #
 # Park factor = multiplicative effect of the venue on the named outcome.

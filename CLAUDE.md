@@ -4322,12 +4322,89 @@ Watchlist — star players + filter (this session, c5ce691):
   careful part. (b) BEST-AVAILABLE-LINE column on the Board (per-book lines already
   fetched for the drawer). (c) MOBILE polish + PWA install.
 
+Hitter matchup model — Stage 1 SHADOW (this session, the symmetric matchup-K):
+- GOAL (user, long-term): apply the strikeout matchup treatment to HITTERS — the
+  specific opposing pitcher's per-PA rates, lineup slot, bullpen/TTO — not just
+  recency. Ran a code-verified research workflow first (hitter-matchup-feasibility):
+  it's the mirror of matchup-K, ~80% of the machinery already exists, and the
+  honest ceiling is a few points of over/under PROBABILITY (a hitter's game is ~4
+  PA of binomial noise — point projections barely move). Built measure-first, in
+  shadow, nothing live touched. FEATURE_COLS still 11 (this is a BASELINE-side
+  module, NOT an XGBoost feature).
+- engine/matchup_hitter.py (NEW, pure math, no DB/API): one per-PA 8-way
+  categorical (OUT/1B/2B/3B/HR/BB/HBP/K). Each batter + pitcher rate is regressed
+  to league by its OWN stabilization point (K 60 PA, BB 120, HR 170, 1B 290, XBH
+  1610 — so power shrinks hard, contact frequency earns weight), combined via
+  matchup_k.log5 (reused verbatim), platoon + park applied to CONTACT only, then
+  split across the hitter's expected PAs: starter PAs (times-through-order) vs
+  bullpen PAs (batter's own rate = log5 vs a league pitcher), so the starter only
+  drives the ~2-3 PAs he faces. Reads total_bases / hits / home_runs + P(>=1) off
+  the one dist. Self-contained priors (LEAGUE_PA_RATES, STABILIZE_PA,
+  HITTER_SLOT_PA) — isolated shadow module.
+- engine/validate_matchup_hitter.py (NEW, offline backtest, mirrors
+  validate_matchup_backtest.py): strict 65/35 train/test on the bulk Statcast
+  frame, builds batter + pitcher per-PA profiles + the stabilized baseline from
+  TRAIN only, reconstructs the faced lineup + opposing starter + slot per TEST
+  game, compares matchup vs baseline._stabilized_projection on RMSE + divergence
+  win-rate. RESULT (1868 test batter-games, 30-day frame):
+  * HITS: baseline RMSE 0.919 -> matchup 0.903, divergence win-rate 60% (691
+    games), MAE better too -> REAL SIGNAL, clears the gate.
+  * TOTAL_BASES: RMSE looks better (1.859 -> 1.828) BUT divergence win-rate 43%
+    (LOSES the head-to-heads) and MAE WORSE -> the RMSE "win" is a SHRINKAGE
+    MIRAGE, not direction. The divergence metric caught exactly the trap RMSE
+    hides. NOT a win (XBH stabilizes too slowly to pin down).
+  * HOME_RUNS: 35% -> dead, single-game HR is pure noise (as predicted up front).
+  So the per-PA model helps where the signal is (contact = hits) and not where it
+  isn't (power = TB/HR). Discipline paid off — it stopped a TB "improvement" that
+  was a measurement illusion.
+- SHADOW wiring (all three props shadowed; the live scorecard on REAL lines is the
+  final arbiter since the offline test lacks lines):
+  * db/migrations/add_hitter_matchup.sql + schema.sql: generic projections.
+    matchup_projection numeric (written per hitter prop row, reads off whatever
+    prop_type the row is). ACTION REQUIRED: run it in Supabase — until then the
+    shadow WRITE PGRST204-skips and the pipeline runs clean (verified live).
+  * engine/stats.py: get_pitcher_starts now also returns doubles_allowed/
+    triples_allowed/hit_by_pitch_allowed/batters_faced (additive; existing callers
+    ignore) — the allowed per-PA components the pitcher dist needs.
+  * engine/db.py: update_hitter_matchup(updates) — targeted per-(game,player,prop,
+    date) UPDATE of matchup_projection only, PGRST204 strip-and-skip. Never touches
+    the live projection.
+  * engine/main.py: _run_hitter_matchup_shadow(starters, games) after the hitter
+    pipeline (post-lineup only; no-ops on morning runs). Per posted-lineup hitter:
+    finds the opposing starter (home hitter faces away starter), builds the
+    batter's + starter's season (200-day) per-PA profiles from get_hitter_games /
+    get_pitcher_starts, computes the matchup, writes the 3 shadow values. NO FLIP.
+    Plus matchup_hitter_scorecard.log_scorecard() on full runs. Both try/except.
+  * engine/matchup_hitter_scorecard.py (NEW, log-only, read-only): PER-PROP
+    Brier-of-the-over (Poisson SF, matching edge.py for counts) + divergence
+    win-rate vs the baseline + a per-prop FLIP-READY verdict. Grades each prop
+    independently (they behave very differently).
+  * engine/constants.py: MATCHUP_HITTER_FLIP_MIN_DIVERGENCES=60,
+    MATCHUP_HITTER_FLIP_MIN_WINRATE=0.55 (per-prop gate).
+- VERIFIED end-to-end on the live slate: the shadow step pulled 8 games / 16
+  starters / 144 lineup players and computed matchup projections for 135 hitters;
+  the write PGRST204-skipped cleanly (pre-migration). Sample projections are
+  textbook (slot2 TB 1.75 / H 0.96 / HR 0.19; slot3 1.69 / 0.93 / 0.18; slots 1&5
+  ~1.36-1.40 TB — heart-of-order > top/bottom, HR 0.08-0.19). py_compile + imports
+  clean; FEATURE_COLS still 11.
+- NEXT (gated on data, NOT yet done): apply the migration, let post-lineup crons
+  accumulate graded shadow games, watch the daily scorecard. FLIP a prop to primary
+  ONLY when its gate passes (expect HITS first, total_bases a maybe, home_runs
+  likely never) — and when flipping, blend from a proj_baseline-style column for
+  idempotency exactly like the matchup-K flip. Later stages (per the roadmap):
+  batter platoon splits, bullpen-quality + TTO, full pitch-arsenal-vs-batter.
+- ACTION REQUIRED (user, one-time, Supabase SQL editor):
+  run db/migrations/add_hitter_matchup.sql. Until then projections are unaffected
+  and the shadow write skips gracefully.
+
 Next: ongoing — let the cron run, accumulate data, monitor Actions logs for
-WARNING lines (incl. the daily matchup-K + CLV + calibration scorecards +
-self-heal count + lined-hitter coverage count). The strikeouts model now trains
-on the full backfilled season (Stage-2 flip) — watch the calibration scorecard
-for strikeouts to confirm it holds. Run db/migrations/add_first_inning.sql in
-Supabase to persist the new 1-inning actuals (projections already work).
+WARNING lines (incl. the daily matchup-K + hitter-matchup + CLV + calibration
+scorecards + self-heal count + lined-hitter coverage count). The strikeouts model
+now trains on the full backfilled season (Stage-2 flip) — watch the calibration
+scorecard for strikeouts to confirm it holds. Run db/migrations/add_first_inning
+.sql AND db/migrations/add_hitter_matchup.sql in Supabase to persist the new
+1-inning actuals + the hitter-matchup shadow column (projections already work
+without them).
 
 /results trust + perf overhaul (this session):
 - STRICT standard-line grading (the trust fix): /results Betting Edge now grades

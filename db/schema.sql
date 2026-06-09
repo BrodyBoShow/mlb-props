@@ -174,6 +174,12 @@ create table if not exists projections (
     -- lineup is posted. Logged for calibration validation — NOT the displayed
     -- projection. See engine/matchup_k.py + db/migrations/add_matchup_expected_k.sql.
     matchup_expected_k numeric,
+    -- SHADOW: deterministic batter-vs-opposing-starter log5 matchup projection
+    -- (engine/matchup_hitter.py), set on hitter_hits / hitter_total_bases /
+    -- hitter_home_runs rows when the lineup is posted. Graded by
+    -- matchup_hitter_scorecard.py — NOT the displayed projection. PER-PROP flip.
+    -- db/migrations/add_hitter_matchup.sql.
+    matchup_projection numeric,
     -- Rolling 7-day Statcast batted-ball quality, set ONLY on hitter_home_runs
     -- rows (db/migrations/add_sweet_spot.sql). DISPLAY-ONLY HR-card footer; NOT
     -- a model input. NULL on every other prop and on thin samples (< 5 BBE).

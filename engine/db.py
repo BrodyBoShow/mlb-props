@@ -825,6 +825,49 @@ def update_matchup_expected_k(updates: list[dict]) -> int:
     return written
 
 
+def update_hitter_matchup(updates: list[dict]) -> int:
+    """SHADOW: set projections.matchup_projection on existing HITTER prop rows
+    (hitter_hits / hitter_total_bases / hitter_home_runs).
+
+    Each update: {game_id, player_id, prop_type, projection_date, matchup_projection}.
+    A targeted UPDATE keyed on the prop_type so it ONLY touches the shadow column
+    next to that prop's live projection — never the live projection itself.
+    engine/matchup_hitter_scorecard.py grades it. Returns the count written.
+
+    Defensive: the column only exists after db/migrations/add_hitter_matchup.sql
+    is applied; if it's missing PostgREST returns PGRST204 — we warn once and skip
+    (the pipeline keeps running pre-migration). Per-row round-trips, but it's only
+    the posted-lineup hitters × 3 props.
+    """
+    if not updates:
+        return 0
+    client = _client()
+    written = 0
+    for u in updates:
+        try:
+            (
+                client.table("projections")
+                .update({"matchup_projection": u["matchup_projection"]})
+                .eq("game_id", u["game_id"])
+                .eq("player_id", u["player_id"])
+                .eq("prop_type", u["prop_type"])
+                .eq("projection_date", u["projection_date"])
+                .execute()
+            )
+            written += 1
+        except Exception as exc:
+            msg = str(exc)
+            if "matchup_projection" in msg and ("PGRST204" in msg or "Could not find" in msg):
+                print(
+                    "  WARNING: projections missing matchup_projection column -- "
+                    "skipping hitter-matchup shadow write. Run "
+                    "db/migrations/add_hitter_matchup.sql to enable it."
+                )
+                return 0
+            raise
+    return written
+
+
 def get_strikeout_flip_rows(date_str: str) -> list[dict]:
     """Today's strikeouts rows with the live projection + the stored pre-flip
     baseline (proj_baseline), for the matchup-K flip. Paginated. Defensive: if

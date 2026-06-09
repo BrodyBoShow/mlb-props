@@ -34,6 +34,7 @@ import fetch
 import first_inning
 import grade
 import lines
+import matchup_hitter
 import matchup_k
 import model as mlb_model
 import stats
@@ -854,6 +855,136 @@ def _run_matchup_shadow(starters: list[dict], games: list[dict]) -> int:
     return len(flip_updates)
 
 
+def _run_hitter_matchup_shadow(starters: list[dict], games: list[dict]) -> int:
+    """SHADOW MODE: deterministic batter-vs-opposing-starter matchup projection
+    (engine/matchup_hitter.py) stored in projections.matchup_projection ALONGSIDE
+    the live baseline projection, for hitter_hits / hitter_total_bases /
+    hitter_home_runs. NEVER changes the displayed projection or edge — it's
+    log-only, graded by matchup_hitter_scorecard.py against real lines until a
+    prop earns a flip to primary, PER PROP.
+
+    The offline backtest (engine/validate_matchup_hitter.py) found real signal for
+    HITS (60% divergence win-rate), a shrinkage mirage for total_bases (43% — RMSE
+    win but loses the head-to-heads), and none for home_runs (35%). The live
+    scorecard on real lines is the final arbiter, so we shadow all three.
+
+    Needs posted lineups (slot + bats) + the opposing starter, so it no-ops on
+    morning runs. The caller wraps it in try/except — it must never affect the
+    real pipeline.
+    """
+    from constants import get_park_factor_hits
+
+    WINDOW = 200  # whole-season window for the per-PA regression profiles
+    today = et_today()
+    today_str = today.strftime("%Y-%m-%d")
+
+    lineup_players = fetch.fetch_lineups()
+    if not lineup_players:
+        print("  hitter-matchup shadow: no posted lineups yet -- skipping")
+        return 0
+
+    # A hitter on the home side faces the AWAY starter, and vice versa.
+    starter_by_game_side = {
+        (s["game_id"], s.get("home_away", "home")): s for s in starters
+    }
+    home_team_by_game = {g["game_id"]: g.get("home_team") for g in games}
+    hand = fetch._fetch_handedness_by_id([s["player_id"] for s in starters])
+
+    # Per-starter allowed per-PA profile, computed once and cached for the run.
+    starter_profile: dict[int, dict | None] = {}
+
+    def _profile(pid: int) -> dict | None:
+        if pid in starter_profile:
+            return starter_profile[pid]
+        starts = stats.get_pitcher_starts(pid, WINDOW, today)
+        if not starts:
+            starter_profile[pid] = None
+            return None
+        h = sum(s["hits_allowed"] for s in starts)
+        d = sum(s.get("doubles_allowed", 0) for s in starts)
+        t = sum(s.get("triples_allowed", 0) for s in starts)
+        hr = sum(s["home_runs"] for s in starts)
+        counts = {
+            "K": sum(s["strikeouts"] for s in starts),
+            "BB": sum(s["walks"] for s in starts),
+            "HBP": sum(s.get("hit_by_pitch_allowed", 0) for s in starts),
+            "HR": hr, "3B": t, "2B": d, "1B": max(h - d - t - hr, 0),
+        }
+        pa = sum(s.get("batters_faced", 0) for s in starts)
+        if pa <= 0:
+            pa = sum(s["outs_recorded"] + s["hits_allowed"] + s["walks"] for s in starts)
+        prof = {"counts": counts, "pa": float(pa),
+                "bf_per_start": pa / max(len(starts), 1)}
+        starter_profile[pid] = prof
+        return prof
+
+    updates: list[dict] = []
+    sample: list[str] = []
+    for b in lineup_players:
+        gid, ha = b["game_id"], b.get("home_away", "home")
+        opp = starter_by_game_side.get((gid, "away" if ha == "home" else "home"))
+        if not opp:
+            continue
+        prof = _profile(opp["player_id"])
+        if not prof:
+            continue
+        gms = stats.get_hitter_games(b["player_id"], WINDOW, today)
+        if not gms:
+            continue
+        h = sum(g["hits"] for g in gms)
+        d = sum(g.get("doubles", 0) for g in gms)
+        t = sum(g.get("triples", 0) for g in gms)
+        hr = sum(g["home_runs"] for g in gms)
+        bcounts = {
+            "K": sum(g["strikeouts"] for g in gms),
+            "BB": sum(g["walks"] for g in gms),
+            "HBP": sum(g.get("hit_by_pitch", 0) for g in gms),
+            "HR": hr, "3B": t, "2B": d, "1B": max(h - d - t - hr, 0),
+        }
+        bpa = sum(g.get("plate_appearances", 0) for g in gms)
+        if bpa <= 0:
+            bpa = sum(g.get("at_bats", 0) + g.get("walks", 0)
+                      + g.get("hit_by_pitch", 0) for g in gms)
+        if bpa < 20:                 # too thin — baseline keeps the projection
+            continue
+        proj = matchup_hitter.compute_matchup_hitter(
+            batter_counts=bcounts, batter_pa=float(bpa),
+            starter_counts=prof["counts"], starter_pa=prof["pa"],
+            batter_hand=b.get("bats"),
+            pitcher_hand=(hand.get(opp["player_id"]) or {}).get("throws"),
+            slot=int(b.get("batting_order") or 5),
+            starter_bf=prof["bf_per_start"],
+            park_factor=get_park_factor_hits(home_team_by_game.get(gid) or ""),
+        )
+        for prop_type, key in (
+            ("hitter_total_bases", "total_bases"),
+            ("hitter_hits", "hits"),
+            ("hitter_home_runs", "home_runs"),
+        ):
+            updates.append({
+                "game_id": gid, "player_id": b["player_id"],
+                "prop_type": prop_type, "projection_date": today_str,
+                "matchup_projection": round(proj[key], 3),
+            })
+        if len(sample) < 5:
+            sample.append(
+                f"slot{b.get('batting_order')}: TB {proj['total_bases']} "
+                f"H {proj['hits']} HR {proj['home_runs']}"
+            )
+
+    if not updates:
+        print("  hitter-matchup shadow: no lineup hitters with an opposing starter profile")
+        return 0
+    n = db.update_hitter_matchup(updates)
+    print(
+        f"  hitter-matchup shadow: wrote {n} matchup_projection values "
+        f"across {len(updates) // 3} hitters (shadow only, never displayed)"
+    )
+    for s in sample:
+        print(f"    {s}")
+    return len(updates) // 3
+
+
 def _run_lines_and_edges(
     name_to_id: dict[str, int],
     all_projections: list[dict],
@@ -1087,6 +1218,15 @@ def main() -> None:
         except Exception as exc:
             print(f"  matchup-K step failed ({exc}) -- skipping")
 
+        # hitter-matchup: writes the shadow column ONLY (no flip yet). The
+        # offline backtest cleared HITS; the live scorecard on real lines decides
+        # the per-prop flip. Wrapped so any failure is absorbed.
+        print("Computing hitter matchup projections (shadow only)...")
+        try:
+            _run_hitter_matchup_shadow(starters, games)
+        except Exception as exc:
+            print(f"  hitter-matchup shadow failed ({exc}) -- skipping")
+
         # LOG-ONLY daily scorecard: does the shadow matchup-K beat the baseline
         # yet? Prints a FLIP-READY verdict so the validate-then-flip decision is
         # data-driven. NEVER changes the live projection and NEVER auto-flips.
@@ -1098,6 +1238,16 @@ def main() -> None:
                 matchup_k_scorecard.log_scorecard()
             except Exception as exc:
                 print(f"  matchup-K scorecard failed ({exc}) -- skipping")
+
+            # LOG-ONLY hitter-matchup scorecard: per-prop Brier-of-the-over +
+            # divergence win-rate vs the baseline, with a per-prop FLIP-READY
+            # verdict. Never auto-flips; reads only.
+            print("Scoring shadow hitter-matchup vs baseline (log-only)...")
+            try:
+                import matchup_hitter_scorecard
+                matchup_hitter_scorecard.log_scorecard()
+            except Exception as exc:
+                print(f"  hitter-matchup scorecard failed ({exc}) -- skipping")
 
             # CLV (closing-line value): does the market move toward the model's
             # side? Log-only, read-only — the leading proof-of-edge metric.

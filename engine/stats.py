@@ -297,6 +297,15 @@ def get_pitcher_starts(
                 "earned_runs": int(st.get("earnedRuns", 0)),
                 "outs_recorded": _parse_innings(st.get("inningsPitched", "0.0")),
                 "home_runs": int(st.get("homeRuns", 0)),
+                # Allowed extra-base + PA-faced components for the hitter matchup
+                # model's per-PA pitcher distribution (engine/matchup_hitter.py).
+                # Additive — existing baseline/form callers ignore these keys.
+                "doubles_allowed": int(st.get("doubles", 0)),
+                "triples_allowed": int(st.get("triples", 0)),
+                "hit_by_pitch_allowed": int(
+                    st.get("hitByPitch", st.get("hitByPitches", 0)) or 0
+                ),
+                "batters_faced": int(st.get("battersFaced", 0)),
             }
         )
 
