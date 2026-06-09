@@ -2849,14 +2849,6 @@ export default function PropBoard({
           })()}
       </div>
 
-      {watchlistOnly && watchlist.hydrated && watchlist.count === 0 && (
-        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-200/80">
-          Your watchlist is empty — tap the{" "}
-          <span className="text-amber-400">☆</span> next to any player to add them,
-          then this shows just your players.
-        </div>
-      )}
-
       {view === "board" && (
         <BoardTable
           games={games}
