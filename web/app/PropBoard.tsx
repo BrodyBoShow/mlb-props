@@ -1229,6 +1229,8 @@ function InlinePropDetail({
   windDirDeg,
   isDome,
   onViewAll,
+  date,
+  matchup,
 }: {
   player: PlayerRow;
   prop: PropType;
@@ -1240,6 +1242,8 @@ function InlinePropDetail({
   windDirDeg?: number | null;
   isDome?: boolean | null;
   onViewAll: () => void;
+  date: string;
+  matchup: string;
 }) {
   const row = player.props[prop];
   if (!row) return null;
@@ -1295,6 +1299,24 @@ function InlinePropDetail({
           </button>
         </div>
       </div>
+      {/* track this play — saves the model's pick (side from proj vs line) */}
+      {(() => {
+        const line = row.line;
+        if (line === undefined) return null;
+        const side: "over" | "under" = row.projection >= line ? "over" : "under";
+        const play: TrackedPlay = {
+          key: trackKey(player.player_id, prop, date),
+          playerId: player.player_id,
+          playerName: player.name,
+          prop,
+          line,
+          side,
+          date,
+          matchup,
+          addedAt: Date.now(),
+        };
+        return <TrackButton play={play} className="mt-2" />;
+      })()}
     </div>
   );
 }
@@ -1312,6 +1334,8 @@ function PlayerChipsRow({
   windSpeed,
   windDirDeg,
   isDome,
+  date,
+  matchup,
 }: {
   player: PlayerRow;
   propKeys: PropType[];
@@ -1325,6 +1349,8 @@ function PlayerChipsRow({
   windSpeed?: number | null;
   windDirDeg?: number | null;
   isDome?: boolean | null;
+  date: string;
+  matchup: string;
 }) {
   const showActual = status?.state === "live" || status?.state === "final";
   const isFinal = status?.state === "final";
@@ -1378,6 +1404,8 @@ function PlayerChipsRow({
           windDirDeg={windDirDeg}
           isDome={isDome}
           onViewAll={() => onViewAll(openProp)}
+          date={date}
+          matchup={matchup}
         />
       )}
     </li>
@@ -1643,6 +1671,8 @@ function GameCard({
                       windSpeed={gv.windSpeed}
                       windDirDeg={gv.windDirDeg}
                       isDome={gv.isDome}
+                      date={date}
+                      matchup={gv.matchup}
                     />
                   ))}
                 </ul>
@@ -1674,6 +1704,8 @@ function GameCard({
                         windSpeed={gv.windSpeed}
                         windDirDeg={gv.windDirDeg}
                         isDome={gv.isDome}
+                        date={date}
+                        matchup={gv.matchup}
                       />
                     ))}
                   </ul>
