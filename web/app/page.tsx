@@ -265,7 +265,14 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           )
           .eq("projection_date", selectedDate)
           .in("prop_type", ALL_PROP_TYPES)
+          // projection desc is non-unique; add the PK as tiebreakers so .range()
+          // pagination is deterministic (no dupes/skips at the page boundary —
+          // the slate is >1000 rows). Without the tiebreakers, rows near the
+          // boundary were dropped, thinning the edge-candidate pool.
           .order("projection", { ascending: false })
+          .order("game_id", { ascending: true })
+          .order("player_id", { ascending: true })
+          .order("prop_type", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: ProjectionRow[] | null;
             error: unknown;
@@ -281,6 +288,9 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
             "player_id, prop_type, bookmaker, line, fair_over_prob, model_over_prob, edge, over_price, under_price",
           )
           .eq("game_date", selectedDate)
+          .order("player_id", { ascending: true })
+          .order("prop_type", { ascending: true })
+          .order("bookmaker", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: EdgeRow[] | null;
             error: unknown;
@@ -426,7 +436,11 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
           .from("player_game_logs")
           .select(recentSelect)
           .in("player_id", allPlayerIds)
+          // game_date desc is non-unique; PK tiebreakers make .range() pagination
+          // deterministic (no dupes/skips). Per-player date-desc order preserved.
           .order("game_date", { ascending: false })
+          .order("player_id", { ascending: true })
+          .order("game_id", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: RecentGameRow[] | null;
             error: unknown;
@@ -706,6 +720,9 @@ async function getSlate(dateOverride?: string): Promise<SlateResult> {
         .select("player_id, prop_type, bookmaker, line")
         .eq("game_date", selectedDate)
         .in("bookmaker", REAL_BOOKS as string[])
+        .order("player_id", { ascending: true })
+        .order("prop_type", { ascending: true })
+        .order("bookmaker", { ascending: true })
         .range(from, to) as unknown as PromiseLike<{
           data: SharpLineRow[] | null;
           error: unknown;

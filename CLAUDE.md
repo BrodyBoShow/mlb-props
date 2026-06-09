@@ -4397,6 +4397,42 @@ Hitter matchup model — Stage 1 SHADOW (this session, the symmetric matchup-K):
   run db/migrations/add_hitter_matchup.sql. Until then projections are unaffected
   and the shadow write skips gracefully.
 
+Unstable pagination — doubled /results rows + skipped edges (this session):
+- USER report: /results showed every player row TWICE (identical), and Featured
+  "Hitting Edges" had only one card. DIAGNOSED (live DB, read-only): the data is
+  CLEAN — 0 duplicate projection/edge/line rows for the slate; the frontend-style
+  embed select returns 0 dups. ROOT CAUSE: web/lib/supabase.ts fetchAllPages
+  paginates with .range(from,to) but the queries had NO stable .order() (or
+  ordered by a NON-UNIQUE column — home projections used .order("projection")).
+  PostgREST/Postgres return rows in an unstable order across separate page
+  requests, so .range() pagination DUPLICATES some rows (the doubling) AND SKIPS
+  others (thinning the edge-candidate pool) — classic OFFSET-without-ORDER-BY
+  pitfall, triggered once a slate exceeds 1000 rows (2 pages). The `-${i}` index
+  in ResultsBoard's row key was a band-aid masking the dup-key warning.
+- FIX (frontend-only): added a DETERMINISTIC .order() by the full PK to EVERY
+  paginated read so pages never overlap/skip:
+  * web/app/results/page.tsx: projections (projection_date,game_id,player_id,
+    prop_type), lines + edges (game_date,player_id,prop_type,bookmaker), logs
+    (game_date,player_id,game_id) — main 7-day join AND the 42-day trend fetches.
+    Plus a DEFENSIVE dedup of projData by PK before the build loop (projections
+    are iterated DIRECTLY → one result row each, so a dup doubles a row; lines/
+    logs/edges are deduped into Maps already, so they were skip-vulnerable but
+    not dup-vulnerable).
+  * web/app/page.tsx (home): home-projections kept .order("projection",desc) but
+    added game_id/player_id/prop_type PK TIEBREAKERS (projection is non-unique →
+    boundary rows were dropped, thinning featured candidates); home-edges,
+    recent-form (game_date desc + PK tiebreaks), sharp-lines all got stable order.
+- "Only one hitting edge" = NOT a bug (verified): on the 2026-06-09 slate only 2
+  of 134 pinnacle total_bases edges reach |edge|>=0.12, and ~1 survives the full
+  Featured gates (proj cap, >=0.3 lean, >=2 graded games). It's the Poisson+
+  isotonic calibration working — hitter edges are honestly small now, so the
+  section only fills when a real mispricing exists. hitter_hits is consensus-only
+  (no two-sided book) → excluded by design. Fills to 3 when the slate has them.
+- Verified: tsc clean; npm run build passes (/ 22.8 kB, /results 6.35 kB). The
+  dedup GUARANTEES no /results doubling regardless of pagination; the .order()
+  fixes the source (no dups, no skips) on both pages. Engine/DB untouched;
+  FEATURE_COLS still 11.
+
 Bet Tracker — "track this play" + My Plays panel (this session):
 - The #1 retention feature after the watchlist. Frontend-only, localStorage, NO
   accounts / NO DB writes (respects one-writer — the frontend only READS). Mirrors

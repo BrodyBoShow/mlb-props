@@ -302,6 +302,13 @@ async function getResults(): Promise<{
           )
           .gte("projection_date", startDate)
           .lte("projection_date", endDate)
+          // STABLE ORDER by the full PK so .range() pagination never overlaps
+          // (dupes) or skips rows. Without it PostgREST's order is unstable
+          // across page requests — the root cause of doubled /results rows.
+          .order("projection_date", { ascending: true })
+          .order("game_id", { ascending: true })
+          .order("player_id", { ascending: true })
+          .order("prop_type", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: ProjectionRow[] | null;
             error: unknown;
@@ -316,6 +323,10 @@ async function getResults(): Promise<{
           .select("player_id, prop_type, bookmaker, line, game_date")
           .gte("game_date", startDate)
           .lte("game_date", endDate)
+          .order("game_date", { ascending: true })
+          .order("player_id", { ascending: true })
+          .order("prop_type", { ascending: true })
+          .order("bookmaker", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: LineRow[] | null;
             error: unknown;
@@ -331,6 +342,9 @@ async function getResults(): Promise<{
           .or("backfilled.is.null,backfilled.eq.false")   // graded rows only (see anchor note)
           .gte("game_date", startDate)
           .lte("game_date", endDate)
+          .order("game_date", { ascending: true })
+          .order("player_id", { ascending: true })
+          .order("game_id", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: LogRow[] | null;
             error: unknown;
@@ -366,6 +380,10 @@ async function getResults(): Promise<{
           .gte("game_date", startDate)
           .lte("game_date", endDate)
           .in("prop_type", Object.keys(MIN_LINE) as string[])
+          .order("game_date", { ascending: true })
+          .order("player_id", { ascending: true })
+          .order("prop_type", { ascending: true })
+          .order("bookmaker", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: EdgeRow[] | null;
             error: unknown;
@@ -380,7 +398,17 @@ async function getResults(): Promise<{
       `edges=${edgeData.length}`,
   );
 
-  const projections = projData;
+  // Defensive dedup by the full PK — belt-and-suspenders against any residual
+  // pagination overlap (the .order() on the fetch is the real fix). Projections
+  // are iterated DIRECTLY (one result row each), so a duplicated row doubles a
+  // /results row; lines/logs/edges are deduped into Maps below so they're safe.
+  const seenProj = new Set<string>();
+  const projections = projData.filter((p) => {
+    const k = `${p.game_id}|${p.player_id}|${p.prop_type}|${p.projection_date}`;
+    if (seenProj.has(k)) return false;
+    seenProj.add(k);
+    return true;
+  });
   const lines = lineData;
   const logs = logData;
 
@@ -713,6 +741,10 @@ async function getResults(): Promise<{
           .gte("projection_date", trendStart)
           .lte("projection_date", endDate)
           .in("prop_type", BETTING_PROPS as string[])
+          .order("projection_date", { ascending: true })
+          .order("game_id", { ascending: true })
+          .order("player_id", { ascending: true })
+          .order("prop_type", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: ProjectionRow[] | null;
             error: unknown;
@@ -727,6 +759,10 @@ async function getResults(): Promise<{
           .gte("game_date", trendStart)
           .lte("game_date", endDate)
           .in("prop_type", BETTING_PROPS as string[])
+          .order("game_date", { ascending: true })
+          .order("player_id", { ascending: true })
+          .order("prop_type", { ascending: true })
+          .order("bookmaker", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: EdgeRow[] | null;
             error: unknown;
@@ -741,6 +777,9 @@ async function getResults(): Promise<{
           .or("backfilled.is.null,backfilled.eq.false")   // graded rows only (weekly trend)
           .gte("game_date", trendStart)
           .lte("game_date", endDate)
+          .order("game_date", { ascending: true })
+          .order("player_id", { ascending: true })
+          .order("game_id", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
             data: LogRow[] | null;
             error: unknown;
